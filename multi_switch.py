@@ -4,7 +4,7 @@ from typing_extensions import override
 from comfy_api.latest import ComfyExtension, io
 from comfy_api.latest import _io
 
-class ModernMultiSwitchNode(io.ComfyNode):
+class MultiSwitchNode(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         # Template for matching any input type
@@ -19,8 +19,8 @@ class ModernMultiSwitchNode(io.ComfyNode):
         )
         
         return io.Schema(
-            node_id="ModernMultiSwitch",
-            display_name="Modern Multi-Switch",
+            node_id="MultiSwitch",
+            display_name="Multi-Switch",
             category="logic",
             inputs=[
                 # Selector index
@@ -56,10 +56,10 @@ class ModernMultiSwitchNode(io.ComfyNode):
         # Return both the selected value and the selected index
         return io.NodeOutput(selected_value, select)
 
-class ModernSwitchExtension(ComfyExtension):
+class MultiSwitchExtension(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        return [ModernMultiSwitchNode]
+        return [MultiSwitchNode]
 
-async def comfy_entrypoint() -> ModernSwitchExtension:
-    return ModernSwitchExtension()
+async def comfy_entrypoint() -> MultiSwitchExtension:
+    return MultiSwitchExtension()
