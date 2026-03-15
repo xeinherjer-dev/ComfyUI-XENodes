@@ -25,7 +25,7 @@ app.registerExtension({
                 container.style.backgroundColor = "rgba(0,0,0,0.3)";
                 container.style.borderRadius = "0px";
                 container.style.margin = "0px 0px";
-                container.style.border = "0px solid rgba(255,255,255,0.1)";
+                container.style.border = "0px";
                 container.style.alignItems = "stretch";
                 container.style.pointerEvents = "auto";
 
@@ -36,20 +36,16 @@ app.registerExtension({
                 // Function to update button styles based on current selection
                 const updateButtons = () => {
                     const currentValue = selectWidget.value;
-                    // Note: Since index in container.children might not match selectWidget.value 
-                    // because we hide unconnected ones, we store the original index on the button.
                     Array.from(container.children).forEach((btn) => {
                         const idx = parseInt(btn.dataset.index);
                         if (idx === currentValue) {
                             btn.style.backgroundColor = "#444444"; // active color
                             btn.style.color = "white";
                             btn.style.borderColor = "#666666";
-                            btn.style.boxShadow = "none";
                         } else {
                             btn.style.backgroundColor = "#252525"; // inactive color
                             btn.style.color = "#888";
                             btn.style.borderColor = "#333";
-                            btn.style.boxShadow = "none";
                         }
                     });
                 };
@@ -62,13 +58,11 @@ app.registerExtension({
                         container.removeChild(container.firstChild);
                     }
 
-                    const inputSlots = this.inputs.filter(input => input.name.includes("input_"));
+                    const inputSlots = (this.inputs || []).filter(input => input.name.includes("input_"));
                     maxLabelWidth = 100;
 
                     for (let i = 0; i < inputSlots.length; i++) {
                         const inputSlot = inputSlots[i];
-
-                        // User requested to hide UI for unconnected inputs
                         if (inputSlot.link == null) continue;
 
                         const btn = document.createElement("button");
@@ -80,11 +74,9 @@ app.registerExtension({
                             const originNode = app.graph.getNodeById(link.origin_id);
                             if (originNode) {
                                 label = originNode.title || originNode.type;
-                                // Removed truncation as requested
                             }
                         }
 
-                        // Track max width for computeSize
                         const metrics = ctx.measureText(label);
                         if (metrics.width > maxLabelWidth) maxLabelWidth = metrics.width;
 
@@ -97,12 +89,11 @@ app.registerExtension({
                         btn.style.fontSize = "11px";
                         btn.style.fontWeight = "bold";
                         btn.style.textAlign = "left";
-                        btn.style.transition = "all 0.1s ease";
                         btn.style.outline = "none";
                         btn.style.width = "100%";
                         btn.style.whiteSpace = "nowrap";
                         btn.style.overflow = "hidden";
-                        btn.style.textOverflow = "ellipsis"; // Still use ellipsis if container is too small, but node will try to expand
+                        btn.style.textOverflow = "ellipsis";
                         btn.style.minHeight = "28px";
 
                         btn.onclick = (e) => {
@@ -113,21 +104,17 @@ app.registerExtension({
                             }
                         };
 
-                        // Hover effects
-                        btn.onmouseenter = () => {
-                            if (selectWidget.value !== i) {
-                                btn.style.backgroundColor = "#353535";
-                                btn.style.color = "#fff";
-                            }
-                        };
-                        btn.onmouseleave = () => {
-                            updateButtons();
-                        };
-
                         container.appendChild(btn);
                     }
                     updateButtons();
-                    if (this.setSize) this.setSize(this.computeSize());
+                    
+                    if (container.children.length === 0) {
+                        container.style.display = "none";
+                    } else {
+                        container.style.display = "flex";
+                    }
+
+                    app.graph.setDirtyCanvas(true, true);
                 };
 
                 // Hide the original numeric widget
@@ -136,6 +123,7 @@ app.registerExtension({
                 selectWidget.hidden = true;
 
                 // Add the container as a DOM widget
+                // In Node 2.0 / LiteGraph, dom widgets can have their computeSize.
                 const domWidget = this.addDOMWidget("select_buttons", "BUTTONS", container, {
                     getValue() { return selectWidget.value; },
                     setValue(v) {
@@ -143,39 +131,36 @@ app.registerExtension({
                     }
                 });
 
-                const BUTTON_LINE_HEIGHT = 32;
+                // Delegate specific widget height to the widget itself
                 domWidget.computeSize = (width) => {
                     const buttonCount = container.children.length;
-                    const height = (buttonCount * BUTTON_LINE_HEIGHT) + 20;
-                    return [width, height];
+                    return [width, (buttonCount * 32) + 10];
                 };
 
-                // Standard computeSize to accommodate buttons in expanded mode
+                // Override computeSize only to ensure width is sufficient for labels,
+                // but rely on super/original for the rest of the layout logic.
                 const originalComputeSize = this.computeSize;
                 this.computeSize = function () {
-                    if (this.flags.collapsed) {
-                        return originalComputeSize ? originalComputeSize.apply(this, arguments) : [200, 30];
+                    const size = originalComputeSize ? originalComputeSize.apply(this, arguments) : [200, 100];
+                    if (this.flags.collapsed) return size;
+                    
+                    const buttonCount = container.children.length;
+                    if (buttonCount === 0) {
+                        // Compact mode for no buttons
+                        const SLOT_HEIGHT = 22;
+                        const HEADER_HEIGHT = 46;
+                        const inputCount = (this.inputs ? this.inputs.length : 0);
+                        const outputCount = (this.outputs ? this.outputs.length : 0);
+                        const maxSlots = Math.max(inputCount, outputCount, 1);
+                        size[1] = maxSlots * SLOT_HEIGHT + HEADER_HEIGHT;
                     }
 
-                    const SLOT_HEIGHT = 22;
-                    const HEADER_HEIGHT = 46;
-                    const inputCount = (this.inputs ? this.inputs.length : 0);
-                    const outputCount = (this.outputs ? this.outputs.length : 0);
-                    const maxSlots = Math.max(inputCount, outputCount, 1);
-                    const slotsHeight = maxSlots * SLOT_HEIGHT + HEADER_HEIGHT;
-
-                    const buttonCount = container.children.length;
-                    const neededButtonsHeight = (buttonCount * BUTTON_LINE_HEIGHT) + 30;
-
-                    const finalHeight = slotsHeight + neededButtonsHeight;
-
-                    // Adjust width based on max label width
-                    const finalWidth = Math.max(200, maxLabelWidth + 40);
-
-                    return [finalWidth, finalHeight];
+                    // Update width if labels are long
+                    size[0] = Math.max(size[0], maxLabelWidth + 60);
+                    return size;
                 };
 
-                // --- Sync logic (Simplified and Guarded) ---
+                // Guarded sync logic to prevent infinite recursion
                 let isUpdating = false;
                 const orgCallback = selectWidget.callback;
                 selectWidget.callback = function (v) {
@@ -207,18 +192,63 @@ app.registerExtension({
                     configurable: true
                 });
 
+                let cleanupScheduled = false;
+                const scheduleCleanup = () => {
+                    if (cleanupScheduled) return;
+                    cleanupScheduled = true;
+                    setTimeout(() => {
+                        cleanupScheduled = false;
+                        
+                        // Step 1: Collect current state and identify connected slots
+                        const allInputSlots = (this.inputs || []).map((inp, idx) => ({ inp, idx }))
+                            .filter(({ inp }) => inp.name && inp.name.startsWith("input_"));
+
+                        // Separate connected from unconnected
+                        const connectedSlots = allInputSlots.filter(({ inp }) => inp.link != null);
+                        
+                        // We need: connected slots (compacted) + exactly one spare at the end.
+                        // Step 2: Remove surplus unconnected slots — keep only 1 spare.
+                        const unconnectedSlots = allInputSlots.filter(({ inp }) => inp.link == null);
+                        // Remove all but 1 unconnected slot (remove from highest index first to avoid shift issues)
+                        const toRemove = unconnectedSlots.slice(1); // keep the first one as spare
+                        for (let i = toRemove.length - 1; i >= 0; i--) {
+                            this.removeInput(toRemove[i].idx);
+                        }
+                        
+                        // Step 3: Compact — move all connected slots to the front,
+                        // except this may conflict with Autogrow internals. 
+                        // The safest approach is just to rename sequentially.
+                        // Re-read inputs after removal
+                        let seqIdx = 0;
+                        for (let j = 0; j < (this.inputs || []).length; j++) {
+                            const slot = this.inputs[j];
+                            if (slot.name && slot.name.startsWith("input_")) {
+                                const newName = `input_${seqIdx}`;
+                                slot.name = newName;
+                                slot.label = newName;
+                                seqIdx++;
+                            }
+                        }
+
+                        // Step 4: Adjust select index  
+                        const newConnectedCount = (this.inputs || []).filter(s => s.name && s.name.startsWith("input_") && s.link != null).length;
+                        if (selectWidget.value >= newConnectedCount) {
+                            selectWidget.value = Math.max(0, newConnectedCount - 1);
+                        }
+
+                        rebuildButtons();
+                    }, 50);
+                };
+
                 const onConnectionsChange = this.onConnectionsChange;
-                this.onConnectionsChange = function () {
+                this.onConnectionsChange = function (type, index, connected, link_info) {
                     const res = onConnectionsChange ? onConnectionsChange.apply(this, arguments) : undefined;
-                    // Slightly longer timeout to ensure app.graph.links is updated
-                    setTimeout(rebuildButtons, 30);
+                    scheduleCleanup();
                     return res;
                 };
 
-                setTimeout(() => {
-                    rebuildButtons();
-                    if (this.setSize) this.setSize(this.computeSize());
-                }, 100);
+                // Initial build
+                setTimeout(rebuildButtons, 100);
 
                 return r;
             };

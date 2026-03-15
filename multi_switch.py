@@ -14,7 +14,7 @@ class MultiSwitchNode(io.ComfyNode):
         autogrow_template = _io.Autogrow.TemplatePrefix(
             input=io.MatchType.Input("value", template=template, lazy=True),
             prefix="input_",
-            min=2,
+            min=1,
             max=50
         )
         
