@@ -8,6 +8,46 @@ app.registerExtension({
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name === "MultiSwitch") {
             const onNodeCreated = nodeType.prototype.onNodeCreated;
+
+            // Add new property for hiding connections
+            nodeType.prototype.properties = nodeType.prototype.properties || {};
+            if (nodeType.prototype.properties.hidden_connections === undefined) {
+                nodeType.prototype.properties.hidden_connections = false;
+            }
+
+            // Add context menu option
+            const getExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
+            nodeType.prototype.getExtraMenuOptions = function (_, options) {
+                if (getExtraMenuOptions) getExtraMenuOptions.apply(this, arguments);
+                
+                options.push({
+                    content: this.properties.hidden_connections ? "Show Connections" : "Hide Connections",
+                    callback: () => {
+                        this.properties.hidden_connections = !this.properties.hidden_connections;
+                        if (this.rebuildButtons) this.rebuildButtons();
+                        this.setSize(this.computeSize());
+                        this.setDirtyCanvas(true, true);
+                    }
+                });
+            };
+
+            // Override drawSlots to skip dot rendering when connections are hidden
+            const drawSlots = nodeType.prototype.drawSlots;
+            nodeType.prototype.drawSlots = function(ctx, options) {
+                if (this.properties?.hidden_connections) return; // Skip all slot dot drawing
+                if (drawSlots) return drawSlots.call(this, ctx, options);
+            };
+
+            // Override onRemoved to clean up the dynamic style element
+            const onRemoved = nodeType.prototype.onRemoved;
+            nodeType.prototype.onRemoved = function() {
+                const styleEl = document.getElementById(`multi-switch-style-${this.id}`);
+                if (styleEl) styleEl.remove();
+                if (onRemoved) {
+                    onRemoved.apply(this, arguments);
+                }
+            };
+
             nodeType.prototype.onNodeCreated = function () {
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
 
@@ -53,9 +93,54 @@ app.registerExtension({
                 let maxLabelWidth = 100;
 
                 // Function to rebuild buttons based on connected inputs
-                const rebuildButtons = () => {
+                const rebuildButtons = this.rebuildButtons = () => {
                     while (container.firstChild) {
                         container.removeChild(container.firstChild);
+                    }
+
+                    // Handle Vue Node 2.0 DOM slots hiding via CSS injection
+                    const styleId = `multi-switch-style-${this.id}`;
+                    let styleEl = document.getElementById(styleId);
+                    if (!styleEl) {
+                        styleEl = document.createElement("style");
+                        styleEl.id = styleId;
+                        document.head.appendChild(styleEl);
+                    }
+
+                    if (this.properties.hidden_connections) {
+                        let topOffset = 46; // Matches body's top padding (~46px incl header)
+                        let css = `
+                            [data-node-id="${this.id}"] .lg-slot {
+                                position: absolute !important;
+                                opacity: 0 !important;
+                                pointer-events: none !important;
+                                width: 10px !important;
+                                height: 32px !important;
+                                margin: 0 !important; 
+                                padding: 0 !important;
+                            }
+                            [data-node-id="${this.id}"] .lg-slot--output {
+                                right: 0 !important;
+                                top: ${topOffset}px !important;
+                            }
+                        `;
+                        let childIndex = 1;
+                        (this.inputs || []).forEach(input => {
+                            if (input.name && input.name.startsWith("input_")) {
+                                input.label = ""; 
+                                css += `[data-node-id="${this.id}"] .lg-slot--input:nth-child(${childIndex}) { left: -5px !important; top: ${topOffset}px !important; }\n`;
+                                topOffset += 32;
+                            } else {
+                                css += `[data-node-id="${this.id}"] .lg-slot--input:nth-child(${childIndex}) { left: -5px !important; top: 46px !important; }\n`;
+                            }
+                            childIndex++;
+                        });
+                        (this.outputs || []).forEach(output => {
+                             output.label = "";
+                        });
+                        styleEl.innerHTML = css;
+                    } else {
+                        styleEl.innerHTML = "";
                     }
 
                     const inputSlots = (this.inputs || []).filter(input => input.name.includes("input_"));
@@ -63,6 +148,11 @@ app.registerExtension({
 
                     for (let i = 0; i < inputSlots.length; i++) {
                         const inputSlot = inputSlots[i];
+                        // Restore labels when not hidden
+                        if (!this.properties.hidden_connections && inputSlot.name.startsWith("input_")) {
+                             inputSlot.label = inputSlot.name;
+                        }
+                        
                         if (inputSlot.link == null) continue;
 
                         const btn = document.createElement("button");
@@ -94,7 +184,7 @@ app.registerExtension({
                         btn.style.whiteSpace = "nowrap";
                         btn.style.overflow = "hidden";
                         btn.style.textOverflow = "ellipsis";
-                        btn.style.minHeight = "28px";
+                        btn.style.minHeight = "32px";
 
                         btn.onclick = (e) => {
                             e.preventDefault();
@@ -123,7 +213,6 @@ app.registerExtension({
                 selectWidget.hidden = true;
 
                 // Add the container as a DOM widget
-                // In Node 2.0 / LiteGraph, dom widgets can have their computeSize.
                 const domWidget = this.addDOMWidget("select_buttons", "BUTTONS", container, {
                     getValue() { return selectWidget.value; },
                     setValue(v) {
@@ -137,26 +226,34 @@ app.registerExtension({
                     return [width, (buttonCount * 32) + 10];
                 };
 
-                // Override computeSize only to ensure width is sufficient for labels,
-                // but rely on super/original for the rest of the layout logic.
+                // Override computeSize
                 const originalComputeSize = this.computeSize;
                 this.computeSize = function () {
                     const size = originalComputeSize ? originalComputeSize.apply(this, arguments) : [200, 100];
                     if (this.flags.collapsed) return size;
                     
                     const buttonCount = container.children.length;
-                    if (buttonCount === 0) {
-                        // Compact mode for no buttons
+                    const HEADER_HEIGHT = 46;
+
+                    if (this.properties.hidden_connections) {
+                        // "Hide Connections" mode: size by buttons only, no slot rows
+                        size[1] = buttonCount * 32 + HEADER_HEIGHT + 10;
+                        size[0] = Math.max(120, maxLabelWidth + 40);
+                        // Force widgets to the top, ignoring slot layout spacing
+                        this.widgets_up = true;
+                        this.widgets_start_y = 0;
+                    } else {
                         const SLOT_HEIGHT = 22;
-                        const HEADER_HEIGHT = 46;
                         const inputCount = (this.inputs ? this.inputs.length : 0);
                         const outputCount = (this.outputs ? this.outputs.length : 0);
                         const maxSlots = Math.max(inputCount, outputCount, 1);
-                        size[1] = maxSlots * SLOT_HEIGHT + HEADER_HEIGHT;
+                        size[1] = Math.max(buttonCount * 32 + HEADER_HEIGHT + 10, maxSlots * SLOT_HEIGHT + HEADER_HEIGHT);
+                        size[0] = Math.max(size[0], maxLabelWidth + 60);
+                        // Restore standard widget placement
+                        this.widgets_up = undefined; 
+                        this.widgets_start_y = undefined;
                     }
 
-                    // Update width if labels are long
-                    size[0] = Math.max(size[0], maxLabelWidth + 60);
                     return size;
                 };
 
