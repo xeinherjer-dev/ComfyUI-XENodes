@@ -54,6 +54,9 @@ app.registerExtension({
                 // Find the 'select' widget
                 const selectWidget = this.widgets.find(w => w.name === "select");
                 if (!selectWidget) return r;
+                
+                // Store the original type so we can restore it when showing connections
+                const originalSelectType = selectWidget.type || "customtext";
 
                 // Create a container for our buttons
                 const container = document.createElement("div");
@@ -75,7 +78,7 @@ app.registerExtension({
 
                 // Function to update button styles based on current selection
                 const updateButtons = () => {
-                    const currentValue = selectWidget.value;
+                    const currentValue = Math.floor(selectWidget.value || 0);
                     Array.from(container.children).forEach((btn) => {
                         const idx = parseInt(btn.dataset.index);
                         if (idx === currentValue) {
@@ -107,7 +110,14 @@ app.registerExtension({
                         document.head.appendChild(styleEl);
                     }
 
+                    // Toggle the select widget visibility too
+                    if (!selectWidget.options) selectWidget.options = {};
+                    
                     if (this.properties.hidden_connections) {
+                        selectWidget.hidden = true;
+                        selectWidget.options.hidden = true;
+                        selectWidget.type = "hidden";
+                        
                         let topOffset = 46; // Matches body's top padding (~46px incl header)
                         let css = `
                             [data-node-id="${this.id}"] .lg-slot {
@@ -140,7 +150,18 @@ app.registerExtension({
                         });
                         styleEl.innerHTML = css;
                     } else {
+                        selectWidget.hidden = false;
+                        selectWidget.options.hidden = false;
+                        selectWidget.type = originalSelectType; // Restore normal rendering type
                         styleEl.innerHTML = "";
+                    }
+
+                    // Force Vue to notice the change in the widget options
+                    if (this.setDirtyCanvas) {
+                        this.setDirtyCanvas(true, true);
+                    }
+                    if (app.canvas && app.canvas.setDirty) {
+                        app.canvas.setDirty(true, true);
                     }
 
                     const inputSlots = (this.inputs || []).filter(input => input.name.includes("input_"));
@@ -191,6 +212,13 @@ app.registerExtension({
                             e.stopPropagation();
                             if (selectWidget.value !== i) {
                                 selectWidget.value = i;
+                                if (selectWidget.callback) {
+                                    selectWidget.callback(i);
+                                }
+                                if (this.change) {
+                                    this.change();
+                                }
+                                this.setDirtyCanvas(true, true);
                             }
                         };
 
@@ -206,11 +234,6 @@ app.registerExtension({
 
                     app.graph.setDirtyCanvas(true, true);
                 };
-
-                // Hide the original numeric widget
-                selectWidget.type = "hidden";
-                if (selectWidget.element) selectWidget.element.style.display = "none";
-                selectWidget.hidden = true;
 
                 // Add the container as a DOM widget
                 const domWidget = this.addDOMWidget("select_buttons", "BUTTONS", container, {
@@ -257,37 +280,26 @@ app.registerExtension({
                     return size;
                 };
 
-                // Guarded sync logic to prevent infinite recursion
-                let isUpdating = false;
+                // Sync logic to keep Select and UI buttons in sync
                 const orgCallback = selectWidget.callback;
                 selectWidget.callback = function (v) {
-                    if (isUpdating) return;
-                    isUpdating = true;
-                    try {
-                        if (orgCallback) orgCallback.apply(this, arguments);
-                        updateButtons();
-                    } finally {
-                        isUpdating = false;
+                    if (orgCallback) orgCallback.apply(this, arguments);
+                    updateButtons();
+                    if (app.canvas && app.canvas.setDirty) {
+                        app.canvas.setDirty(true, true);
                     }
                 };
 
-                let val = selectWidget.value;
-                Object.defineProperty(selectWidget, "value", {
-                    get() { return val; },
-                    set(v) {
-                        if (val === v) return;
-                        val = v;
-                        if (isUpdating) return;
-                        isUpdating = true;
-                        try {
-                            updateButtons();
-                            if (this.callback) this.callback(v);
-                        } finally {
-                            isUpdating = false;
-                        }
-                    },
-                    configurable: true
-                });
+                // Watch for value changes via property access
+                let lastVal = selectWidget.value;
+                const checkValueChange = () => {
+                    if (selectWidget.value !== lastVal) {
+                        lastVal = selectWidget.value;
+                        updateButtons();
+                    }
+                    requestAnimationFrame(checkValueChange);
+                };
+                requestAnimationFrame(checkValueChange);
 
                 let cleanupScheduled = false;
                 const scheduleCleanup = () => {
