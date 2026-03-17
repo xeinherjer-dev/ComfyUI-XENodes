@@ -26,6 +26,7 @@ app.registerExtension({
                         this.properties.hidden_connections = !this.properties.hidden_connections;
                         if (this.rebuildButtons) this.rebuildButtons();
                         this.setSize(this.computeSize());
+                        if (this.change) this.change(); // Force update notification
                         this.setDirtyCanvas(true, true);
                     }
                 });
@@ -82,14 +83,14 @@ app.registerExtension({
                     Array.from(container.children).forEach((btn) => {
                         const idx = parseInt(btn.dataset.index);
                         if (idx === currentValue) {
-                            btn.style.backgroundColor = "#444444"; // active color
+                            btn.style.backgroundColor = "#444444"; // Active color
                             btn.style.color = "white";
                             // Add a thick accent line to the left of the selected item and make the text bolder
                             btn.style.border = "1px solid #666666";
                             btn.style.borderLeft = "4px solid #4CAF50"; // ComfyUI's green accent
                             btn.style.fontWeight = "900";
                         } else {
-                            btn.style.backgroundColor = "#252525"; // inactive color
+                            btn.style.backgroundColor = "#252525"; // Inactive color
                             btn.style.color = "#888";
                             // Keep border width consistent to prevent layout shift
                             btn.style.border = "1px solid #333";
@@ -123,6 +124,7 @@ app.registerExtension({
                         selectWidget.hidden = true;
                         selectWidget.options.hidden = true;
                         selectWidget.type = "hidden";
+                        selectWidget.computeSize = () => [0, -4]; // LiteGraph native hide hack
 
                         let topOffset = 46; // Matches body's top padding (~46px incl header)
                         let css = `
@@ -159,10 +161,27 @@ app.registerExtension({
                         selectWidget.hidden = false;
                         selectWidget.options.hidden = false;
                         selectWidget.type = originalSelectType; // Restore normal rendering type
+                        delete selectWidget.computeSize; // Remove hack
                         styleEl.innerHTML = "";
                     }
 
-                    // Force Vue to notice the change in the widget options
+                    // --- Force Vue Reactivity ---
+                    // Vue 3 aggressively caches component states. Simply changing 'type' or 'hidden'
+                    // might not trigger a DOM re-render if the array reference doesn't change meaningfully.
+                    // By synchronously removing and re-inserting the widget, we force Vue to 
+                    // destroy and recreate the DOM element with the updated properties.
+                    const wIdx = this.widgets.indexOf(selectWidget);
+                    if (wIdx !== -1) {
+                        this.widgets.splice(wIdx, 1);
+                        this.widgets.splice(wIdx, 0, selectWidget);
+                    }
+
+                    // Trigger LiteGraph's internal change event to notify external listeners (like Vue)
+                    if (this.change) {
+                        this.change();
+                    }
+
+                    // Force canvas to notice the change
                     if (this.setDirtyCanvas) {
                         this.setDirtyCanvas(true, true);
                     }
@@ -241,6 +260,13 @@ app.registerExtension({
                         container.style.display = "flex";
                     }
 
+                    // --- Auto-resize handling ---
+                    if (this.size && this.computeSize) {
+                        const targetSize = this.computeSize();
+                        this.size[0] = Math.max(this.size[0], targetSize[0]);
+                        this.size[1] = targetSize[1];
+                    }
+
                     app.graph.setDirtyCanvas(true, true);
                 };
 
@@ -287,6 +313,15 @@ app.registerExtension({
                     }
 
                     return size;
+                };
+
+                // --- Clamp resize bounds ---
+                const onResize = this.onResize;
+                this.onResize = function (size) {
+                    if (onResize) onResize.apply(this, arguments);
+                    const minSize = this.computeSize();
+                    size[0] = Math.max(size[0], minSize[0]);
+                    size[1] = Math.max(size[1], minSize[1]);
                 };
 
                 // Sync logic to keep Select and UI buttons in sync
