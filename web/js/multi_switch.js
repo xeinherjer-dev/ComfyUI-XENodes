@@ -19,7 +19,7 @@ app.registerExtension({
             const getExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
             nodeType.prototype.getExtraMenuOptions = function (_, options) {
                 if (getExtraMenuOptions) getExtraMenuOptions.apply(this, arguments);
-                
+
                 options.push({
                     content: this.properties.hidden_connections ? "Show Connections" : "Hide Connections",
                     callback: () => {
@@ -33,14 +33,14 @@ app.registerExtension({
 
             // Override drawSlots to skip dot rendering when connections are hidden
             const drawSlots = nodeType.prototype.drawSlots;
-            nodeType.prototype.drawSlots = function(ctx, options) {
+            nodeType.prototype.drawSlots = function (ctx, options) {
                 if (this.properties?.hidden_connections) return; // Skip all slot dot drawing
                 if (drawSlots) return drawSlots.call(this, ctx, options);
             };
 
             // Override onRemoved to clean up the dynamic style element
             const onRemoved = nodeType.prototype.onRemoved;
-            nodeType.prototype.onRemoved = function() {
+            nodeType.prototype.onRemoved = function () {
                 const styleEl = document.getElementById(`multi-switch-style-${this.id}`);
                 if (styleEl) styleEl.remove();
                 if (onRemoved) {
@@ -54,7 +54,7 @@ app.registerExtension({
                 // Find the 'select' widget
                 const selectWidget = this.widgets.find(w => w.name === "select");
                 if (!selectWidget) return r;
-                
+
                 // Store the original type so we can restore it when showing connections
                 const originalSelectType = selectWidget.type || "customtext";
 
@@ -84,11 +84,17 @@ app.registerExtension({
                         if (idx === currentValue) {
                             btn.style.backgroundColor = "#444444"; // active color
                             btn.style.color = "white";
-                            btn.style.borderColor = "#666666";
+                            // Add a thick accent line to the left of the selected item and make the text bolder
+                            btn.style.border = "1px solid #666666";
+                            btn.style.borderLeft = "4px solid #4CAF50"; // ComfyUI's green accent
+                            btn.style.fontWeight = "900";
                         } else {
                             btn.style.backgroundColor = "#252525"; // inactive color
                             btn.style.color = "#888";
-                            btn.style.borderColor = "#333";
+                            // Keep border width consistent to prevent layout shift
+                            btn.style.border = "1px solid #333";
+                            btn.style.borderLeft = "1px solid #333";
+                            btn.style.fontWeight = "bold";
                         }
                     });
                 };
@@ -112,12 +118,12 @@ app.registerExtension({
 
                     // Toggle the select widget visibility too
                     if (!selectWidget.options) selectWidget.options = {};
-                    
+
                     if (this.properties.hidden_connections) {
                         selectWidget.hidden = true;
                         selectWidget.options.hidden = true;
                         selectWidget.type = "hidden";
-                        
+
                         let topOffset = 46; // Matches body's top padding (~46px incl header)
                         let css = `
                             [data-node-id="${this.id}"] .lg-slot {
@@ -137,7 +143,7 @@ app.registerExtension({
                         let childIndex = 1;
                         (this.inputs || []).forEach(input => {
                             if (input.name && input.name.startsWith("input_")) {
-                                input.label = ""; 
+                                input.label = "";
                                 css += `[data-node-id="${this.id}"] .lg-slot--input:nth-child(${childIndex}) { left: -5px !important; top: ${topOffset}px !important; }\n`;
                                 topOffset += 32;
                             } else {
@@ -146,7 +152,7 @@ app.registerExtension({
                             childIndex++;
                         });
                         (this.outputs || []).forEach(output => {
-                             output.label = "";
+                            output.label = "";
                         });
                         styleEl.innerHTML = css;
                     } else {
@@ -171,20 +177,23 @@ app.registerExtension({
                         const inputSlot = inputSlots[i];
                         // Restore labels when not hidden
                         if (!this.properties.hidden_connections && inputSlot.name.startsWith("input_")) {
-                             inputSlot.label = inputSlot.name;
+                            inputSlot.label = inputSlot.name;
                         }
-                        
+
                         if (inputSlot.link == null) continue;
 
                         const btn = document.createElement("button");
                         btn.dataset.index = i;
-                        let label = `${i}`;
+
+                        // Visualize the index number, default to (Empty)
+                        let label = `[${i}] (Empty)`;
 
                         const link = app.graph.links[inputSlot.link];
                         if (link) {
                             const originNode = app.graph.getNodeById(link.origin_id);
                             if (originNode) {
-                                label = originNode.title || originNode.type;
+                                // Combine origin node title and index
+                                label = `[${i}] ${originNode.title || originNode.type}`;
                             }
                         }
 
@@ -225,7 +234,7 @@ app.registerExtension({
                         container.appendChild(btn);
                     }
                     updateButtons();
-                    
+
                     if (container.children.length === 0) {
                         container.style.display = "none";
                     } else {
@@ -254,7 +263,7 @@ app.registerExtension({
                 this.computeSize = function () {
                     const size = originalComputeSize ? originalComputeSize.apply(this, arguments) : [200, 100];
                     if (this.flags.collapsed) return size;
-                    
+
                     const buttonCount = container.children.length;
                     const HEADER_HEIGHT = 46;
 
@@ -273,7 +282,7 @@ app.registerExtension({
                         size[1] = Math.max(buttonCount * 32 + HEADER_HEIGHT + 10, maxSlots * SLOT_HEIGHT + HEADER_HEIGHT);
                         size[0] = Math.max(size[0], maxLabelWidth + 60);
                         // Restore standard widget placement
-                        this.widgets_up = undefined; 
+                        this.widgets_up = undefined;
                         this.widgets_start_y = undefined;
                     }
 
@@ -307,14 +316,14 @@ app.registerExtension({
                     cleanupScheduled = true;
                     setTimeout(() => {
                         cleanupScheduled = false;
-                        
+
                         // Step 1: Collect current state and identify connected slots
                         const allInputSlots = (this.inputs || []).map((inp, idx) => ({ inp, idx }))
                             .filter(({ inp }) => inp.name && inp.name.startsWith("input_"));
 
                         // Separate connected from unconnected
                         const connectedSlots = allInputSlots.filter(({ inp }) => inp.link != null);
-                        
+
                         // We need: connected slots (compacted) + exactly one spare at the end.
                         // Step 2: Remove surplus unconnected slots — keep only 1 spare.
                         const unconnectedSlots = allInputSlots.filter(({ inp }) => inp.link == null);
@@ -323,7 +332,7 @@ app.registerExtension({
                         for (let i = toRemove.length - 1; i >= 0; i--) {
                             this.removeInput(toRemove[i].idx);
                         }
-                        
+
                         // Step 3: Compact — move all connected slots to the front,
                         // except this may conflict with Autogrow internals. 
                         // The safest approach is just to rename sequentially.
