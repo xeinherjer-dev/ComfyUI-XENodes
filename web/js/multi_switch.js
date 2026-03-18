@@ -26,7 +26,6 @@ app.registerExtension({
                         this.properties.hidden_connections = !this.properties.hidden_connections;
                         if (this.rebuildButtons) this.rebuildButtons();
                         this.setSize(this.computeSize());
-                        if (this.change) this.change(); // Force update notification
                         this.setDirtyCanvas(true, true);
                     }
                 });
@@ -85,14 +84,12 @@ app.registerExtension({
                         if (idx === currentValue) {
                             btn.style.backgroundColor = "#444444"; // Active color
                             btn.style.color = "white";
-                            // Add a thick accent line to the left of the selected item and make the text bolder
                             btn.style.border = "1px solid #666666";
                             btn.style.borderLeft = "4px solid #4CAF50"; // ComfyUI's green accent
                             btn.style.fontWeight = "900";
                         } else {
                             btn.style.backgroundColor = "#252525"; // Inactive color
                             btn.style.color = "#888";
-                            // Keep border width consistent to prevent layout shift
                             btn.style.border = "1px solid #333";
                             btn.style.borderLeft = "1px solid #333";
                             btn.style.fontWeight = "bold";
@@ -124,7 +121,6 @@ app.registerExtension({
                         selectWidget.hidden = true;
                         selectWidget.options.hidden = true;
                         selectWidget.type = "hidden";
-                        selectWidget.computeSize = () => [0, -4]; // LiteGraph native hide hack
 
                         let topOffset = 46; // Matches body's top padding (~46px incl header)
                         let css = `
@@ -161,32 +157,7 @@ app.registerExtension({
                         selectWidget.hidden = false;
                         selectWidget.options.hidden = false;
                         selectWidget.type = originalSelectType; // Restore normal rendering type
-                        delete selectWidget.computeSize; // Remove hack
                         styleEl.innerHTML = "";
-                    }
-
-                    // --- Force Vue Reactivity ---
-                    // Vue 3 aggressively caches component states. Simply changing 'type' or 'hidden'
-                    // might not trigger a DOM re-render if the array reference doesn't change meaningfully.
-                    // By synchronously removing and re-inserting the widget, we force Vue to 
-                    // destroy and recreate the DOM element with the updated properties.
-                    const wIdx = this.widgets.indexOf(selectWidget);
-                    if (wIdx !== -1) {
-                        this.widgets.splice(wIdx, 1);
-                        this.widgets.splice(wIdx, 0, selectWidget);
-                    }
-
-                    // Trigger LiteGraph's internal change event to notify external listeners (like Vue)
-                    if (this.change) {
-                        this.change();
-                    }
-
-                    // Force canvas to notice the change
-                    if (this.setDirtyCanvas) {
-                        this.setDirtyCanvas(true, true);
-                    }
-                    if (app.canvas && app.canvas.setDirty) {
-                        app.canvas.setDirty(true, true);
                     }
 
                     const inputSlots = (this.inputs || []).filter(input => input.name.includes("input_"));
@@ -267,7 +238,9 @@ app.registerExtension({
                         this.size[1] = targetSize[1];
                     }
 
-                    app.graph.setDirtyCanvas(true, true);
+                    if (app.canvas && app.canvas.setDirty) {
+                        app.canvas.setDirty(true, true);
+                    }
                 };
 
                 // Add the container as a DOM widget
@@ -334,74 +307,43 @@ app.registerExtension({
                     }
                 };
 
-                // Watch for value changes via property access
-                let lastVal = selectWidget.value;
-                const checkValueChange = () => {
-                    if (selectWidget.value !== lastVal) {
-                        lastVal = selectWidget.value;
-                        updateButtons();
-                    }
-                    requestAnimationFrame(checkValueChange);
-                };
-                requestAnimationFrame(checkValueChange);
-
-                let cleanupScheduled = false;
-                const scheduleCleanup = () => {
-                    if (cleanupScheduled) return;
-                    cleanupScheduled = true;
-                    setTimeout(() => {
-                        cleanupScheduled = false;
-
-                        // Step 1: Collect current state and identify connected slots
-                        const allInputSlots = (this.inputs || []).map((inp, idx) => ({ inp, idx }))
-                            .filter(({ inp }) => inp.name && inp.name.startsWith("input_"));
-
-                        // Separate connected from unconnected
-                        const connectedSlots = allInputSlots.filter(({ inp }) => inp.link != null);
-
-                        // We need: connected slots (compacted) + exactly one spare at the end.
-                        // Step 2: Remove surplus unconnected slots — keep only 1 spare.
-                        const unconnectedSlots = allInputSlots.filter(({ inp }) => inp.link == null);
-                        // Remove all but 1 unconnected slot (remove from highest index first to avoid shift issues)
-                        const toRemove = unconnectedSlots.slice(1); // keep the first one as spare
-                        for (let i = toRemove.length - 1; i >= 0; i--) {
-                            this.removeInput(toRemove[i].idx);
-                        }
-
-                        // Step 3: Compact — move all connected slots to the front,
-                        // except this may conflict with Autogrow internals. 
-                        // The safest approach is just to rename sequentially.
-                        // Re-read inputs after removal
-                        let seqIdx = 0;
-                        for (let j = 0; j < (this.inputs || []).length; j++) {
-                            const slot = this.inputs[j];
-                            if (slot.name && slot.name.startsWith("input_")) {
-                                const newName = `input_${seqIdx}`;
-                                slot.name = newName;
-                                slot.label = newName;
-                                seqIdx++;
-                            }
-                        }
-
-                        // Step 4: Adjust select index  
-                        const newConnectedCount = (this.inputs || []).filter(s => s.name && s.name.startsWith("input_") && s.link != null).length;
-                        if (selectWidget.value >= newConnectedCount) {
-                            selectWidget.value = Math.max(0, newConnectedCount - 1);
-                        }
-
-                        rebuildButtons();
-                    }, 50);
-                };
-
+                // Synchronous cleanup when connections change
                 const onConnectionsChange = this.onConnectionsChange;
                 this.onConnectionsChange = function (type, index, connected, link_info) {
                     const res = onConnectionsChange ? onConnectionsChange.apply(this, arguments) : undefined;
-                    scheduleCleanup();
+
+                    // Step 1: Collect current state and identify connected slots
+                    const allInputSlots = (this.inputs || []).map((inp, idx) => ({ inp, idx }))
+                        .filter(({ inp }) => inp.name && inp.name.startsWith("input_"));
+
+                    // Step 2: Remove surplus unconnected slots (keep only 1 spare)
+                    const unconnectedSlots = allInputSlots.filter(({ inp }) => inp.link == null);
+                    const toRemove = unconnectedSlots.slice(1);
+                    for (let i = toRemove.length - 1; i >= 0; i--) {
+                        this.removeInput(toRemove[i].idx);
+                    }
+
+                    // Step 3: Rename sequentially to maintain input_0, input_1, etc.
+                    let seqIdx = 0;
+                    for (let j = 0; j < (this.inputs || []).length; j++) {
+                        const slot = this.inputs[j];
+                        if (slot.name && slot.name.startsWith("input_")) {
+                            const newName = `input_${seqIdx}`;
+                            slot.name = newName;
+                            slot.label = newName;
+                            seqIdx++;
+                        }
+                    }
+
+                    // Notice: We completely removed the logic that forces selectWidget.value to 0.
+                    // This allows the value to survive workflow loading.
+
+                    rebuildButtons();
                     return res;
                 };
 
                 // Initial build
-                setTimeout(rebuildButtons, 100);
+                rebuildButtons();
 
                 return r;
             };
