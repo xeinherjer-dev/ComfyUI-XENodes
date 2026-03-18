@@ -163,6 +163,8 @@ app.registerExtension({
                     const inputSlots = (this.inputs || []).filter(input => input.name.includes("input_"));
                     maxLabelWidth = 100;
 
+                    let maxValidIndex = 0;
+
                     for (let i = 0; i < inputSlots.length; i++) {
                         const inputSlot = inputSlots[i];
                         // Restore labels when not hidden
@@ -171,6 +173,8 @@ app.registerExtension({
                         }
 
                         if (inputSlot.link == null) continue;
+
+                        maxValidIndex = Math.max(maxValidIndex, i);
 
                         const btn = document.createElement("button");
                         btn.dataset.index = i;
@@ -223,6 +227,11 @@ app.registerExtension({
 
                         container.appendChild(btn);
                     }
+                    
+                    if (selectWidget && selectWidget.options) {
+                        selectWidget.options.max = maxValidIndex;
+                    }
+                    
                     updateButtons();
 
                     if (container.children.length === 0) {
@@ -234,8 +243,13 @@ app.registerExtension({
                     // --- Auto-resize handling ---
                     if (this.size && this.computeSize) {
                         const targetSize = this.computeSize();
-                        this.size[0] = Math.max(this.size[0], targetSize[0]);
-                        this.size[1] = targetSize[1];
+                        const newWidth = Math.max(this.size[0], targetSize[0]);
+                        if (this.setSize) {
+                            this.setSize([newWidth, targetSize[1]]);
+                        } else {
+                            this.size[0] = newWidth;
+                            this.size[1] = targetSize[1];
+                        }
                     }
 
                     if (app.canvas && app.canvas.setDirty) {
@@ -274,11 +288,6 @@ app.registerExtension({
                         this.widgets_up = true;
                         this.widgets_start_y = 0;
                     } else {
-                        const SLOT_HEIGHT = 22;
-                        const inputCount = (this.inputs ? this.inputs.length : 0);
-                        const outputCount = (this.outputs ? this.outputs.length : 0);
-                        const maxSlots = Math.max(inputCount, outputCount, 1);
-                        size[1] = Math.max(buttonCount * 32 + HEADER_HEIGHT + 10, maxSlots * SLOT_HEIGHT + HEADER_HEIGHT);
                         size[0] = Math.max(size[0], maxLabelWidth + 60);
                         // Restore standard widget placement
                         this.widgets_up = undefined;
