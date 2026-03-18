@@ -243,12 +243,15 @@ app.registerExtension({
                     // --- Auto-resize handling ---
                     if (this.size && this.computeSize) {
                         const targetSize = this.computeSize();
-                        const newWidth = Math.max(this.size[0], targetSize[0]);
-                        if (this.setSize) {
-                            this.setSize([newWidth, targetSize[1]]);
-                        } else {
-                            this.size[0] = newWidth;
-                            this.size[1] = targetSize[1];
+                        // Only resize if the computed size is larger than the current width or different height
+                        if (targetSize[0] > this.size[0] || targetSize[1] !== this.size[1]) {
+                            const newWidth = Math.max(this.size[0], targetSize[0]);
+                            if (this.setSize) {
+                                this.setSize([newWidth, targetSize[1]]);
+                            } else {
+                                this.size[0] = newWidth;
+                                this.size[1] = targetSize[1];
+                            }
                         }
                     }
 
@@ -288,7 +291,10 @@ app.registerExtension({
                         this.widgets_up = true;
                         this.widgets_start_y = 0;
                     } else {
+                        // Let LiteGraph handle the native minimum height based on slots,
+                        // just ensure it matches our button width
                         size[0] = Math.max(size[0], maxLabelWidth + 60);
+
                         // Restore standard widget placement
                         this.widgets_up = undefined;
                         this.widgets_start_y = undefined;
