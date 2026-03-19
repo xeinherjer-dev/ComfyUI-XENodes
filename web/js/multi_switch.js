@@ -78,9 +78,6 @@ app.registerExtension({
             const selectWidget = this.widgets?.find((widget) => widget.name === "select");
             if (!selectWidget) return result;
 
-            // Flag to track whether connections (input slots + select widget) are hidden
-            this.connectionsHidden = false;
-
             const container = document.createElement("div");
             container.className = "multi-switch-container";
             container.style.display = "flex";
@@ -107,40 +104,6 @@ app.registerExtension({
                     const index = Number.parseInt(button.dataset.index ?? "-1", 10);
                     setButtonActiveState(button, index === currentValue);
                 });
-            };
-
-            /**
-             * Toggle visibility of input slots and the select widget.
-             * When hidden=true, slots are excluded from rendering and the select widget is hidden.
-             */
-            const applyConnectionVisibility = (hidden) => {
-                const managedInputs = getManagedInputs(this);
-                for (const input of managedInputs) {
-                    input.hidden = hidden;
-                }
-
-                // Also hide the select widget
-                if (selectWidget) {
-                    selectWidget.hidden = hidden;
-                    // Set computedHeight to 0 to collapse the widget height
-                    if (hidden) {
-                        selectWidget._computedHeight = 0;
-                    } else {
-                        delete selectWidget._computedHeight;
-                    }
-                }
-
-                // Recalculate node size and apply immediately
-                if (this.computeSize) {
-                    const newSize = this.computeSize();
-                    if (this.setSize) {
-                        this.setSize([Math.max(this.size[0], newSize[0]), newSize[1]]);
-                    } else {
-                        this.size[1] = newSize[1];
-                    }
-                }
-
-                app.canvas?.setDirty(true, true);
             };
 
             const rebuildButtons = this.rebuildButtons = () => {
@@ -241,56 +204,8 @@ app.registerExtension({
                 return response;
             };
 
-            // Add Hide/Show Connections toggle to the right-click context menu
-            const originalGetExtraMenuOptions = this.getExtraMenuOptions;
-            this.getExtraMenuOptions = function (_, options) {
-                originalGetExtraMenuOptions?.apply(this, arguments);
-
-                const label = this.connectionsHidden
-                    ? "Show Connections"
-                    : "Hide Connections";
-
-                options.push({
-                    content: label,
-                    callback: () => {
-                        this.connectionsHidden = !this.connectionsHidden;
-                        applyConnectionVisibility(this.connectionsHidden);
-                    }
-                });
-            };
-
             rebuildButtons();
             return result;
-        };
-
-        // Persist connectionsHidden state when saving/loading workflows
-        const originalOnConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function (info) {
-            originalOnConfigure?.apply(this, arguments);
-            if (info?.connectionsHidden != null) {
-                this.connectionsHidden = info.connectionsHidden;
-                // Apply after slots are ready following load
-                requestAnimationFrame(() => {
-                    const managedInputs = getManagedInputs(this);
-                    for (const input of managedInputs) {
-                        input.hidden = this.connectionsHidden;
-                    }
-                    const sw = this.widgets?.find((w) => w.name === "select");
-                    if (sw) sw.hidden = this.connectionsHidden;
-                    if (this.computeSize) {
-                        const s = this.computeSize();
-                        if (this.setSize) this.setSize([Math.max(this.size[0], s[0]), s[1]]);
-                        else this.size[1] = s[1];
-                    }
-                    app.canvas?.setDirty(true, true);
-                });
-            }
-        };
-
-        const originalOnSerialize = nodeType.prototype.onSerialize;
-        nodeType.prototype.onSerialize = function (info) {
-            originalOnSerialize?.apply(this, arguments);
-            info.connectionsHidden = this.connectionsHidden ?? false;
         };
     }
 });
