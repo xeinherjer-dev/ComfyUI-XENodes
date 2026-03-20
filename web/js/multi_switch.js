@@ -99,10 +99,21 @@ app.registerExtension({
             let maxLabelWidth = MIN_LABEL_WIDTH;
 
             const updateButtons = () => {
+                // Check if the select pin is connected
+                const isSelectConnected = this.inputs?.some(i => i.name === "select" && i.link != null);
                 const currentValue = Math.floor(selectWidget.value || 0);
+                
+                // Disable the select widget if connected
+                selectWidget.disabled = isSelectConnected;
+
                 Array.from(container.children).forEach((button) => {
                     const index = Number.parseInt(button.dataset.index ?? "-1", 10);
                     setButtonActiveState(button, index === currentValue);
+                    
+                    // Disable and gray out (reduce opacity) buttons when connected
+                    button.disabled = isSelectConnected;
+                    button.style.opacity = isSelectConnected ? "0.5" : "1.0";
+                    button.style.cursor = isSelectConnected ? "default" : "pointer";
                 });
             };
 
