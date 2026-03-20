@@ -2,7 +2,7 @@ import { app } from "../../../scripts/app.js";
 
 const EXTENSION_NAME = "XeNodes.MultiSwitch";
 const NODE_NAME = "MultiSwitch";
-const MANAGED_INPUT_PREFIX = "inputs.input_";
+const MANAGED_INPUT_PREFIX = "inputs.input";
 const BUTTON_HEIGHT = 32;
 const MIN_LABEL_WIDTH = 100;
 
