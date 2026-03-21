@@ -23,11 +23,6 @@ A general-purpose switch node that selects one input from many and routes it to 
 - **Custom UI**: Convenient selection buttons are displayed directly on the node, showing the source node names of connected inputs.
 - **Hide Connections**: Toggle the visibility of connection slots via the right-click menu to keep your workflow clean and compact.
 
-## Key Features
-
-- **Smart Dynamic Buttons**:
-  Selection buttons are automatically generated for each connected input. These buttons display the title of the origin node, making it immediately clear which input is currently active.
-
 ## Screenshots
 
 ![Multi-Switch UI](assets/screenshot1.webp)

@@ -1,5 +1,6 @@
 from comfy_api.latest import ComfyExtension, io
 from .nodes.multi_switch import comfy_entrypoint as multi_switch_entrypoint
+from .nodes.slider import comfy_entrypoint as slider_entrypoint
 
 WEB_DIRECTORY = "./web"
 
@@ -16,6 +17,7 @@ class XENodesExtension(ComfyExtension):
 async def comfy_entrypoint() -> XENodesExtension:
     exts = [
         await multi_switch_entrypoint(),
+        await slider_entrypoint(),
     ]
     return XENodesExtension(exts)
 
