@@ -108,7 +108,9 @@ app.registerExtension({
 
                 Array.from(container.children).forEach((button) => {
                     const index = Number.parseInt(button.dataset.index ?? "-1", 10);
-                    setButtonActiveState(button, index === currentValue);
+                    // Clear selection highlight when select input is connected
+                    const isActive = isSelectConnected ? false : index === currentValue;
+                    setButtonActiveState(button, isActive);
                     
                     // Disable and gray out (reduce opacity) buttons when connected
                     button.disabled = isSelectConnected;

@@ -1,5 +1,5 @@
 from comfy_api.latest import ComfyExtension, io
-from .multi_switch import comfy_entrypoint as multi_switch_entrypoint
+from .nodes.multi_switch import comfy_entrypoint as multi_switch_entrypoint
 
 WEB_DIRECTORY = "./web"
 
