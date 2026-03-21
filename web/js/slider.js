@@ -33,8 +33,8 @@ app.registerExtension({
                         background: rgba(30, 30, 30, 0.6);
                         border: 1px solid rgba(255, 255, 255, 0.1);
                         border-radius: 6px;
-                        padding: 4px 8px;
-                        margin: -14px 4px 4px 4px; /* Pull up to hide gap */
+                        padding: 2px 8px;
+                        margin: -18px 4px 4px 4px; /* Pull up to hide gap */
                         box-sizing: border-box;
                         width: calc(100% - 8px);
                         backdrop-filter: blur(4px);
@@ -43,7 +43,7 @@ app.registerExtension({
                         -webkit-appearance: none;
                         width: 100%;
                         background: transparent;
-                        margin: 0 8px 0 0;
+                        margin: 0 4px 0 0;
                         cursor: pointer;
                     }
                     .xe-slider-range::-webkit-slider-runnable-track {
@@ -67,12 +67,12 @@ app.registerExtension({
                         background: #5CA0F2;
                     }
                     .xe-number-input {
-                        width: 45px;
+                        width: 40px;
                         background: transparent;
                         color: #eee;
                         border: none;
                         border-left: 1px solid rgba(255, 255, 255, 0.1);
-                        padding-left: 8px;
+                        padding-left: 4px;
                         font-family: inherit;
                         font-size: 12px;
                         text-align: right;
@@ -195,13 +195,13 @@ app.registerExtension({
                 setValue(v) { onValueChange(v); }
             });
 
-            domWidget.computeSize = (width) => [Math.max(width, 180), 28];
+            domWidget.computeSize = (width) => [Math.max(width, 180), 20];
             
             // Override node's computeSize to enforce compactness
             const originalComputeSize = this.computeSize;
             this.computeSize = function(size) {
                 const computed = originalComputeSize ? originalComputeSize.apply(this, arguments) : [200, 30];
-                return [computed[0], 52]; // Force very compact height
+                return [computed[0], 44]; // Force very compact height
             };
             
             updateInputs();
