@@ -68,6 +68,35 @@ app.registerExtension({
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_NAME) return;
 
+        const originalGetExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
+        nodeType.prototype.getExtraMenuOptions = function(canvas, options) {
+            if (originalGetExtraMenuOptions) {
+                originalGetExtraMenuOptions.apply(this, arguments);
+            }
+            const isHidden = this.properties?.hide_connections === true;
+            options.push({
+                content: isHidden ? "Show Connections" : "Hide Connections",
+                callback: () => {
+                    this.properties = this.properties || {};
+                    this.properties.hide_connections = !isHidden;
+                    if (this.applyHideConnections) {
+                        this.applyHideConnections();
+                    }
+                    app.canvas?.setDirty(true, true);
+                }
+            });
+        };
+
+        const originalDrawSlots = nodeType.prototype.drawSlots;
+        nodeType.prototype.drawSlots = function(ctx, options) {
+            if (this.properties?.hide_connections === true) {
+                return; // Skip drawing connection dots when hidden
+            }
+            if (originalDrawSlots) {
+                return originalDrawSlots.apply(this, arguments);
+            }
+        };
+
         const originalOnNodeCreated = nodeType.prototype.onNodeCreated;
 
         nodeType.prototype.onNodeCreated = function () {
@@ -77,6 +106,58 @@ app.registerExtension({
 
             const selectWidget = this.widgets?.find((widget) => widget.name === "select");
             if (!selectWidget) return result;
+
+            this.properties = this.properties || {};
+            if (this.properties.hide_connections === undefined) {
+                this.properties.hide_connections = false;
+            }
+
+            this.applyHideConnections = () => {
+                const isHidden = this.properties.hide_connections === true;
+                
+                const styleId = `multi-switch-style-${this.id}`;
+                let styleEl = document.getElementById(styleId);
+                if (!styleEl) {
+                    styleEl = document.createElement("style");
+                    styleEl.id = styleId;
+                    document.head.appendChild(styleEl);
+                }
+
+                if (isHidden) {
+                    let css = `
+                        [data-node-id="${this.id}"] .lg-slot {
+                            position: absolute !important;
+                            opacity: 0 !important;
+                            pointer-events: none !important;
+                            width: 10px !important;
+                            height: 32px !important;
+                            margin: 0 !important; 
+                            padding: 0 !important;
+                        }
+                    `;
+                    styleEl.innerHTML = css;
+                } else {
+                    styleEl.innerHTML = "";
+                }
+
+                if (this.widgets) {
+                    for (let i = 0; i < this.widgets.length; i++) {
+                        if (this.widgets[i].name === "select") {
+                            this.widgets[i].hidden = isHidden;
+                        }
+                    }
+                }
+
+                if (this.change) {
+                    this.change(); // Notify listeners of structural changes
+                }
+
+                if (this.computeSize && this.setSize) {
+                    const newSize = this.computeSize([this.size[0], this.size[1]]);
+                    this.setSize([newSize[0], newSize[1]]);
+                }
+            };
+
 
             const container = document.createElement("div");
             container.className = "multi-switch-container";
@@ -151,6 +232,10 @@ app.registerExtension({
                 updateButtons();
                 container.style.display = container.children.length === 0 ? "none" : "flex";
 
+                if (this.applyHideConnections) {
+                    this.applyHideConnections();
+                }
+
                 if (this.size && this.computeSize) {
                     const targetSize = this.computeSize();
                     if (targetSize[0] > this.size[0] || targetSize[1] !== this.size[1]) {
@@ -189,7 +274,20 @@ app.registerExtension({
 
                 if (this.flags.collapsed) return size;
 
-                size[0] = Math.max(size[0], maxLabelWidth + 60);
+                const buttonCount = container.children.length;
+                const HEADER_HEIGHT = 46;
+
+                if (this.properties?.hide_connections) {
+                    size[1] = buttonCount * BUTTON_HEIGHT + HEADER_HEIGHT + 10;
+                    size[0] = Math.max(120, maxLabelWidth + 40);
+                    this.widgets_up = true;
+                    this.widgets_start_y = 0;
+                } else {
+                    size[0] = Math.max(size[0], maxLabelWidth + 60);
+                    this.widgets_up = undefined; 
+                    this.widgets_start_y = undefined;
+                }
+
                 return size;
             };
 
