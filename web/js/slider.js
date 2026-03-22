@@ -112,8 +112,8 @@ app.registerExtension({
                 numberInput.step = this.properties.step;
 
                 // Sync value
-                let valToSet = parseInt(this.properties.value, 10);
-                if (isNaN(valToSet)) valToSet = parseInt(this.properties.min, 10) || 0;
+                let valToSet = parseFloat(this.properties.value);
+                if (isNaN(valToSet)) valToSet = parseFloat(this.properties.min) || 0;
 
                 sliderInput.value = valToSet;
                 numberInput.value = valToSet;
@@ -143,10 +143,10 @@ app.registerExtension({
             };
 
             const onValueChange = (val) => {
-                let numVal = parseInt(val, 10);
-                if (isNaN(numVal)) numVal = parseInt(this.properties.min, 10) || 0;
+                let numVal = parseFloat(val);
+                if (isNaN(numVal)) numVal = parseFloat(this.properties.min) || 0;
 
-                const finalVal = Math.floor(numVal);
+                const finalVal = numVal;
                 if (this.properties.value === finalVal) return; // Prevent infinite loops
 
                 this.properties.value = finalVal;
