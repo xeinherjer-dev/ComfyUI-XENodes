@@ -23,16 +23,21 @@ class XESaveVideo(io.ComfyNode):
             inputs=[
                 io.Video.Input("video", tooltip="The video to save."),
                 io.String.Input("filename_prefix", default="video/ComfyUI", tooltip="The prefix for the file to save."),
-                io.Combo.Input("format", options=["mp4", "webm", "mkv"], default="mp4", tooltip="The format to save the video as."),
-                io.Combo.Input("codec", options=["h264", "h265", "vp9", "av1"], default="h264", tooltip="The codec to use for the video."),
-                io.Float.Input("crf", default=0.0, min=0.0, max=63.0, step=1.0, tooltip="Constant Rate Factor. 0 means default quality."),
+                io.Combo.Input("format", options=["mp4", "webm"], default="mp4", tooltip="The format to save the video as."),
+                io.Combo.Input("codec", options=["h264", "h265", "av1"], default="h264", tooltip="The codec to use for the video."),
+                io.Combo.Input("quality", options=["default", "high", "medium", "low", "custom"], default="medium", tooltip="Preset quality levels. 'default' uses encoder defaults. 'custom' uses the value below."),
+                io.Float.Input("custom_crf", default=0.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used only when quality is set to 'custom'."),
             ],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
         )
 
     @classmethod
-    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float) -> io.NodeOutput:
+    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, quality: str, custom_crf: float) -> io.NodeOutput:
+        # Validation for format and codec compatibility
+        if format == 'webm' and codec in ['h264', 'h265']:
+            raise ValueError(f"Codec '{codec}' is not supported for WebM format. Please use 'av1' for WebM.")
+            
         width, height = video.get_dimensions()
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix,
@@ -57,7 +62,6 @@ class XESaveVideo(io.ComfyNode):
         codec_map = {
             'h264': 'libx264',
             'h265': 'libx265',
-            'vp9': 'libvpx-vp9',
             'av1': 'libsvtav1'
         }
         av_codec = codec_map.get(codec, 'libx264')
@@ -65,7 +69,6 @@ class XESaveVideo(io.ComfyNode):
         pix_fmt_map = {
             'h264': 'yuv420p',
             'h265': 'yuv420p',
-            'vp9': 'yuv420p',
             'av1': 'yuv420p10le'
         }
         pix_fmt = pix_fmt_map.get(codec, 'yuv420p')
@@ -87,9 +90,23 @@ class XESaveVideo(io.ComfyNode):
             video_stream.height = components.images.shape[1]
             video_stream.pix_fmt = pix_fmt
 
+            # Quality mapping
+            crf_value = None
+            if quality == "custom":
+                crf_value = int(custom_crf)
+            elif quality != "default":
+                # CRF presets: [high, medium, low]
+                presets = {
+                    'h264': {'high': 20, 'medium': 25, 'low': 32},
+                    'h265': {'high': 20, 'medium': 25, 'low': 32},
+                    'av1':  {'high': 28, 'medium': 35, 'low': 50}
+                }
+                crf_value = presets.get(codec, presets['h264']).get(quality)
+
             opts = {}
-            if crf > 0:
-                opts['crf'] = str(int(crf))
+            if crf_value is not None:
+                opts['crf'] = str(crf_value)
+            
             if opts:
                 video_stream.options = opts
 

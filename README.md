@@ -30,3 +30,18 @@ A general-purpose switch node that selects one input from many and routes it to 
 A versatile slider node that outputs a numerical value, compatible with both INT and FLOAT inputs.
 
 - **Automatic Casting**: Automatically returns `int` for whole numbers and `float` for fractional ones, ensuring compatibility across all node types.
+
+### Save Video (XE)
+
+A powerful video saving node that writes video files natively, providing more control over encoding settings than the default Save Image node.
+
+- **Native Encoding**: Saves video directly using FFmpeg (PyAV) with support for modern codecs.
+- **AV1 Support**: Includes support for the highly efficient AV1 codec.
+- **Format Options**: Choice of `mp4` and `webm` containers.
+- **CRF Control**: Adjustable Constant Rate Factor for precise quality management.
+- **Metadata Persistence**: Preserves ComfyUI prompt and metadata within the video file.
+- **Audio Integration**: Automatically handles audio synchronization when available.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
