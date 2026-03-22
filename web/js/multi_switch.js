@@ -204,6 +204,7 @@ app.registerExtension({
                 clearContainer(container);
 
                 const inputSlots = getManagedInputs(this);
+                
                 let maxValidIndex = 0;
                 maxLabelWidth = MIN_LABEL_WIDTH;
 

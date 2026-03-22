@@ -14,11 +14,12 @@ class MultiSwitchNode(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         template = io.MatchType.Template("any")
-        autogrow_template = _io.Autogrow.TemplatePrefix(
+        
+        names = [f"input{i:02d}" for i in range(50)]
+        autogrow_template = _io.Autogrow.TemplateNames(
             input=io.MatchType.Input("value", template=template, lazy=True),
-            prefix="input",
-            min=1,
-            max=50
+            names=names,
+            min=1
         )
 
         return io.Schema(
