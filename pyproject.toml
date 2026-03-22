@@ -1,0 +1,14 @@
+[project]
+name = "XENodes"
+version = "0.1.0"
+description = "Custom nodes for ComfyUI, featuring Multi-Switch and Slider nodes with enhanced UI."
+license = { text = "MIT" }
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/xeinherjer-dev/ComfyUI-XENodes"
+
+[tool.comfy]
+PublisherId = "xeinherjer-dev"
+DisplayName = "XENodes"
+Icon = ""

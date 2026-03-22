@@ -22,7 +22,7 @@ const clearContainer = (container) => {
 
 const setButtonActiveState = (button, isActive) => {
     button.style.backgroundColor = isActive ? "#444444" : "#252525";
-    button.style.color = isActive ? "white" : "#888";
+    button.style.color = isActive ? "white" : "#bbbbbb";
     button.style.border = isActive ? "1px solid #666666" : "1px solid #333";
     button.style.borderLeft = isActive ? "4px solid #4CAF50" : "1px solid #333";
     button.style.fontWeight = isActive ? "900" : "bold";
@@ -38,7 +38,7 @@ const createButton = (node, selectWidget, index, label) => {
     button.style.border = "1px solid";
     button.style.borderRadius = "4px";
     button.style.padding = "8px 10px";
-    button.style.fontSize = "11px";
+    button.style.fontSize = "12px";
     button.style.fontWeight = "bold";
     button.style.textAlign = "left";
     button.style.outline = "none";
@@ -174,7 +174,7 @@ app.registerExtension({
 
             const measureContext = document.createElement("canvas").getContext("2d");
             if (measureContext) {
-                measureContext.font = "bold 11px sans-serif";
+                measureContext.font = "bold 12px sans-serif";
             }
 
             let maxLabelWidth = MIN_LABEL_WIDTH;
