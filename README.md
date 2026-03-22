@@ -24,3 +24,9 @@ A general-purpose switch node that selects one input from many and routes it to 
 - **Hide Connections**: Toggle the visibility of connection slots via the right-click menu to keep your workflow clean and compact.
 
 ![Multi-Switch UI](assets/screenshot1.webp)
+
+### Slider
+
+A versatile slider node that outputs a numerical value, compatible with both INT and FLOAT inputs.
+
+- **Automatic Casting**: Automatically returns `int` for whole numbers and `float` for fractional ones, ensuring compatibility across all node types.
