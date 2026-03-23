@@ -16,7 +16,7 @@ class XESliderNode(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(
-            node_id="XESlider",
+            node_id="XENodes.Slider",
             display_name="Slider",
             category="XENodes",
             inputs=[

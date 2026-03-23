@@ -1,7 +1,7 @@
 import { app } from "../../../scripts/app.js";
 
-const EXTENSION_NAME = "XeNodes.Slider";
-const NODE_NAME = "XESlider";
+const EXTENSION_NAME = "XENodes.Slider";
+const NODE_NAME = "XENodes.Slider";
 
 app.registerExtension({
     name: EXTENSION_NAME,

@@ -23,7 +23,7 @@ class MultiSwitchNode(io.ComfyNode):
         )
 
         return io.Schema(
-            node_id="MultiSwitch",
+            node_id="XENodes.MultiSwitch",
             display_name="Multi-Switch",
             category="XENodes",
             inputs=[

@@ -31,7 +31,7 @@ A versatile slider node that outputs a numerical value, compatible with both INT
 
 - **Automatic Casting**: Automatically returns `int` for whole numbers and `float` for fractional ones, ensuring compatibility across all node types.
 
-### Save Video (XE)
+### Save Video
 
 A powerful video saving node that writes video files natively, providing more control over encoding settings than the default Save Image node.
 
