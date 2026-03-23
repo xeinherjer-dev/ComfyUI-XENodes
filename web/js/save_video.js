@@ -9,7 +9,6 @@ app.registerExtension({
 			nodeType.prototype.onNodeCreated = function () {
 				const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
 
-				const qualityWidget = this.widgets.find((w) => w.name === "quality");
 				const formatWidget = this.widgets.find((w) => w.name === "format");
 				const codecWidget = this.widgets.find((w) => w.name === "codec");
 				const crfWidget = this.widgets.find((w) => w.name === "crf");
@@ -21,19 +20,15 @@ app.registerExtension({
 					};
 				}
 
-				const QUALITY_CRF_MAP = {
-					'medium': {
-						'h264': 23,
-						'h265': 28,
-						'av1': 45
-					}
-					// Add low/high here later
+				const CODEC_CRF_MAP = {
+					'h264': 23,
+					'h265': 28,
+					'av1': 45
 				};
 
 				const updateCrf = () => {
-					const quality = qualityWidget?.value;
 					const codec = codecWidget?.value;
-					const crfValue = QUALITY_CRF_MAP[quality]?.[codec];
+					const crfValue = CODEC_CRF_MAP[codec];
 					if (crfValue !== undefined && crfWidget) {
 						crfWidget.value = crfValue;
 					}
@@ -61,14 +56,6 @@ app.registerExtension({
 						}
 						return origCodecCallback ? origCodecCallback.apply(this, arguments) : undefined;
 					};
-
-					if (qualityWidget) {
-						const origQualityCallback = qualityWidget.callback;
-						qualityWidget.callback = function (v) {
-							updateCrf();
-							return origQualityCallback ? origQualityCallback.apply(this, arguments) : undefined;
-						};
-					}
 					
 					// Initial sync
 					updateCrf();

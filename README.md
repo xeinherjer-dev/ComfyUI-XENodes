@@ -33,14 +33,7 @@ A versatile slider node that outputs a numerical value, compatible with both INT
 
 ### Save Video
 
-A powerful video saving node that writes video files natively, providing more control over encoding settings than the default Save Image node.
-
-- **Native Encoding**: Saves video directly using FFmpeg (PyAV) with support for modern codecs.
-- **AV1 Support**: Includes support for the highly efficient AV1 codec.
-- **Format Options**: Choice of `mp4` and `webm` containers.
-- **CRF Control**: Adjustable Constant Rate Factor for precise quality management.
-- **Metadata Persistence**: Preserves ComfyUI prompt and metadata within the video file.
-- **Audio Integration**: Automatically handles audio synchronization when available.
+A video saving node with configurable **format** (`mp4`, `webm`), **codec** (`h264`, `h265`, `av1`), and **crf** settings.
 
 ## License
 

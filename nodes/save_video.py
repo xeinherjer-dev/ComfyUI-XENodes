@@ -25,7 +25,6 @@ class XESaveVideo(io.ComfyNode):
                 io.String.Input("filename_prefix", default="video/ComfyUI", tooltip="The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."),
                 io.Combo.Input("format", options=["mp4", "webm"], default="mp4", tooltip="The format to save the video as."),
                 io.Combo.Input("codec", options=["h264", "h265", "av1"], default="h264", tooltip="The codec to use for the video."),
-                io.Combo.Input("quality", options=["medium"], default="medium", tooltip="Preset quality levels."),
                 io.Float.Input("crf", default=0.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used for encoding. Set to 0 to use encoder defaults."),
             ],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
@@ -33,7 +32,7 @@ class XESaveVideo(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, quality: str, crf: float) -> io.NodeOutput:
+    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float) -> io.NodeOutput:
         width, height = video.get_dimensions()
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix,
@@ -57,8 +56,8 @@ class XESaveVideo(io.ComfyNode):
         
         codec_config = {
             'h264': {'codec': 'libx264', 'pix_fmt': 'yuv420p'},
-            'h265': {'codec': 'libx265', 'pix_fmt': 'yuv420p'},
-            'av1':  {'codec': 'libsvtav1', 'pix_fmt': 'yuv420p10le', 'options': {'preset': '4'}}
+            'h265': {'codec': 'libx265', 'pix_fmt': 'yuv420p10le'},
+            'av1':  {'codec': 'libsvtav1', 'pix_fmt': 'yuv420p10le', 'options': {'preset': '6'}}
         }
         
         config = codec_config.get(codec, codec_config['h264'])
