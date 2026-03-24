@@ -69,7 +69,7 @@ app.registerExtension({
         if (nodeData.name !== NODE_NAME) return;
 
         const originalGetExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
-        nodeType.prototype.getExtraMenuOptions = function(canvas, options) {
+        nodeType.prototype.getExtraMenuOptions = function (canvas, options) {
             if (originalGetExtraMenuOptions) {
                 originalGetExtraMenuOptions.apply(this, arguments);
             }
@@ -88,7 +88,7 @@ app.registerExtension({
         };
 
         const originalDrawSlots = nodeType.prototype.drawSlots;
-        nodeType.prototype.drawSlots = function(ctx, options) {
+        nodeType.prototype.drawSlots = function (ctx, options) {
             if (this.properties?.hide_connections === true) {
                 return; // Skip drawing connection dots when hidden
             }
@@ -114,7 +114,7 @@ app.registerExtension({
 
             this.applyHideConnections = () => {
                 const isHidden = this.properties.hide_connections === true;
-                
+
                 const styleId = `multi-switch-style-${this.id}`;
                 let styleEl = document.getElementById(styleId);
                 if (!styleEl) {
@@ -183,7 +183,7 @@ app.registerExtension({
                 // Check if the select pin is connected
                 const isSelectConnected = this.inputs?.some(i => i.name === "select" && i.link != null);
                 const currentValue = Math.floor(selectWidget.value || 0);
-                
+
                 // Disable the select widget if connected
                 selectWidget.disabled = isSelectConnected;
 
@@ -192,7 +192,7 @@ app.registerExtension({
                     // Clear selection highlight when select input is connected
                     const isActive = isSelectConnected ? false : index === currentValue;
                     setButtonActiveState(button, isActive);
-                    
+
                     // Disable and gray out (reduce opacity) buttons when connected
                     button.disabled = isSelectConnected;
                     button.style.opacity = isSelectConnected ? "0.5" : "1.0";
@@ -204,7 +204,7 @@ app.registerExtension({
                 clearContainer(container);
 
                 const inputSlots = getManagedInputs(this);
-                
+
                 let maxValidIndex = 0;
                 maxLabelWidth = MIN_LABEL_WIDTH;
 
@@ -281,15 +281,14 @@ app.registerExtension({
                 const HEADER_HEIGHT = 46;
 
                 if (this.properties?.hide_connections) {
-                    // bodyHeight = startY(2) + buttons + bottom_padding(2)
-                    // _arrangeWidgetsのstartY = widgets_start_y(0) + 2 = 2
                     size[1] = buttonCount * BUTTON_HEIGHT + 20;
                     size[0] = Math.max(120, maxLabelWidth + 40);
                     this.widgets_up = true;
                     this.widgets_start_y = 0;
                 } else {
+                    size[1] += 10;
                     size[0] = Math.max(size[0], maxLabelWidth + 60);
-                    this.widgets_up = undefined; 
+                    this.widgets_up = undefined;
                     this.widgets_start_y = undefined;
                 }
 
