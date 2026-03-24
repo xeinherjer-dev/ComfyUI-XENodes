@@ -12,7 +12,7 @@ class _NumberOutput(io.Output):
     def get_io_type(self):
         return self.io_type
 
-class XESliderNode(io.ComfyNode):
+class SliderNode(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(
@@ -34,10 +34,10 @@ class XESliderNode(io.ComfyNode):
             return io.NodeOutput(int(value))
         return io.NodeOutput(value)
 
-class XESliderExtension(ComfyExtension):
+class SliderExtension(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        return [XESliderNode]
+        return [SliderNode]
 
-async def comfy_entrypoint() -> XESliderExtension:
-    return XESliderExtension()
+async def comfy_entrypoint() -> SliderExtension:
+    return SliderExtension()

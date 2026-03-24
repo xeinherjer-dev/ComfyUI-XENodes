@@ -12,7 +12,7 @@ from comfy_api.latest import ComfyExtension, io, Input, ui
 from comfy.cli_args import args
 import folder_paths
 
-class XESaveVideo(io.ComfyNode):
+class SaveVideo(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(
@@ -132,10 +132,10 @@ class XESaveVideo(io.ComfyNode):
 
         return io.NodeOutput(ui=ui.PreviewVideo([ui.SavedResult(file_name, subfolder, io.FolderType.output)]))
 
-class XESaveVideoExtension(ComfyExtension):
+class SaveVideoExtension(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        return [XESaveVideo]
+        return [SaveVideo]
 
-async def comfy_entrypoint() -> XESaveVideoExtension:
-    return XESaveVideoExtension()
+async def comfy_entrypoint() -> SaveVideoExtension:
+    return SaveVideoExtension()
