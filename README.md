@@ -1,6 +1,10 @@
 # ComfyUI-XENodes
 
-A collection of custom nodes for ComfyUI, featuring the versatile Multi-Switch node.
+A collection of custom nodes for ComfyUI, featuring the versatile Multi-Switch node, among other features.
+
+## Features
+
+- **Nodes 2.0 Support**: Modern UI and compatibility for latest ComfyUI versions.
 
 ## Installation
 
@@ -19,6 +23,7 @@ A collection of custom nodes for ComfyUI, featuring the versatile Multi-Switch n
 
 A general-purpose switch node that selects one input from many and routes it to a single output.
 
+- **Nodes 2.0 Compatible**: Dynamic UI that stays clean and responsive in the latest ComfyUI.
 - **Autogrow**: Input slots automatically increase as you connect more nodes.
 - **Custom UI**: Convenient selection buttons are displayed directly on the node, showing the source node names of connected inputs.
 - **Hide Connections**: Toggle the visibility of connection slots via the right-click menu to keep your workflow clean and compact.
@@ -30,6 +35,10 @@ A general-purpose switch node that selects one input from many and routes it to 
 A versatile slider node that outputs a numerical value, compatible with both INT and FLOAT inputs.
 
 - **Automatic Casting**: Automatically returns `int` for whole numbers and `float` for fractional ones, ensuring compatibility across all node types.
+
+### Save Image
+
+An image saving node with configurable **format** (`png`, `webp`), **lossless** encoding, and **quality** settings.
 
 ### Save Video
 

@@ -9,7 +9,7 @@ app.registerExtension({
         if (nodeData.name !== NODE_NAME) return;
 
         const originalOnNodeCreated = nodeType.prototype.onNodeCreated;
-        
+
         nodeType.prototype.onNodeCreated = function () {
             if (originalOnNodeCreated) {
                 originalOnNodeCreated.apply(this, arguments);
@@ -33,10 +33,11 @@ app.registerExtension({
                         background: rgba(30, 30, 30, 0.6);
                         border: 1px solid rgba(255, 255, 255, 0.1);
                         border-radius: 6px;
-                        padding: 2px 8px;
-                        margin: -18px 4px 4px 4px; /* Pull up to hide gap */
+                        padding: 0px 8px;
+                        margin: -31px 4px 0px 4px; /* Pull up more, remove bottom margin */
                         box-sizing: border-box;
                         width: calc(100% - 8px);
+                        height: 20px;
                         backdrop-filter: blur(4px);
                     }
                     .xe-slider-range {
@@ -106,7 +107,7 @@ app.registerExtension({
                 sliderInput.min = this.properties.min;
                 sliderInput.max = this.properties.max;
                 sliderInput.step = this.properties.step;
-                
+
                 numberInput.min = this.properties.min;
                 numberInput.max = this.properties.max;
                 numberInput.step = this.properties.step;
@@ -157,7 +158,7 @@ app.registerExtension({
 
             sliderInput.addEventListener("input", (e) => onValueChange(e.target.value));
             numberInput.addEventListener("change", (e) => onValueChange(e.target.value));
-            
+
             // Prevent panning graph
             const stopPropagation = (e) => e.stopPropagation();
             sliderInput.addEventListener("mousedown", stopPropagation);
@@ -174,13 +175,13 @@ app.registerExtension({
                             w.hidden = true;
                             // Do not clear w.name here! It breaks backend serialization.
                             if (w.computeSize) {
-                                w.computeSize = () => [0, -4]; 
+                                w.computeSize = () => [0, -4];
                             }
                         }
                     }
                 }
                 if (this.outputs && this.outputs.length > 0) {
-                    this.outputs[0].label = ""; 
+                    this.outputs[0].label = "";
                     this.outputs[0].name = " ";
                 }
                 if (this.computeSize && this.setSize) {
@@ -196,18 +197,23 @@ app.registerExtension({
             });
 
             domWidget.computeSize = (width) => [Math.max(width, 180), 20];
-            
+
             // Override node's computeSize to enforce compactness
             const originalComputeSize = this.computeSize;
-            this.computeSize = function(size) {
+            this.computeSize = function (size) {
                 const computed = originalComputeSize ? originalComputeSize.apply(this, arguments) : [200, 30];
-                return [computed[0], 44]; // Force very compact height
+                return [computed[0], 30]; // Force extremely compact height
             };
-            
+
+            this.onResize = function (size) {
+                const minSize = this.computeSize();
+                size[1] = minSize[1]; // Force height to be minimum
+            };
+
             updateInputs();
 
             const originalOnPropertyChanged = this.onPropertyChanged;
-            this.onPropertyChanged = function(name, value) {
+            this.onPropertyChanged = function (name, value) {
                 if (originalOnPropertyChanged) {
                     originalOnPropertyChanged.apply(this, arguments);
                 }
@@ -216,7 +222,7 @@ app.registerExtension({
             };
 
             const originalOnConnectionsChange = this.onConnectionsChange;
-            this.onConnectionsChange = function() {
+            this.onConnectionsChange = function () {
                 if (originalOnConnectionsChange) {
                     originalOnConnectionsChange.apply(this, arguments);
                 }
