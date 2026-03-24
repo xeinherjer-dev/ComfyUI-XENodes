@@ -262,10 +262,12 @@ app.registerExtension({
                 }
             });
 
-            domWidget.computeSize = (width) => [
-                width,
-                (container.children.length * BUTTON_HEIGHT) + 10
-            ];
+            // computeLayoutSizeを上書きしてgrowable扱いを防ぐ。
+            // minHeight=maxHeightにすることで固定サイズとなり、freeSpaceを消費しない。
+            domWidget.computeLayoutSize = () => {
+                const h = container.children.length * BUTTON_HEIGHT;
+                return { minHeight: h, maxHeight: h, minWidth: 0 };
+            };
 
             const originalComputeSize = this.computeSize;
             this.computeSize = function () {
@@ -279,7 +281,9 @@ app.registerExtension({
                 const HEADER_HEIGHT = 46;
 
                 if (this.properties?.hide_connections) {
-                    size[1] = buttonCount * BUTTON_HEIGHT + HEADER_HEIGHT + 10;
+                    // bodyHeight = startY(2) + buttons + bottom_padding(2)
+                    // _arrangeWidgetsのstartY = widgets_start_y(0) + 2 = 2
+                    size[1] = buttonCount * BUTTON_HEIGHT + 20;
                     size[0] = Math.max(120, maxLabelWidth + 40);
                     this.widgets_up = true;
                     this.widgets_start_y = 0;
