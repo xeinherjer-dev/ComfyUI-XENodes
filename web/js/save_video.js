@@ -23,7 +23,7 @@ app.registerExtension({
 				const CODEC_CRF_MAP = {
 					'h264': 23,
 					'h265': 28,
-					'av1': 45
+					'av1': 46
 				};
 
 				const updateCrf = () => {
@@ -56,7 +56,7 @@ app.registerExtension({
 						}
 						return origCodecCallback ? origCodecCallback.apply(this, arguments) : undefined;
 					};
-					
+
 					// Initial sync
 					updateCrf();
 				}
