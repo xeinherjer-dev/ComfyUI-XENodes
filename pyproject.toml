@@ -2,7 +2,7 @@
 name = "XENodes"
 version = "0.1.0"
 description = "Custom nodes for ComfyUI, featuring Multi-Switch and Slider nodes with enhanced UI."
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 dependencies = []
 
 [project.urls]
