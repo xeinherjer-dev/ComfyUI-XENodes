@@ -25,7 +25,7 @@ const setButtonActiveState = (button, isActive) => {
     button.style.color = isActive ? "white" : "#bbbbbb";
     button.style.border = isActive ? "1px solid #666666" : "1px solid #333";
     button.style.borderLeft = isActive ? "4px solid #4CAF50" : "1px solid #333";
-    button.style.fontWeight = isActive ? "900" : "bold";
+    button.style.fontWeight = "normal";
 };
 
 const createButton = (node, selectWidget, index, label) => {
@@ -39,7 +39,7 @@ const createButton = (node, selectWidget, index, label) => {
     button.style.borderRadius = "4px";
     button.style.padding = "8px 10px";
     button.style.fontSize = "12px";
-    button.style.fontWeight = "bold";
+    button.style.fontWeight = "normal";
     button.style.textAlign = "left";
     button.style.outline = "none";
     button.style.width = "100%";
@@ -174,7 +174,7 @@ app.registerExtension({
 
             const measureContext = document.createElement("canvas").getContext("2d");
             if (measureContext) {
-                measureContext.font = "bold 12px sans-serif";
+                measureContext.font = "12px sans-serif";
             }
 
             let maxLabelWidth = MIN_LABEL_WIDTH;
@@ -314,6 +314,33 @@ app.registerExtension({
                     : undefined;
                 rebuildButtons();
                 return response;
+            };
+
+            let lastTitlesFingerprint = "";
+            const originalOnDrawForeground = this.onDrawForeground;
+            this.onDrawForeground = function (ctx) {
+                const result = originalOnDrawForeground
+                    ? originalOnDrawForeground.apply(this, arguments)
+                    : undefined;
+
+                if (this.flags.collapsed) return result;
+
+                const inputSlots = getManagedInputs(this);
+                let currentFingerprint = "";
+                for (let i = 0; i < inputSlots.length; i++) {
+                    const inputSlot = inputSlots[i];
+                    if (inputSlot.link == null) continue;
+                    const link = app.graph?.links?.[inputSlot.link];
+                    const originNode = link ? app.graph.getNodeById(link.origin_id) : null;
+                    currentFingerprint += `${i}:${originNode?.title || originNode?.type || ""}|`;
+                }
+
+                if (currentFingerprint !== lastTitlesFingerprint) {
+                    lastTitlesFingerprint = currentFingerprint;
+                    rebuildButtons();
+                }
+
+                return result;
             };
 
             rebuildButtons();
