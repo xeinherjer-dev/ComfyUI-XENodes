@@ -298,9 +298,9 @@ app.registerExtension({
             const originalOnResize = this.onResize;
             this.onResize = function (size) {
                 originalOnResize?.apply(this, arguments);
-                const minSize = this.computeSize();
+                const minSize = this.computeSize ? this.computeSize() : [200, 100];
                 size[0] = Math.max(size[0], minSize[0]);
-                size[1] = Math.max(size[1], minSize[1]);
+                size[1] = minSize[1]; // Force height to be minimum
             };
 
             const originalSelectCallback = selectWidget.callback;

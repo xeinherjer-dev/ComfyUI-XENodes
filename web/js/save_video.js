@@ -61,6 +61,11 @@ app.registerExtension({
 					updateCrf();
 				}
 
+				this.onResize = function (size) {
+					const minSize = this.computeSize ? this.computeSize() : [200, 100];
+					size[1] = minSize[1]; // Force height to be minimum
+				};
+
 				return r;
 			};
 		}
