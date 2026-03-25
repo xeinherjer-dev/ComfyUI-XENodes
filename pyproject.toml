@@ -1,6 +1,6 @@
 [project]
 name = "xenodes"
-description = "eaturing Multi-Switch and Slider nodes with enhanced UI."
+description = "A collection of custom nodes for ComfyUI, featuring the versatile Multi-Switch, Slider, Slider 2D, Save Image, and Save Video nodes."
 version = "1.0.0"
 license = {file = "LICENSE"} 
 # classifiers = [
