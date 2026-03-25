@@ -29,7 +29,7 @@ Documentation = "https://github.com/xeinherjer-dev/ComfyUI-XENodes/wiki"
 "Bug Tracker" = "https://github.com/xeinherjer-dev/ComfyUI-XENodes/issues"
 
 [tool.comfy]
-PublisherId = "einherjer-dev"
+PublisherId = "xeinherjer-dev"
 DisplayName = "ComfyUI-XENodes"
 Icon = ""
 includes = [] 
