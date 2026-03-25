@@ -3,6 +3,10 @@ import { app } from "../../../scripts/app.js";
 const EXTENSION_NAME = "XENodes.Slider2D";
 const NODE_NAME = "XENodes.Slider2D";
 
+// Port area overhead: title area + 2 output slots + bottom margin
+const PORT_OVERHEAD = 80;
+const MIN_CANVAS_H = 50;
+
 app.registerExtension({
     name: EXTENSION_NAME,
     async beforeRegisterNodeDef(nodeType, nodeData) {
@@ -36,6 +40,13 @@ app.registerExtension({
                 y: (this.properties.valueY - this.properties.minY) / (this.properties.maxY - this.properties.minY)
             };
 
+            // Initial size: 240px wide, 312px tall (creates ~232px square canvas)
+            this.size = [240, 312];
+
+            // Disable resizing to avoid layout feedback loop with
+            // ComfyUI's _arrangeWidgets causing animation-like behavior on shrink.
+            this.resizable = false;
+
             const styleId = "xe-slider2d-style";
             if (!document.getElementById(styleId)) {
                 const styleEl = document.createElement("style");
@@ -46,9 +57,10 @@ app.registerExtension({
                         background: rgba(15, 20, 15, 0.9);
                         border: 1px solid rgba(255, 255, 255, 0.1);
                         border-radius: 4px;
-                        margin: -40px 40px 4px 4px; 
-                        width: auto;
-                        height: 140px; 
+                        margin: 0px 4px 8px 4px; 
+                        width: calc(100% - 8px); 
+                        height: 100%;
+                        box-sizing: border-box;
                         overflow: hidden;
                         display: flex;
                         flex-direction: column;
@@ -96,16 +108,20 @@ app.registerExtension({
 
                 if (this.outputs[0] && this.outputs[0].label !== valXText) {
                     this.outputs[0].label = valXText;
+                    this.outputs[0] = { ...this.outputs[0] };
                     changed = true;
                 }
                 if (this.outputs[1] && this.outputs[1].label !== valYText) {
                     this.outputs[1].label = valYText;
+                    this.outputs[1] = { ...this.outputs[1] };
                     changed = true;
                 }
 
-                if (changed && this.setDirtyCanvas) {
-                    // Force refresh port visual elements
-                    this.setDirtyCanvas(true, true);
+                if (changed) {
+                    this.outputs = [...this.outputs];
+                    if (this.setDirtyCanvas) {
+                        this.setDirtyCanvas(true, true);
+                    }
                 }
             };
 
@@ -216,33 +232,46 @@ app.registerExtension({
 
             let isDragging = false;
 
-            const handleMouseMove = (e) => {
+            const handlePointerMove = (e) => {
                 if (!isDragging) return;
+                e.preventDefault();
                 updateValuesFromPos(e.clientX, e.clientY, e.shiftKey);
             };
 
-            const handleMouseUp = () => {
+            const handlePointerUp = (e) => {
+                if (!isDragging) return;
                 isDragging = false;
-                window.removeEventListener("mousemove", handleMouseMove);
-                window.removeEventListener("mouseup", handleMouseUp);
+                cachedRect = null;
+                canvas.releasePointerCapture(e.pointerId);
+                canvas.removeEventListener("pointermove", handlePointerMove);
+                canvas.removeEventListener("pointerup", handlePointerUp);
             };
 
-            canvas.addEventListener("mousedown", (e) => {
+            canvas.addEventListener("pointerdown", (e) => {
+                if (e.button !== 0) return;
                 isDragging = true;
                 e.preventDefault();
                 e.stopPropagation();
+                canvas.setPointerCapture(e.pointerId);
                 updateRect();
                 updateValuesFromPos(e.clientX, e.clientY, e.shiftKey);
 
-                window.addEventListener("mousemove", handleMouseMove);
-                window.addEventListener("mouseup", handleMouseUp);
+                canvas.addEventListener("pointermove", handlePointerMove, { passive: false });
+                canvas.addEventListener("pointerup", handlePointerUp);
             });
 
             canvas.addEventListener("wheel", (e) => e.stopPropagation());
 
-            const domWidget = this.addDOMWidget("slider2d_ui", "SLIDER2D", container);
+            const domWidget = this.addDOMWidget("slider2d_ui", "SLIDER2D", container, {
+                getMinHeight: () => MIN_CANVAS_H,
+            });
             domWidget.draw = draw;
-            domWidget.computeSize = (width) => [width, 160];
+
+            // Use computeLayoutSize (growable) so the widget fills available space.
+            // minHeight provides the minimum canvas size.
+            domWidget.computeLayoutSize = () => {
+                return { minHeight: MIN_CANVAS_H, maxHeight: undefined, minWidth: 0 };
+            };
 
             const hideDataWidgets = () => {
                 if (!this.widgets) return;
@@ -252,7 +281,7 @@ app.registerExtension({
                         w.hidden = true;
                         w.options = w.options || {};
                         w.options.hidden = true;
-                        w.computeSize = () => [0, 0];
+                        w.computeSize = () => [0, -4];
                     }
                 }
             };
@@ -264,7 +293,6 @@ app.registerExtension({
                 hideDataWidgets();
                 updatePortLabels();
                 updateRect();
-                if (this.onResize) this.onResize(this.size);
                 draw();
             }, 50);
 
@@ -280,13 +308,17 @@ app.registerExtension({
             };
 
             this.onResize = function (size) {
-                if (container) {
-                    const targetH = Math.max(100, size[1] - 30);
-                    if (container.style.height !== targetH + "px") {
-                        container.style.height = targetH + "px";
-                    }
+                if (isDragging) {
+                    isDragging = false;
                 }
+
+                container.scrollTop = 0;
+                if (container.parentElement) {
+                    container.parentElement.scrollTop = 0;
+                }
+
                 requestAnimationFrame(() => {
+                    cachedRect = null;
                     updateRect();
                     draw();
                 });
@@ -295,8 +327,8 @@ app.registerExtension({
             const originalOnRemoved = this.onRemoved;
             this.onRemoved = function () {
                 if (originalOnRemoved) originalOnRemoved.apply(this, arguments);
-                window.removeEventListener("mousemove", handleMouseMove);
-                window.removeEventListener("mouseup", handleMouseUp);
+                canvas.removeEventListener("pointermove", handlePointerMove);
+                canvas.removeEventListener("pointerup", handlePointerUp);
             };
         };
     }
