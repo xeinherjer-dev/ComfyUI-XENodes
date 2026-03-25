@@ -15,7 +15,6 @@ app.registerExtension({
                 originalOnNodeCreated.apply(this, arguments);
             }
 
-            // Default properties
             this.properties = this.properties || {};
             this.properties.valueX = this.properties.valueX ?? 512;
             this.properties.valueY = this.properties.valueY ?? 512;
@@ -57,9 +56,9 @@ app.registerExtension({
                     }
                     .xe-slider2d-canvas {
                         width: 100%;
-                        height: 100%; /* ← 追加: 親のサイズに厳密に従わせる */
-                        min-height: 0; /* ← 追加: Flexbox内での無限拡張を防ぐ */
-                        display: block; /* ← 追加: 余計な隙間を消す */
+                        height: 100%;
+                        min-height: 0;
+                        display: block; 
                         cursor: crosshair;
                         touch-action: none;
                     }
@@ -88,6 +87,28 @@ app.registerExtension({
                 cachedRect = canvas.getBoundingClientRect();
             };
 
+            const updatePortLabels = () => {
+                if (!this.outputs) return;
+
+                const valXText = this.properties.valueX.toFixed(this.properties.decimalsX);
+                const valYText = this.properties.valueY.toFixed(this.properties.decimalsY);
+                let changed = false;
+
+                if (this.outputs[0] && this.outputs[0].label !== valXText) {
+                    this.outputs[0].label = valXText;
+                    changed = true;
+                }
+                if (this.outputs[1] && this.outputs[1].label !== valYText) {
+                    this.outputs[1].label = valYText;
+                    changed = true;
+                }
+
+                if (changed && this.setDirtyCanvas) {
+                    // Force refresh port visual elements
+                    this.setDirtyCanvas(true, true);
+                }
+            };
+
             const draw = () => {
                 const targetW = canvas.clientWidth;
                 const targetH = canvas.clientHeight;
@@ -109,7 +130,6 @@ app.registerExtension({
 
                 ctx.clearRect(0, 0, w, h);
 
-                // Grid Dots
                 if (this.properties.dots) {
                     ctx.fillStyle = COLORS.dots;
                     const stX = (dw * this.properties.stepX / (this.properties.maxX - this.properties.minX));
@@ -125,7 +145,6 @@ app.registerExtension({
                     }
                 }
 
-                // Handle and Frame
                 const hX = shift + dw * this.intpos.x;
                 const hY = shift + dh * (1 - this.intpos.y);
 
@@ -148,16 +167,6 @@ app.registerExtension({
                 ctx.beginPath();
                 ctx.arc(hX, hY, 5, 0, 2 * Math.PI);
                 ctx.stroke();
-
-                // Update port labels
-                const valXText = this.properties.valueX.toFixed(this.properties.decimalsX);
-                const valYText = this.properties.valueY.toFixed(this.properties.decimalsY);
-                if (this.outputs) {
-                    if (this.outputs[0]) this.outputs[0].label = valXText;
-                    if (this.outputs[1]) this.outputs[1].label = valYText;
-                }
-
-                // ここにあった this.setDirtyCanvas は無限ループの原因になるため削除しました
             };
 
             const updateValuesFromPos = (clientX, clientY, shiftKey = false) => {
@@ -200,8 +209,8 @@ app.registerExtension({
                     }
                 }
 
+                updatePortLabels();
                 draw();
-                // 値が更新された時だけ LiteGraph に再描画を通知する
                 if (this.setDirtyCanvas) this.setDirtyCanvas(true, false);
             };
 
@@ -235,29 +244,28 @@ app.registerExtension({
             domWidget.draw = draw;
             domWidget.computeSize = (width) => [width, 160];
 
-            setTimeout(() => {
-                const hideWidgets = () => {
-                    if (this.widgets) {
-                        for (const w of this.widgets) {
-                            if (w.name !== "slider2d_ui") {
-                                w.type = "hidden";
-                                w.hidden = true;
-                                w.computeSize = () => [0, -4];
-                            }
-                        }
-                    }
-                };
-
-                if (this.widgets) {
-                    const idx = this.widgets.indexOf(domWidget);
-                    if (idx > 0) {
-                        this.widgets.splice(idx, 1);
-                        this.widgets.unshift(domWidget);
+            const hideDataWidgets = () => {
+                if (!this.widgets) return;
+                for (const w of this.widgets) {
+                    if (w.name !== "slider2d_ui") {
+                        w.type = "hidden";
+                        w.hidden = true;
+                        w.options = w.options || {};
+                        w.options.hidden = true;
+                        w.computeSize = () => [0, 0];
                     }
                 }
-                hideWidgets();
+            };
+
+            hideDataWidgets();
+            updatePortLabels();
+
+            setTimeout(() => {
+                hideDataWidgets();
+                updatePortLabels();
                 updateRect();
                 if (this.onResize) this.onResize(this.size);
+                draw();
             }, 50);
 
             const originalOnPropertyChanged = this.onPropertyChanged;
@@ -265,11 +273,12 @@ app.registerExtension({
                 if (originalOnPropertyChanged) originalOnPropertyChanged.apply(this, arguments);
                 this.intpos.x = (this.properties.valueX - this.properties.minX) / (this.properties.maxX - this.properties.minX);
                 this.intpos.y = (this.properties.valueY - this.properties.minY) / (this.properties.maxY - this.properties.minY);
+
+                updatePortLabels();
                 draw();
                 if (this.setDirtyCanvas) this.setDirtyCanvas(true, false);
             };
 
-            // Resize observer
             this.onResize = function (size) {
                 if (container) {
                     const targetH = Math.max(100, size[1] - 30);
