@@ -1,6 +1,6 @@
 # ComfyUI-XENodes
 
-A collection of custom nodes for ComfyUI, featuring the versatile Multi-Switch node, among other features.
+A collection of custom nodes for ComfyUI, featuring the versatile Multi-Switch, Slider, Slider 2D, Save Image, and Save Video nodes.
 
 ## Features
 
@@ -35,6 +35,10 @@ A general-purpose switch node that selects one input from many and routes it to 
 A versatile slider node that outputs a numerical value, compatible with both INT and FLOAT inputs.
 
 - **Automatic Casting**: Automatically returns `int` for whole numbers and `float` for fractional ones, ensuring compatibility across all node types.
+
+### Slider 2D
+
+A 2D slider node that allows precise value selection on a coordinate plane, outputting both X and Y values.
 
 ### Save Image
 
