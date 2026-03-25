@@ -22,12 +22,8 @@ class Slider2DNode(io.ComfyNode):
             display_name="Slider 2D",
             category="XENodes",
             inputs=[
-                io.Int.Input("Xi", default=512, min=-4294967296, max=4294967296),
-                io.Float.Input("Xf", default=512.0, min=-4294967296.0, max=4294967296.0),
-                io.Int.Input("Yi", default=512, min=-4294967296, max=4294967296),
-                io.Float.Input("Yf", default=512.0, min=-4294967296.0, max=4294967296.0),
-                io.Int.Input("isfloatX", default=0, min=0, max=1),
-                io.Int.Input("isfloatY", default=0, min=0, max=1),
+                io.Float.Input("X", default=512.0, min=-4294967296.0, max=4294967296.0),
+                io.Float.Input("Y", default=512.0, min=-4294967296.0, max=4294967296.0),
             ],
             outputs=[
                 _NumberOutput(display_name="X"),
@@ -36,17 +32,9 @@ class Slider2DNode(io.ComfyNode):
         )
 
     @classmethod
-    def execute(
-        cls,
-        Xi: int,
-        Xf: float,
-        Yi: int,
-        Yf: float,
-        isfloatX: int,
-        isfloatY: int,
-    ) -> io.NodeOutput:
-        out_x = Xf if isfloatX > 0 else Xi
-        out_y = Yf if isfloatY > 0 else Yi
+    def execute(cls, X: float, Y: float) -> io.NodeOutput:
+        out_x = int(X) if X.is_integer() else X
+        out_y = int(Y) if Y.is_integer() else Y
         return io.NodeOutput(out_x, out_y)
 
 

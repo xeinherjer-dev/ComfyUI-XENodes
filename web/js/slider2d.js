@@ -34,18 +34,26 @@ app.registerExtension({
             this.properties.dots = this.properties.dots ?? true;
             this.properties.frame = this.properties.frame ?? true;
             this.properties.frameAlert = this.properties.frameAlert ?? 0;
+            this.properties.debug = this.properties.debug ?? false;
+
+            const debugLog = (...args) => {
+                if (this.properties.debug) {
+                    console.log("[Slider2D]", ...args);
+                }
+            };
 
             this.intpos = {
                 x: (this.properties.valueX - this.properties.minX) / (this.properties.maxX - this.properties.minX),
                 y: (this.properties.valueY - this.properties.minY) / (this.properties.maxY - this.properties.minY)
             };
 
-            // Initial size: 240px wide, 312px tall (creates ~232px square canvas)
+            this.overhead = 0;
+
+            // Initial size: 240px wide. Height will be adjusted to make canvas square.
             this.size = [240, 312];
 
-            // Disable resizing to avoid layout feedback loop with
-            // ComfyUI's _arrangeWidgets causing animation-like behavior on shrink.
-            this.resizable = false;
+            // Enable resizing
+            this.resizable = true;
 
             const styleId = "xe-slider2d-style";
             if (!document.getElementById(styleId)) {
@@ -59,7 +67,9 @@ app.registerExtension({
                         border-radius: 4px;
                         margin: 0px 4px 8px 4px; 
                         width: calc(100% - 8px); 
-                        height: 100%;
+                        height: auto;
+                        aspect-ratio: 1 / 1;
+                        align-self: flex-start;
                         box-sizing: border-box;
                         overflow: hidden;
                         display: flex;
@@ -99,6 +109,15 @@ app.registerExtension({
                 cachedRect = canvas.getBoundingClientRect();
             };
 
+            const syncWidgets = () => {
+                if (this.widgets) {
+                    for (const w of this.widgets) {
+                        if (w.name === "X") w.value = this.properties.valueX;
+                        if (w.name === "Y") w.value = this.properties.valueY;
+                    }
+                }
+            };
+
             const updatePortLabels = () => {
                 if (!this.outputs) return;
 
@@ -123,6 +142,8 @@ app.registerExtension({
                         this.setDirtyCanvas(true, true);
                     }
                 }
+
+                syncWidgets();
             };
 
             const draw = () => {
@@ -216,15 +237,6 @@ app.registerExtension({
                 this.properties.valueX = Math.round(this.properties.valueX * pX) / pX;
                 this.properties.valueY = Math.round(this.properties.valueY * pY) / pY;
 
-                if (this.widgets) {
-                    for (const w of this.widgets) {
-                        if (w.name === "Xi") w.value = Math.floor(this.properties.valueX);
-                        if (w.name === "Xf") w.value = this.properties.valueX;
-                        if (w.name === "Yi") w.value = Math.floor(this.properties.valueY);
-                        if (w.name === "Yf") w.value = this.properties.valueY;
-                    }
-                }
-
                 updatePortLabels();
                 draw();
                 if (this.setDirtyCanvas) this.setDirtyCanvas(true, false);
@@ -267,10 +279,13 @@ app.registerExtension({
             });
             domWidget.draw = draw;
 
-            // Use computeLayoutSize (growable) so the widget fills available space.
-            // minHeight provides the minimum canvas size.
+            // Use computeLayoutSize with minHeight === maxHeight to anchor widget height.
+            // Height matches width to maintain square canvas.
             domWidget.computeLayoutSize = () => {
-                return { minHeight: MIN_CANVAS_H, maxHeight: undefined, minWidth: 0 };
+                const canvasW = this.size?.[0] ?? 240;
+                const innerW = canvasW - 8;
+                const h = Math.max(innerW, MIN_CANVAS_H);
+                return { minHeight: h, maxHeight: h, minWidth: 0 };
             };
 
             const hideDataWidgets = () => {
@@ -289,12 +304,40 @@ app.registerExtension({
             hideDataWidgets();
             updatePortLabels();
 
-            setTimeout(() => {
+            const isDefaultSize = this.size[0] === 240 && this.size[1] === 312;
+
+            // Adjust initial size to square once DOM layout is complete.
+            // Use rAF x2 to wait for at least one layout pass.
+            let _initFrames = 0;
+            const _initAdjust = () => {
+                if (_initFrames++ < 2) {
+                    requestAnimationFrame(_initAdjust);
+                    return;
+                }
                 hideDataWidgets();
                 updatePortLabels();
                 updateRect();
+
+                if (isDefaultSize) {
+                    const cw = canvas.clientWidth;
+                    const ch = canvas.clientHeight;
+                    if (cw > 0 && ch > 0) {
+                        const diff = cw - ch;
+                        if (Math.abs(diff) > 1) {
+                            this.size[1] += (diff + 12);
+                        }
+                    }
+                }
+
+                const cw = canvas.clientWidth;
+                if (cw > 0) {
+                    this.overhead = this.size[1] - (this.size[0] - 8) + 12;
+                }
+
+                updateRect();
                 draw();
-            }, 50);
+            };
+            requestAnimationFrame(_initAdjust);
 
             const originalOnPropertyChanged = this.onPropertyChanged;
             this.onPropertyChanged = function (name, value) {
@@ -308,14 +351,38 @@ app.registerExtension({
             };
 
             this.onResize = function (size) {
-                if (isDragging) {
-                    isDragging = false;
+                if (isDragging) isDragging = false;
+
+                const lastW = this._lastSize?.[0];
+                const lastH = this._lastSize?.[1];
+                const dw = lastW != null ? Math.abs(size[0] - lastW) : 0;
+                const dh = lastH != null ? Math.abs(size[1] - lastH) : 0;
+
+                // Guard vertical resize: block if dragging primarily vertically
+                if (dh > dw * 1.5 && dw < 5 && lastW != null) {
+                    size[0] = lastW;
+                    size[1] = lastH;
+                } else {
+                    // Update height to stay square based on width
+                    if (this.overhead > 0) {
+                        size[1] = size[0] - 8 + this.overhead;
+                    }
+                }
+
+                this._lastSize = [size[0], size[1]];
+
+                // Force DOM height to match canvas square to prevent rendering stretch
+                if (container) {
+                    const h = size[0] - 8;
+                    container.style.height = h + "px";
+                    container.style.minHeight = h + "px";
+                    container.style.maxHeight = h + "px";
                 }
 
                 container.scrollTop = 0;
-                if (container.parentElement) {
-                    container.parentElement.scrollTop = 0;
-                }
+                if (container.parentElement) container.parentElement.scrollTop = 0;
+
+                debugLog("onResize result:", size[0], size[1]);
 
                 requestAnimationFrame(() => {
                     cachedRect = null;
