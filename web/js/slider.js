@@ -103,6 +103,30 @@ app.registerExtension({
             container.appendChild(sliderInput);
             container.appendChild(numberInput);
 
+            const normalizeValue = (value) => {
+                let normalized = parseFloat(value);
+                if (Number.isNaN(normalized)) {
+                    normalized = parseFloat(this.properties.min);
+                }
+                if (Number.isNaN(normalized)) {
+                    normalized = 0;
+                }
+                return normalized;
+            };
+
+            const getDataWidgets = () => (this.widgets || []).filter(
+                (widget) => (widget.name === "value" || widget.name === "Xi") && widget.type !== "SLIDER"
+            );
+
+            const syncDataWidgets = (value, invokeCallback = false) => {
+                for (const widget of getDataWidgets()) {
+                    widget.value = value;
+                    if (invokeCallback && typeof widget.callback === "function") {
+                        widget.callback(value, app.canvas, this, [value]);
+                    }
+                }
+            };
+
             const updateInputs = () => {
                 sliderInput.min = this.properties.min;
                 sliderInput.max = this.properties.max;
@@ -113,8 +137,8 @@ app.registerExtension({
                 numberInput.step = this.properties.step;
 
                 // Sync value
-                let valToSet = parseFloat(this.properties.value);
-                if (isNaN(valToSet)) valToSet = parseFloat(this.properties.min) || 0;
+                const valToSet = normalizeValue(this.properties.value);
+                this.properties.value = valToSet;
 
                 sliderInput.value = valToSet;
                 numberInput.value = valToSet;
@@ -126,31 +150,17 @@ app.registerExtension({
                 container.style.opacity = isConnected ? "0.5" : "1.0";
                 sliderInput.style.cursor = isConnected ? "default" : "pointer";
 
-                // Sync internal backend widget
-                if (this.widgets) {
-                    for (let i = 0; i < this.widgets.length; i++) {
-                        const w = this.widgets[i];
-                        if ((w.name === "value" || w.name === "Xi") && w.type !== "SLIDER") {
-                            w.value = valToSet;
-                            // Ensure the framework catches the update
-                            if (w.callback && typeof w.callback === "function") {
-                                // sometimes calling callback causes loops if it isn't protected,
-                                // but the ComfyUI API generally doesn't loop from setWidgetValue
-                                w.callback(valToSet, app.canvas, this, [valToSet]);
-                            }
-                        }
-                    }
-                }
+                syncDataWidgets(valToSet);
             };
 
             const onValueChange = (val) => {
-                let numVal = parseFloat(val);
-                if (isNaN(numVal)) numVal = parseFloat(this.properties.min) || 0;
+                const numVal = normalizeValue(val);
 
                 const finalVal = numVal;
                 if (this.properties.value === finalVal) return; // Prevent infinite loops
 
                 this.properties.value = finalVal;
+                syncDataWidgets(finalVal, true);
                 updateInputs();
                 app.canvas?.setDirty(true, true);
                 if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
@@ -192,7 +202,7 @@ app.registerExtension({
             }, 10);
 
             const domWidget = this.addDOMWidget("slider_ui", "SLIDER", container, {
-                getValue() { return this.properties?.value || 0; },
+                getValue: () => normalizeValue(this.properties?.value),
                 setValue(v) { onValueChange(v); }
             });
 
@@ -210,6 +220,7 @@ app.registerExtension({
                 size[1] = minSize[1]; // Force height to be minimum
             };
 
+            this.serialize_widgets = true;
             updateInputs();
 
             const originalOnPropertyChanged = this.onPropertyChanged;
@@ -219,6 +230,41 @@ app.registerExtension({
                 }
                 updateInputs();
                 app.canvas?.setDirty(true, true);
+            };
+
+            const originalOnConfigure = this.onConfigure;
+            this.onConfigure = function (info) {
+                originalOnConfigure?.apply(this, arguments);
+
+                const configuredValue = info?.properties?.value
+                    ?? info?.widgets_values?.find((value) => typeof value === "number");
+
+                if (configuredValue !== undefined) {
+                    this.properties.value = normalizeValue(configuredValue);
+                }
+
+                updateInputs();
+                requestAnimationFrame(() => updateInputs());
+            };
+
+            const originalOnSerialize = this.onSerialize;
+            this.onSerialize = function (info) {
+                originalOnSerialize?.apply(this, arguments);
+
+                const value = normalizeValue(this.properties?.value);
+                this.properties.value = value;
+
+                info.properties = info.properties || {};
+                info.properties.value = value;
+
+                if (Array.isArray(info.widgets_values) && this.widgets?.length) {
+                    for (let i = 0; i < this.widgets.length; i++) {
+                        const widget = this.widgets[i];
+                        if (widget.name === "value" || widget.name === "Xi" || widget.name === "slider_ui") {
+                            info.widgets_values[i] = value;
+                        }
+                    }
+                }
             };
 
             const originalOnConnectionsChange = this.onConnectionsChange;
