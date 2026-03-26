@@ -114,6 +114,22 @@ app.registerExtension({
                 return normalized;
             };
 
+            const hideDataWidgets = () => {
+                if (!this.widgets) return;
+                for (const w of this.widgets) {
+                    if (w.name !== "slider_ui") {
+                        w.type = "hidden";
+                        w.hidden = true;
+                        w.options = w.options || {};
+                        w.options.hidden = true;
+                        // Do not clear w.name here! It breaks backend serialization.
+                        if (w.computeSize) {
+                            w.computeSize = () => [0, -4];
+                        }
+                    }
+                }
+            };
+
             const getDataWidgets = () => (this.widgets || []).filter(
                 (widget) => (widget.name === "value" || widget.name === "Xi") && widget.type !== "SLIDER"
             );
@@ -151,6 +167,7 @@ app.registerExtension({
                 sliderInput.style.cursor = isConnected ? "default" : "pointer";
 
                 syncDataWidgets(valToSet);
+                hideDataWidgets();
             };
 
             const onValueChange = (val) => {
@@ -177,29 +194,27 @@ app.registerExtension({
             numberInput.addEventListener("wheel", stopPropagation);
 
             // Hide "value" text from the output port and hide default widget
-            setTimeout(() => {
-                if (this.widgets) {
-                    for (const w of this.widgets) {
-                        if ((w.name === "value" || w.name === "Xi") && w.type !== "SLIDER") {
-                            w.type = "hidden";
-                            w.hidden = true;
-                            // Do not clear w.name here! It breaks backend serialization.
-                            if (w.computeSize) {
-                                w.computeSize = () => [0, -4];
-                            }
-                        }
-                    }
+            let _initFrames = 0;
+            const _initAdjust = () => {
+                if (_initFrames++ < 20) {
+                    requestAnimationFrame(_initAdjust);
                 }
+
+                hideDataWidgets();
+
                 if (this.outputs && this.outputs.length > 0) {
                     this.outputs[0].label = "";
                     this.outputs[0].name = " ";
+                    this.outputs = [...this.outputs];
                 }
+
                 if (this.computeSize && this.setSize) {
                     const newSize = this.computeSize([this.size[0], this.size[1]]);
                     this.setSize([newSize[0], Math.max(newSize[1], 30)]);
                 }
                 app.canvas?.setDirty(true, true);
-            }, 10);
+            };
+            requestAnimationFrame(_initAdjust);
 
             const domWidget = this.addDOMWidget("slider_ui", "SLIDER", container, {
                 getValue: () => normalizeValue(this.properties?.value),
