@@ -29,7 +29,7 @@ app.registerExtension({
 
 					if (format === "png") {
 						losslessWidget.hidden = true;
-						qualityWidget.label = "Compression (0-9)";
+						qualityWidget.label = "compression";
 						if (qualityWidget.options) {
 							qualityWidget.options.min = 0;
 							qualityWidget.options.max = 9;
@@ -41,7 +41,7 @@ app.registerExtension({
 						}
 					} else {
 						losslessWidget.hidden = false;
-						qualityWidget.label = "Quality (0-100)";
+						qualityWidget.label = "quality";
 						if (qualityWidget.options) {
 							qualityWidget.options.min = 0;
 							qualityWidget.options.max = 100;
