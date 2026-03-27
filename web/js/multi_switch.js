@@ -141,26 +141,27 @@ app.registerExtension({
                     styleEl.innerHTML = "";
                 }
 
-                // Handle widget visibility by extracting/restoring from the widgets array
+                // Handle widget visibility (Using type mutation + Vue Reactivity Hack)
                 if (this.widgets) {
-                    this._hiddenWidgets = this._hiddenWidgets || {};
+                    const index = this.widgets.findIndex(w => w.name === "select");
+                    if (index !== -1) {
+                        const w = this.widgets[index];
+                        
+                        // Backup original type
+                        if (w.type !== "hidden") {
+                            w._original_type = w.type;
+                        }
 
-                    if (isHidden) {
-                        // Extract the 'select' widget and store its original index
-                        const index = this.widgets.findIndex(w => w.name === "select");
-                        if (index !== -1) {
-                            this._hiddenWidgets["select"] = {
-                                widget: this.widgets.splice(index, 1)[0],
-                                index: index
-                            };
-                        }
-                    } else {
-                        // Restore the 'select' widget to its original position
-                        if (this._hiddenWidgets["select"]) {
-                            const hiddenData = this._hiddenWidgets["select"];
-                            this.widgets.splice(hiddenData.index, 0, hiddenData.widget);
-                            delete this._hiddenWidgets["select"];
-                        }
+                        // Update properties
+                        w.hidden = isHidden;
+                        w.type = isHidden ? "hidden" : (w._original_type || "number");
+                        w.options = w.options || {};
+                        w.options.hidden = isHidden;
+
+                        // IMPORTANT: Force Vue.js to re-render the widget UI immediately
+                        // Force Vue reactivity by removing and immediately re-inserting the widget at the same index
+                        this.widgets.splice(index, 1);
+                        this.widgets.splice(index, 0, w);
                     }
                 }
 
