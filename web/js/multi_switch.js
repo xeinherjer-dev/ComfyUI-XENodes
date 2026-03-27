@@ -115,6 +115,7 @@ app.registerExtension({
             this.applyHideConnections = () => {
                 const isHidden = this.properties.hide_connections === true;
 
+                // Manage dynamic CSS for hiding slot connections
                 const styleId = `multi-switch-style-${this.id}`;
                 let styleEl = document.getElementById(styleId);
                 if (!styleEl) {
@@ -140,24 +141,45 @@ app.registerExtension({
                     styleEl.innerHTML = "";
                 }
 
+                // Handle widget visibility by extracting/restoring from the widgets array
                 if (this.widgets) {
-                    for (let i = 0; i < this.widgets.length; i++) {
-                        if (this.widgets[i].name === "select") {
-                            this.widgets[i].hidden = isHidden;
+                    this._hiddenWidgets = this._hiddenWidgets || {};
+
+                    if (isHidden) {
+                        // Extract the 'select' widget and store its original index
+                        const index = this.widgets.findIndex(w => w.name === "select");
+                        if (index !== -1) {
+                            this._hiddenWidgets["select"] = {
+                                widget: this.widgets.splice(index, 1)[0],
+                                index: index
+                            };
+                        }
+                    } else {
+                        // Restore the 'select' widget to its original position
+                        if (this._hiddenWidgets["select"]) {
+                            const hiddenData = this._hiddenWidgets["select"];
+                            this.widgets.splice(hiddenData.index, 0, hiddenData.widget);
+                            delete this._hiddenWidgets["select"];
                         }
                     }
                 }
 
+                // Notify listeners of structural changes
                 if (this.change) {
-                    this.change(); // Notify listeners of structural changes
+                    this.change();
                 }
 
+                // Recalculate and update node size to prevent UI collapse
                 if (this.computeSize && this.setSize) {
                     const newSize = this.computeSize([this.size[0], this.size[1]]);
                     this.setSize([newSize[0], newSize[1]]);
                 }
-            };
 
+                // Force canvas redraw
+                if (app && app.graph) {
+                    app.graph.setDirtyCanvas(true, true);
+                }
+            };
 
             const container = document.createElement("div");
             container.className = "multi-switch-container";
@@ -262,8 +284,6 @@ app.registerExtension({
                 }
             });
 
-            // computeLayoutSizeを上書きしてgrowable扱いを防ぐ。
-            // minHeight=maxHeightにすることで固定サイズとなり、freeSpaceを消費しない。
             domWidget.computeLayoutSize = () => {
                 const h = container.children.length * BUTTON_HEIGHT;
                 return { minHeight: h, maxHeight: h, minWidth: 0 };
