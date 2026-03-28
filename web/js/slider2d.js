@@ -271,17 +271,27 @@ app.registerExtension({
             const updateOutputTypes = () => {
                 if (!this.outputs) return;
 
-                const axisX = getAxisState("X");
-                const axisY = getAxisState("Y");
-                const typeX = Number.isInteger(axisX.step) && axisX.step >= 1 ? "INT" : "FLOAT";
-                const typeY = Number.isInteger(axisY.step) && axisY.step >= 1 ? "INT" : "FLOAT";
+                const updateTypeForSlot = (slotIndex) => {
+                    const links = this.outputs[slotIndex]?.links;
+                    let newType = "*";
+                    if (links && links.length > 0) {
+                        const link = app.graph.links[links[0]];
+                        if (link) {
+                            const targetNode = app.graph.getNodeById(link.target_id);
+                            const targetInput = targetNode?.inputs?.[link.target_slot];
+                            const targetType = String(targetInput?.type).toUpperCase();
+                            if (targetType === "INT" || targetType === "FLOAT" || targetType === "NUMBER") {
+                                newType = targetType;
+                            }
+                        }
+                    }
+                    if (this.outputs[slotIndex] && this.outputs[slotIndex].type !== newType) {
+                        this.outputs[slotIndex].type = newType;
+                    }
+                };
 
-                if (this.outputs[0] && this.outputs[0].type !== typeX) {
-                    this.outputs[0].type = typeX;
-                }
-                if (this.outputs[1] && this.outputs[1].type !== typeY) {
-                    this.outputs[1].type = typeY;
-                }
+                updateTypeForSlot(0); // X
+                updateTypeForSlot(1); // Y
             };
 
             const applyModeStyles = () => {
@@ -584,6 +594,17 @@ app.registerExtension({
                 updatePortLabels();
                 updateOutputTypes();
                 requestDraw();
+            };
+
+            const originalOnConnectionsChange = this.onConnectionsChange;
+            this.onConnectionsChange = function () {
+                if (originalOnConnectionsChange) {
+                    originalOnConnectionsChange.apply(this, arguments);
+                }
+
+                syncIntposFromProperties();
+                updatePortLabels();
+                updateOutputTypes();
             };
         };
     },

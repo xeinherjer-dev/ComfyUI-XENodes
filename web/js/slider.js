@@ -171,9 +171,21 @@ app.registerExtension({
             };
 
             const updateOutputType = () => {
-                const step = parseFloat(this.properties.step);
-                const isInt = Number.isInteger(step) && step >= 1;
-                const newType = isInt ? "INT" : "FLOAT";
+                const links = this.outputs?.[0]?.links;
+                let newType = "*";
+
+                if (links && links.length > 0) {
+                    const link = app.graph.links[links[0]];
+                    if (link) {
+                        const targetNode = app.graph.getNodeById(link.target_id);
+                        const targetInput = targetNode?.inputs?.[link.target_slot];
+                        const targetType = String(targetInput?.type).toUpperCase();
+                        if (targetType === "INT" || targetType === "FLOAT" || targetType === "NUMBER") {
+                            newType = targetType;
+                        }
+                    }
+                }
+
                 if (this.outputs && this.outputs.length > 0) {
                     if (this.outputs[0].type !== newType) {
                         this.outputs[0].type = newType;
@@ -321,7 +333,9 @@ app.registerExtension({
                 if (originalOnConnectionsChange) {
                     originalOnConnectionsChange.apply(this, arguments);
                 }
+
                 updateInputs();
+                updateOutputType();
             };
         };
     }
