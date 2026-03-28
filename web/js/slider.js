@@ -170,6 +170,18 @@ app.registerExtension({
                 hideDataWidgets();
             };
 
+            const updateOutputType = () => {
+                const step = parseFloat(this.properties.step);
+                const isInt = Number.isInteger(step) && step >= 1;
+                const newType = isInt ? "INT" : "FLOAT";
+                if (this.outputs && this.outputs.length > 0) {
+                    if (this.outputs[0].type !== newType) {
+                        this.outputs[0].type = newType;
+                        this.outputs[0].name = " "; // Maintain empty name but updated type
+                    }
+                }
+            };
+
             const onValueChange = (val) => {
                 const numVal = normalizeValue(val);
 
@@ -179,6 +191,7 @@ app.registerExtension({
                 this.properties.value = finalVal;
                 syncDataWidgets(finalVal, true);
                 updateInputs();
+                updateOutputType();
                 app.canvas?.setDirty(true, true);
                 if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
             };
@@ -212,6 +225,7 @@ app.registerExtension({
                     const newSize = this.computeSize([this.size[0], this.size[1]]);
                     this.setSize([newSize[0], Math.max(newSize[1], 30)]);
                 }
+                updateOutputType();
                 app.canvas?.setDirty(true, true);
             };
             requestAnimationFrame(_initAdjust);
@@ -244,6 +258,7 @@ app.registerExtension({
                     originalOnPropertyChanged.apply(this, arguments);
                 }
                 updateInputs();
+                updateOutputType();
                 app.canvas?.setDirty(true, true);
             };
 
@@ -259,7 +274,11 @@ app.registerExtension({
                 }
 
                 updateInputs();
-                requestAnimationFrame(() => updateInputs());
+                updateOutputType();
+                requestAnimationFrame(() => {
+                    updateInputs();
+                    updateOutputType();
+                });
             };
 
             const originalOnSerialize = this.onSerialize;

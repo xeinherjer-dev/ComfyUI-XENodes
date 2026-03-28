@@ -28,13 +28,15 @@ app.registerExtension({
             this.properties.maxY = this.properties.maxY ?? 1024;
             this.properties.stepX = this.properties.stepX ?? 1;
             this.properties.stepY = this.properties.stepY ?? 1;
-            this.properties.decimalsX = this.properties.decimalsX ?? 0;
-            this.properties.decimalsY = this.properties.decimalsY ?? 0;
             this.properties.snap = this.properties.snap ?? true;
             this.properties.dots = this.properties.dots ?? true;
             this.properties.frame = this.properties.frame ?? true;
             this.properties.frameAlert = this.properties.frameAlert ?? 0;
             this.properties.debug = this.properties.debug ?? false;
+            
+            // Explicitly remove legacy properties to hide them from the properties menu
+            if ("decimalsX" in this.properties) delete this.properties.decimalsX;
+            if ("decimalsY" in this.properties) delete this.properties.decimalsY;
 
             const debugLog = (...args) => {
                 if (this.properties.debug) {
@@ -118,11 +120,19 @@ app.registerExtension({
                 }
             };
 
+            const getDecimals = (step) => {
+                const s = String(step);
+                if (s.indexOf(".") === -1) return 0;
+                return s.split(".")[1].length;
+            };
+
             const updatePortLabels = () => {
                 if (!this.outputs) return;
 
-                const valXText = this.properties.valueX.toFixed(this.properties.decimalsX);
-                const valYText = this.properties.valueY.toFixed(this.properties.decimalsY);
+                const decX = getDecimals(this.properties.stepX);
+                const decY = getDecimals(this.properties.stepY);
+                const valXText = this.properties.valueX.toFixed(decX);
+                const valYText = this.properties.valueY.toFixed(decY);
                 let changed = false;
 
                 if (this.outputs[0] && this.outputs[0].label !== valXText) {
@@ -144,6 +154,24 @@ app.registerExtension({
                 }
 
                 syncWidgets();
+            };
+
+            const updateOutputTypes = () => {
+                if (!this.outputs) return;
+
+                const stepX = parseFloat(this.properties.stepX);
+                const isIntX = Number.isInteger(stepX) && stepX >= 1;
+                const typeX = isIntX ? "INT" : "FLOAT";
+                if (this.outputs[0] && this.outputs[0].type !== typeX) {
+                    this.outputs[0].type = typeX;
+                }
+
+                const stepY = parseFloat(this.properties.stepY);
+                const isIntY = Number.isInteger(stepY) && stepY >= 1;
+                const typeY = isIntY ? "INT" : "FLOAT";
+                if (this.outputs[1] && this.outputs[1].type !== typeY) {
+                    this.outputs[1].type = typeY;
+                }
             };
 
             const draw = () => {
@@ -232,8 +260,10 @@ app.registerExtension({
                 this.properties.valueX = this.properties.minX + (this.properties.maxX - this.properties.minX) * nx;
                 this.properties.valueY = this.properties.minY + (this.properties.maxY - this.properties.minY) * ny;
 
-                const pX = Math.pow(10, this.properties.decimalsX);
-                const pY = Math.pow(10, this.properties.decimalsY);
+                const decX = getDecimals(this.properties.stepX);
+                const decY = getDecimals(this.properties.stepY);
+                const pX = Math.pow(10, decX);
+                const pY = Math.pow(10, decY);
                 this.properties.valueX = Math.round(this.properties.valueX * pX) / pX;
                 this.properties.valueY = Math.round(this.properties.valueY * pY) / pY;
 
@@ -317,6 +347,7 @@ app.registerExtension({
                 hideDataWidgets();
                 updatePortLabels();
                 updateRect();
+                updateOutputTypes();
 
                 if (isDefaultSize) {
                     const cw = canvas.clientWidth;
@@ -346,6 +377,7 @@ app.registerExtension({
                 this.intpos.y = (this.properties.valueY - this.properties.minY) / (this.properties.maxY - this.properties.minY);
 
                 updatePortLabels();
+                updateOutputTypes();
                 draw();
                 if (this.setDirtyCanvas) this.setDirtyCanvas(true, false);
             };
@@ -396,6 +428,21 @@ app.registerExtension({
                 if (originalOnRemoved) originalOnRemoved.apply(this, arguments);
                 canvas.removeEventListener("pointermove", handlePointerMove);
                 canvas.removeEventListener("pointerup", handlePointerUp);
+            };
+
+            const originalOnConfigure = this.onConfigure;
+            this.onConfigure = function (info) {
+                if (originalOnConfigure) originalOnConfigure.apply(this, arguments);
+
+                // Ensure legacy properties are removed when configuring from saved state
+                if (this.properties) {
+                    if ("decimalsX" in this.properties) delete this.properties.decimalsX;
+                    if ("decimalsY" in this.properties) delete this.properties.decimalsY;
+                }
+
+                updatePortLabels();
+                updateOutputTypes();
+                draw();
             };
         };
     }
