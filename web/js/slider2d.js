@@ -233,7 +233,7 @@ app.registerExtension({
                 }
             };
 
-            const updatePortLabels = () => {
+            const updatePortLabels = (isDragging = false) => {
                 if (!this.outputs) return;
 
                 const axisX = getAxisState("X");
@@ -244,17 +244,23 @@ app.registerExtension({
 
                 if (this.outputs[0] && this.outputs[0].label !== valueX) {
                     this.outputs[0].label = valueX;
-                    this.outputs[0] = { ...this.outputs[0] };
+                    // Skip reactivity spread during drag
+                    if (!isDragging) {
+                        this.outputs[0] = { ...this.outputs[0] };
+                    }
                     changed = true;
                 }
 
                 if (this.outputs[1] && this.outputs[1].label !== valueY) {
                     this.outputs[1].label = valueY;
-                    this.outputs[1] = { ...this.outputs[1] };
+                    // Skip reactivity spread during drag
+                    if (!isDragging) {
+                        this.outputs[1] = { ...this.outputs[1] };
+                    }
                     changed = true;
                 }
 
-                if (changed) {
+                if (changed && !isDragging) {
                     this.outputs = [...this.outputs];
                     this.setDirtyCanvas?.(true, true);
                 }
@@ -412,7 +418,7 @@ app.registerExtension({
                 ctx.stroke();
             };
 
-            const updateValuesFromPos = (clientX, clientY, shiftKey = false) => {
+            const updateValuesFromPos = (clientX, clientY, shiftKey = false, isDragging = false) => {
                 if (!cachedRect) updateRect();
                 if (!cachedRect) return;
 
@@ -439,21 +445,27 @@ app.registerExtension({
                 this.properties.valueX = roundToDecimals(denormalizeValue(nx, axisX), axisX.decimals);
                 this.properties.valueY = roundToDecimals(denormalizeValue(ny, axisY), axisY.decimals);
 
-                updatePortLabels();
+                updatePortLabels(isDragging);
                 draw();
+                // When dragging, use light redraw (second arg false means not set dirty graph)
                 this.setDirtyCanvas?.(true, false);
             };
 
             const handlePointerMove = (event) => {
                 if (!isDragging) return;
                 event.preventDefault();
-                updateValuesFromPos(event.clientX, event.clientY, event.shiftKey);
+                updateValuesFromPos(event.clientX, event.clientY, event.shiftKey, true);
             };
 
             const finishPointerDrag = (pointerId) => {
                 if (!isDragging) return;
                 isDragging = false;
                 cachedRect = null;
+
+                // Final sync and reactivity trigger
+                updatePortLabels(false);
+                this.setDirtyCanvas?.(true, true);
+
                 if (pointerId != null && canvas.hasPointerCapture?.(pointerId)) {
                     canvas.releasePointerCapture(pointerId);
                 }

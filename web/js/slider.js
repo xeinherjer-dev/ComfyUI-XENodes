@@ -182,22 +182,37 @@ app.registerExtension({
                 }
             };
 
-            const onValueChange = (val) => {
+            const onValueInput = (val) => {
                 const numVal = normalizeValue(val);
+                if (this.properties.value === numVal) return;
 
-                const finalVal = numVal;
-                if (this.properties.value === finalVal) return; // Prevent infinite loops
+                this.properties.value = numVal;
+                // Just update visual widgets, no callbacks to downstream nodes yet
+                updateInputsVisual();
+                app.canvas?.setDirty(true, false);
+            };
 
-                this.properties.value = finalVal;
-                syncDataWidgets(finalVal, true);
-                updateInputs();
+            const onValueConfirm = (val) => {
+                const numVal = normalizeValue(val);
+                this.properties.value = numVal;
+
+                syncDataWidgets(numVal, true);
+                updateInputs(); // Full update including connected state
                 updateOutputType();
+
                 app.canvas?.setDirty(true, true);
                 if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
             };
 
-            sliderInput.addEventListener("input", (e) => onValueChange(e.target.value));
-            numberInput.addEventListener("change", (e) => onValueChange(e.target.value));
+            const updateInputsVisual = () => {
+                const valToSet = this.properties.value;
+                sliderInput.value = valToSet;
+                numberInput.value = valToSet;
+            };
+
+            sliderInput.addEventListener("input", (e) => onValueInput(e.target.value));
+            sliderInput.addEventListener("change", (e) => onValueConfirm(e.target.value));
+            numberInput.addEventListener("change", (e) => onValueConfirm(e.target.value));
 
             // Prevent panning graph
             const stopPropagation = (e) => e.stopPropagation();
@@ -232,7 +247,7 @@ app.registerExtension({
 
             const domWidget = this.addDOMWidget("slider_ui", "SLIDER", container, {
                 getValue: () => normalizeValue(this.properties?.value),
-                setValue(v) { onValueChange(v); }
+                setValue(v) { onValueConfirm(v); }
             });
 
             domWidget.computeSize = (width) => [Math.max(width, 180), 20];

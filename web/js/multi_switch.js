@@ -340,15 +340,8 @@ app.registerExtension({
                 return response;
             };
 
-            let lastTitlesFingerprint = "";
-            const originalOnDrawForeground = this.onDrawForeground;
-            this.onDrawForeground = function (ctx) {
-                const result = originalOnDrawForeground
-                    ? originalOnDrawForeground.apply(this, arguments)
-                    : undefined;
-
-                if (this.flags.collapsed) return result;
-
+            const checkTitles = () => {
+                if (this.flags.collapsed) return;
                 const inputSlots = getManagedInputs(this);
                 let currentFingerprint = "";
                 for (let i = 0; i < inputSlots.length; i++) {
@@ -359,12 +352,29 @@ app.registerExtension({
                     currentFingerprint += `${i}:${originNode?.title || originNode?.type || ""}|`;
                 }
 
-                if (currentFingerprint !== lastTitlesFingerprint) {
-                    lastTitlesFingerprint = currentFingerprint;
-                    rebuildButtons();
+                if (currentFingerprint !== this.lastTitlesFingerprint) {
+                    this.lastTitlesFingerprint = currentFingerprint;
+                    this.rebuildButtons();
                 }
+            };
 
-                return result;
+            this.lastTitlesFingerprint = "";
+            this.title_check_interval = setInterval(checkTitles, 1000);
+
+            const originalOnRemoved = this.onRemoved;
+            this.onRemoved = function () {
+                if (this.title_check_interval) {
+                    clearInterval(this.title_check_interval);
+                    this.title_check_interval = null;
+                }
+                return originalOnRemoved?.apply(this, arguments);
+            };
+
+            const originalOnDrawForeground = this.onDrawForeground;
+            this.onDrawForeground = function (ctx) {
+                return originalOnDrawForeground
+                    ? originalOnDrawForeground.apply(this, arguments)
+                    : undefined;
             };
 
             rebuildButtons();
