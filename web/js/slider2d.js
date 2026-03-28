@@ -3,9 +3,31 @@ import { app } from "../../../scripts/app.js";
 const EXTENSION_NAME = "XENodes.Slider2D";
 const NODE_NAME = "XENodes.Slider2D";
 
-// Port area overhead: title area + 2 output slots + bottom margin
-const PORT_OVERHEAD = 80;
-const MIN_CANVAS_H = 50;
+const DEFAULT_SIZE = [240, 312];
+const NODES2_MIN_CANVAS_W = 50;
+const NODES2_MIN_CANVAS_H = 50;
+const LEGACY_MIN_CANVAS_H = 80;
+const LEGACY_SIDE_MARGIN = 4;
+const LEGACY_BOTTOM_GAP = 16;
+const LEGACY_FALLBACK_TOP_OFFSET = 80;
+
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+const toFiniteNumber = (value, fallback) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const roundToDecimals = (value, decimals) => {
+    const precision = Math.pow(10, decimals);
+    return Math.round(value * precision) / precision;
+};
+
+const getDecimals = (step) => {
+    const normalized = String(step);
+    if (!normalized.includes(".")) return 0;
+    return normalized.split(".")[1].length;
+};
 
 app.registerExtension({
     name: EXTENSION_NAME,
@@ -31,30 +53,111 @@ app.registerExtension({
             this.properties.snap = this.properties.snap ?? true;
             this.properties.dots = this.properties.dots ?? true;
             this.properties.frame = this.properties.frame ?? true;
-            this.properties.frameAlert = this.properties.frameAlert ?? 0;
             this.properties.debug = this.properties.debug ?? false;
-            
-            // Explicitly remove legacy properties to hide them from the properties menu
-            if ("decimalsX" in this.properties) delete this.properties.decimalsX;
-            if ("decimalsY" in this.properties) delete this.properties.decimalsY;
 
-            const debugLog = (...args) => {
-                if (this.properties.debug) {
-                    console.log("[Slider2D]", ...args);
+            const cleanupLegacyProperties = () => {
+                if ("decimalsX" in this.properties) delete this.properties.decimalsX;
+                if ("decimalsY" in this.properties) delete this.properties.decimalsY;
+                if ("frameAlert" in this.properties) delete this.properties.frameAlert;
+            };
+
+            // Remove legacy / unused properties so they do not leak into the menu.
+            cleanupLegacyProperties();
+
+            const debugLog = (label, extra = {}) => {
+                if (!this.properties.debug) return;
+                console.log("[Slider2D]", label, {
+                    mode: isNodes2Environment() ? "nodes2" : "legacy",
+                    nodeSize: this.size ? [...this.size] : null,
+                    widgetY: domWidget?.y ?? null,
+                    widgetH: domWidget?.computedHeight ?? null,
+                    containerH: container.clientHeight,
+                    canvasH: canvas.clientHeight,
+                    ...extra,
+                });
+            };
+
+            const isNodes2Environment = () => {
+                if (globalThis.LiteGraph?.vueNodesMode != null) {
+                    return !!globalThis.LiteGraph.vueNodesMode;
                 }
+                return !!container.closest("comfy-node");
             };
 
-            this.intpos = {
-                x: (this.properties.valueX - this.properties.minX) / (this.properties.maxX - this.properties.minX),
-                y: (this.properties.valueY - this.properties.minY) / (this.properties.maxY - this.properties.minY)
+            const getMinCanvasHeight = () =>
+                isNodes2Environment() ? NODES2_MIN_CANVAS_H : LEGACY_MIN_CANVAS_H;
+
+            const getLegacyBottomGap = () => LEGACY_BOTTOM_GAP;
+
+            const getAxisState = (axisName) => {
+                const rawMin = toFiniteNumber(this.properties[`min${axisName}`], 0);
+                const rawMax = toFiniteNumber(this.properties[`max${axisName}`], rawMin);
+                const min = Math.min(rawMin, rawMax);
+                const max = Math.max(rawMin, rawMax);
+                const span = max - min;
+                const rawStep = Math.abs(toFiniteNumber(this.properties[`step${axisName}`], 1));
+                const step = rawStep > 0 ? rawStep : 1;
+                return {
+                    min,
+                    max,
+                    span,
+                    step,
+                    decimals: getDecimals(step),
+                };
             };
 
-            this.overhead = 0;
+            const getNormalizedValue = (value, axis) => {
+                if (axis.span <= 0) return 0;
+                return clamp((value - axis.min) / axis.span, 0, 1);
+            };
 
-            // Initial size: 240px wide. Height will be adjusted to make canvas square.
-            this.size = [240, 312];
+            const snapNormalizedValue = (value, axis) => {
+                if (axis.span <= 0) return 0;
+                const normalizedStep = axis.step / axis.span;
+                if (!Number.isFinite(normalizedStep) || normalizedStep <= 0) {
+                    return clamp(value, 0, 1);
+                }
+                return clamp(Math.round(value / normalizedStep) * normalizedStep, 0, 1);
+            };
 
-            // Enable resizing
+            const denormalizeValue = (value, axis) =>
+                axis.span <= 0 ? axis.min : axis.min + axis.span * value;
+
+            const syncIntposFromProperties = () => {
+                const axisX = getAxisState("X");
+                const axisY = getAxisState("Y");
+
+                this.properties.valueX = clamp(
+                    toFiniteNumber(this.properties.valueX, axisX.min),
+                    axisX.min,
+                    axisX.max
+                );
+                this.properties.valueY = clamp(
+                    toFiniteNumber(this.properties.valueY, axisY.min),
+                    axisY.min,
+                    axisY.max
+                );
+
+                this.intpos = {
+                    x: getNormalizedValue(this.properties.valueX, axisX),
+                    y: getNormalizedValue(this.properties.valueY, axisY),
+                };
+            };
+
+            const updateRect = () => {
+                cachedRect = canvas.getBoundingClientRect();
+            };
+
+            const requestDraw = () => {
+                cachedRect = null;
+                updateRect();
+                draw();
+            };
+
+            this.intpos = { x: 0, y: 0 };
+            syncIntposFromProperties();
+
+            this.size = [...DEFAULT_SIZE];
             this.resizable = true;
 
             const styleId = "xe-slider2d-style";
@@ -67,10 +170,10 @@ app.registerExtension({
                         background: rgba(15, 20, 15, 0.9);
                         border: 1px solid rgba(255, 255, 255, 0.1);
                         border-radius: 4px;
-                        margin: 0px 4px 8px 4px; 
-                        width: calc(100% - 8px); 
-                        height: auto;
-                        aspect-ratio: 1 / 1;
+                        margin: 0px 4px 4px 4px;
+                        width: calc(100% - 8px);
+                        height: 100%;
+                        min-height: 0;
                         align-self: flex-start;
                         box-sizing: border-box;
                         overflow: hidden;
@@ -78,11 +181,19 @@ app.registerExtension({
                         flex-direction: column;
                         backdrop-filter: blur(4px);
                     }
+                    .xe-slider2d-stage {
+                        position: relative;
+                        flex: 1 1 auto;
+                        min-height: 0;
+                        width: 100%;
+                        overflow: hidden;
+                    }
                     .xe-slider2d-canvas {
+                        position: absolute;
+                        inset: 0;
                         width: 100%;
                         height: 100%;
-                        min-height: 0;
-                        display: block; 
+                        display: block;
                         cursor: crosshair;
                         touch-action: none;
                     }
@@ -93,64 +204,59 @@ app.registerExtension({
             const container = document.createElement("div");
             container.className = "xe-slider2d-container";
 
+            const stage = document.createElement("div");
+            stage.className = "xe-slider2d-stage";
+
             const canvas = document.createElement("canvas");
             canvas.className = "xe-slider2d-canvas";
 
-            container.appendChild(canvas);
+            stage.appendChild(canvas);
+            container.appendChild(stage);
 
             const COLORS = {
                 dots: "rgba(150, 210, 150, 0.25)",
                 frame: "rgba(150, 210, 150, 0.1)",
                 frameStroke: "rgba(150, 210, 150, 0.4)",
                 handle: "#4A9A4A",
-                handleOutline: "#fff"
+                handleOutline: "#fff",
             };
 
             let cachedRect = null;
-            const updateRect = () => {
-                cachedRect = canvas.getBoundingClientRect();
-            };
+            let domWidget;
+            let isDragging = false;
 
             const syncWidgets = () => {
-                if (this.widgets) {
-                    for (const w of this.widgets) {
-                        if (w.name === "X") w.value = this.properties.valueX;
-                        if (w.name === "Y") w.value = this.properties.valueY;
-                    }
+                if (!this.widgets) return;
+                for (const widget of this.widgets) {
+                    if (widget.name === "X") widget.value = this.properties.valueX;
+                    if (widget.name === "Y") widget.value = this.properties.valueY;
                 }
-            };
-
-            const getDecimals = (step) => {
-                const s = String(step);
-                if (s.indexOf(".") === -1) return 0;
-                return s.split(".")[1].length;
             };
 
             const updatePortLabels = () => {
                 if (!this.outputs) return;
 
-                const decX = getDecimals(this.properties.stepX);
-                const decY = getDecimals(this.properties.stepY);
-                const valXText = this.properties.valueX.toFixed(decX);
-                const valYText = this.properties.valueY.toFixed(decY);
+                const axisX = getAxisState("X");
+                const axisY = getAxisState("Y");
+                const valueX = this.properties.valueX.toFixed(axisX.decimals);
+                const valueY = this.properties.valueY.toFixed(axisY.decimals);
                 let changed = false;
 
-                if (this.outputs[0] && this.outputs[0].label !== valXText) {
-                    this.outputs[0].label = valXText;
+                if (this.outputs[0] && this.outputs[0].label !== valueX) {
+                    this.outputs[0].label = valueX;
                     this.outputs[0] = { ...this.outputs[0] };
                     changed = true;
                 }
-                if (this.outputs[1] && this.outputs[1].label !== valYText) {
-                    this.outputs[1].label = valYText;
+
+                if (this.outputs[1] && this.outputs[1].label !== valueY) {
+                    this.outputs[1].label = valueY;
                     this.outputs[1] = { ...this.outputs[1] };
                     changed = true;
                 }
 
                 if (changed) {
                     this.outputs = [...this.outputs];
-                    if (this.setDirtyCanvas) {
-                        this.setDirtyCanvas(true, true);
-                    }
+                    this.setDirtyCanvas?.(true, true);
                 }
 
                 syncWidgets();
@@ -159,26 +265,90 @@ app.registerExtension({
             const updateOutputTypes = () => {
                 if (!this.outputs) return;
 
-                const stepX = parseFloat(this.properties.stepX);
-                const isIntX = Number.isInteger(stepX) && stepX >= 1;
-                const typeX = isIntX ? "INT" : "FLOAT";
+                const axisX = getAxisState("X");
+                const axisY = getAxisState("Y");
+                const typeX = Number.isInteger(axisX.step) && axisX.step >= 1 ? "INT" : "FLOAT";
+                const typeY = Number.isInteger(axisY.step) && axisY.step >= 1 ? "INT" : "FLOAT";
+
                 if (this.outputs[0] && this.outputs[0].type !== typeX) {
                     this.outputs[0].type = typeX;
                 }
-
-                const stepY = parseFloat(this.properties.stepY);
-                const isIntY = Number.isInteger(stepY) && stepY >= 1;
-                const typeY = isIntY ? "INT" : "FLOAT";
                 if (this.outputs[1] && this.outputs[1].type !== typeY) {
                     this.outputs[1].type = typeY;
                 }
             };
 
+            const applyModeStyles = () => {
+                if (isNodes2Environment()) {
+                    stage.style.position = "relative";
+                    stage.style.display = "block";
+                    stage.style.flex = "1 1 auto";
+                    stage.style.height = "";
+                    stage.style.minHeight = "0";
+
+                    canvas.style.position = "absolute";
+                    canvas.style.inset = "0";
+                    canvas.style.width = "100%";
+                    canvas.style.height = "100%";
+                    canvas.style.flex = "";
+                    canvas.style.minHeight = "0";
+                    return;
+                }
+
+                stage.style.position = "relative";
+                stage.style.display = "flex";
+                stage.style.flex = "1 1 auto";
+                stage.style.height = "100%";
+                stage.style.minHeight = getMinCanvasHeight() + "px";
+
+                canvas.style.position = "relative";
+                canvas.style.inset = "";
+                canvas.style.width = "100%";
+                canvas.style.height = "100%";
+                canvas.style.flex = "1 1 auto";
+                canvas.style.minHeight = getMinCanvasHeight() + "px";
+            };
+
+            const applyContainerSize = (nodeHeight = this.size[1]) => {
+                applyModeStyles();
+
+                if (isNodes2Environment()) {
+                    container.style.width = "100%";
+                    container.style.margin = "0";
+                    container.style.height = "100%";
+                    container.style.minHeight = "0";
+                    container.style.maxHeight = "100%";
+                    container.style.alignSelf = "stretch";
+                    debugLog("applyContainerSize:nodes2", { requestedNodeHeight: nodeHeight });
+                    return;
+                }
+
+                const topOffset = domWidget?.y ?? LEGACY_FALLBACK_TOP_OFFSET;
+                const bottomGap = getLegacyBottomGap();
+                const canvasHeight = Math.max(
+                    nodeHeight - topOffset - bottomGap,
+                    getMinCanvasHeight()
+                );
+
+                container.style.width = "calc(100% - 8px)";
+                container.style.margin = `0px ${LEGACY_SIDE_MARGIN}px ${bottomGap}px ${LEGACY_SIDE_MARGIN}px`;
+                container.style.height = canvasHeight + "px";
+                container.style.minHeight = canvasHeight + "px";
+                container.style.maxHeight = canvasHeight + "px";
+                container.style.alignSelf = "flex-start";
+
+                debugLog("applyContainerSize:legacy", {
+                    requestedNodeHeight: nodeHeight,
+                    appliedHeight: canvasHeight,
+                    bottomGap,
+                    topOffset,
+                });
+            };
+
             const draw = () => {
                 const targetW = canvas.clientWidth;
                 const targetH = canvas.clientHeight;
-
-                if (targetW === 0 || targetH === 0) return;
+                if (targetW <= 0 || targetH <= 0) return;
 
                 if (canvas.width !== targetW || canvas.height !== targetH) {
                     canvas.width = targetW;
@@ -187,263 +357,222 @@ app.registerExtension({
                 }
 
                 const ctx = canvas.getContext("2d");
+                if (!ctx) return;
+
+                const axisX = getAxisState("X");
+                const axisY = getAxisState("Y");
                 const w = canvas.width;
                 const h = canvas.height;
                 const shift = 5;
-                const dw = w - shift * 2;
-                const dh = h - shift * 2;
+                const dw = Math.max(0, w - shift * 2);
+                const dh = Math.max(0, h - shift * 2);
+                const handleX = shift + dw * clamp(this.intpos.x, 0, 1);
+                const handleY = shift + dh * (1 - clamp(this.intpos.y, 0, 1));
 
                 ctx.clearRect(0, 0, w, h);
 
-                if (this.properties.dots) {
-                    ctx.fillStyle = COLORS.dots;
-                    const stX = (dw * this.properties.stepX / (this.properties.maxX - this.properties.minX));
-                    const stY = (dh * this.properties.stepY / (this.properties.maxY - this.properties.minY));
-                    if (stX > 2 && stY > 2) {
+                if (this.properties.dots && axisX.span > 0 && axisY.span > 0) {
+                    const stepX = (dw * axisX.step) / axisX.span;
+                    const stepY = (dh * axisY.step) / axisY.span;
+                    if (stepX > 2 && stepY > 2) {
+                        ctx.fillStyle = COLORS.dots;
                         ctx.beginPath();
-                        for (let ix = 0; ix <= dw + 0.1; ix += stX) {
-                            for (let iy = 0; iy <= dh + 0.1; iy += stY) {
-                                ctx.rect(shift + ix - 0.5, shift + iy - 0.5, 1, 1);
+                        for (let x = 0; x <= dw + 0.1; x += stepX) {
+                            for (let y = 0; y <= dh + 0.1; y += stepY) {
+                                ctx.rect(shift + x - 0.5, shift + y - 0.5, 1, 1);
                             }
                         }
                         ctx.fill();
                     }
                 }
 
-                const hX = shift + dw * this.intpos.x;
-                const hY = shift + dh * (1 - this.intpos.y);
-
                 if (this.properties.frame) {
                     ctx.fillStyle = COLORS.frame;
                     ctx.strokeStyle = COLORS.frameStroke;
                     ctx.beginPath();
-                    ctx.rect(shift, hY, dw * this.intpos.x, dh * this.intpos.y);
+                    ctx.rect(
+                        shift,
+                        handleY,
+                        dw * clamp(this.intpos.x, 0, 1),
+                        dh * clamp(this.intpos.y, 0, 1)
+                    );
                     ctx.fill();
                     ctx.stroke();
                 }
 
                 ctx.fillStyle = COLORS.handle;
                 ctx.beginPath();
-                ctx.arc(hX, hY, 7, 0, 2 * Math.PI);
+                ctx.arc(handleX, handleY, 7, 0, Math.PI * 2);
                 ctx.fill();
 
                 ctx.strokeStyle = COLORS.handleOutline;
                 ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.arc(hX, hY, 5, 0, 2 * Math.PI);
+                ctx.arc(handleX, handleY, 5, 0, Math.PI * 2);
                 ctx.stroke();
             };
 
             const updateValuesFromPos = (clientX, clientY, shiftKey = false) => {
                 if (!cachedRect) updateRect();
-                const rect = cachedRect;
+                if (!cachedRect) return;
+
+                const axisX = getAxisState("X");
+                const axisY = getAxisState("Y");
                 const shift = 5;
-                const dw = rect.width - shift * 2;
-                const dh = rect.height - shift * 2;
+                const dw = cachedRect.width - shift * 2;
+                const dh = cachedRect.height - shift * 2;
+                if (dw <= 0 || dh <= 0) return;
 
-                let nx = (clientX - rect.left - shift) / dw;
-                let ny = 1 - (clientY - rect.top - shift) / dh;
+                let nx = (clientX - cachedRect.left - shift) / dw;
+                let ny = 1 - (clientY - cachedRect.top - shift) / dh;
 
-                nx = Math.max(0, Math.min(1, nx));
-                ny = Math.max(0, Math.min(1, ny));
+                nx = clamp(nx, 0, 1);
+                ny = clamp(ny, 0, 1);
 
                 if (shiftKey !== this.properties.snap) {
-                    const sX = this.properties.stepX / (this.properties.maxX - this.properties.minX);
-                    const sY = this.properties.stepY / (this.properties.maxY - this.properties.minY);
-                    nx = Math.round(nx / sX) * sX;
-                    ny = Math.round(ny / sY) * sY;
+                    nx = snapNormalizedValue(nx, axisX);
+                    ny = snapNormalizedValue(ny, axisY);
                 }
 
                 this.intpos.x = nx;
                 this.intpos.y = ny;
-
-                this.properties.valueX = this.properties.minX + (this.properties.maxX - this.properties.minX) * nx;
-                this.properties.valueY = this.properties.minY + (this.properties.maxY - this.properties.minY) * ny;
-
-                const decX = getDecimals(this.properties.stepX);
-                const decY = getDecimals(this.properties.stepY);
-                const pX = Math.pow(10, decX);
-                const pY = Math.pow(10, decY);
-                this.properties.valueX = Math.round(this.properties.valueX * pX) / pX;
-                this.properties.valueY = Math.round(this.properties.valueY * pY) / pY;
+                this.properties.valueX = roundToDecimals(denormalizeValue(nx, axisX), axisX.decimals);
+                this.properties.valueY = roundToDecimals(denormalizeValue(ny, axisY), axisY.decimals);
 
                 updatePortLabels();
                 draw();
-                if (this.setDirtyCanvas) this.setDirtyCanvas(true, false);
+                this.setDirtyCanvas?.(true, false);
             };
 
-            let isDragging = false;
-
-            const handlePointerMove = (e) => {
+            const handlePointerMove = (event) => {
                 if (!isDragging) return;
-                e.preventDefault();
-                updateValuesFromPos(e.clientX, e.clientY, e.shiftKey);
+                event.preventDefault();
+                updateValuesFromPos(event.clientX, event.clientY, event.shiftKey);
             };
 
-            const handlePointerUp = (e) => {
+            const finishPointerDrag = (pointerId) => {
                 if (!isDragging) return;
                 isDragging = false;
                 cachedRect = null;
-                canvas.releasePointerCapture(e.pointerId);
+                if (pointerId != null && canvas.hasPointerCapture?.(pointerId)) {
+                    canvas.releasePointerCapture(pointerId);
+                }
                 canvas.removeEventListener("pointermove", handlePointerMove);
                 canvas.removeEventListener("pointerup", handlePointerUp);
+                canvas.removeEventListener("pointercancel", handlePointerCancel);
             };
 
-            canvas.addEventListener("pointerdown", (e) => {
-                if (e.button !== 0) return;
+            const handleWheel = (event) => event.stopPropagation();
+            const handlePointerUp = (event) => finishPointerDrag(event.pointerId);
+            const handlePointerCancel = (event) => finishPointerDrag(event.pointerId);
+
+            canvas.addEventListener("pointerdown", (event) => {
+                if (event.button !== 0) return;
                 isDragging = true;
-                e.preventDefault();
-                e.stopPropagation();
-                canvas.setPointerCapture(e.pointerId);
+                event.preventDefault();
+                event.stopPropagation();
+                canvas.setPointerCapture(event.pointerId);
                 updateRect();
-                updateValuesFromPos(e.clientX, e.clientY, e.shiftKey);
+                updateValuesFromPos(event.clientX, event.clientY, event.shiftKey);
 
                 canvas.addEventListener("pointermove", handlePointerMove, { passive: false });
                 canvas.addEventListener("pointerup", handlePointerUp);
+                canvas.addEventListener("pointercancel", handlePointerCancel);
             });
 
-            canvas.addEventListener("wheel", (e) => e.stopPropagation());
+            canvas.addEventListener("wheel", handleWheel, { passive: true });
 
-            const domWidget = this.addDOMWidget("slider2d_ui", "SLIDER2D", container, {
-                getMinHeight: () => MIN_CANVAS_H,
+            domWidget = this.addDOMWidget("slider2d_ui", "SLIDER2D", container, {
+                getMinHeight: () => getMinCanvasHeight(),
+                onDraw: () => draw(),
             });
-            domWidget.draw = draw;
 
-            // Use computeLayoutSize with minHeight === maxHeight to anchor widget height.
-            // Height matches width to maintain square canvas.
-            domWidget.computeLayoutSize = () => {
-                const canvasW = this.size?.[0] ?? 240;
-                const innerW = canvasW - 8;
-                const h = Math.max(innerW, MIN_CANVAS_H);
-                return { minHeight: h, maxHeight: h, minWidth: 0 };
-            };
+            domWidget.computeLayoutSize = () => ({
+                minHeight: getMinCanvasHeight(),
+                minWidth: NODES2_MIN_CANVAS_W,
+            });
 
             const hideDataWidgets = () => {
                 if (!this.widgets) return;
-                for (const w of this.widgets) {
-                    if (w.name !== "slider2d_ui") {
-                        w.type = "hidden";
-                        w.hidden = true;
-                        w.options = w.options || {};
-                        w.options.hidden = true;
-                        w.computeSize = () => [0, -4];
+                for (const widget of this.widgets) {
+                    if (widget.name === "slider2d_ui") continue;
+                    widget.type = "hidden";
+                    widget.hidden = true;
+                    widget.options = widget.options || {};
+                    widget.options.hidden = true;
+                    if (widget.computeSize) {
+                        widget.computeSize = () => [0, -4];
                     }
                 }
             };
 
             hideDataWidgets();
             updatePortLabels();
+            updateOutputTypes();
 
-            const isDefaultSize = this.size[0] === 240 && this.size[1] === 312;
-
-            // Adjust initial size to square once DOM layout is complete.
-            // Use rAF x2 to wait for at least one layout pass.
-            let _initFrames = 0;
-            const _initAdjust = () => {
-                if (_initFrames++ < 2) {
-                    requestAnimationFrame(_initAdjust);
+            let initFrames = 0;
+            const initLayout = () => {
+                if (initFrames++ < 2) {
+                    requestAnimationFrame(initLayout);
                     return;
                 }
+
                 hideDataWidgets();
+                syncIntposFromProperties();
                 updatePortLabels();
-                updateRect();
                 updateOutputTypes();
-
-                if (isDefaultSize) {
-                    const cw = canvas.clientWidth;
-                    const ch = canvas.clientHeight;
-                    if (cw > 0 && ch > 0) {
-                        const diff = cw - ch;
-                        if (Math.abs(diff) > 1) {
-                            this.size[1] += (diff + 12);
-                        }
-                    }
-                }
-
-                const cw = canvas.clientWidth;
-                if (cw > 0) {
-                    this.overhead = this.size[1] - (this.size[0] - 8) + 12;
-                }
-
-                updateRect();
-                draw();
+                applyContainerSize(this.size[1]);
+                requestDraw();
             };
-            requestAnimationFrame(_initAdjust);
+            requestAnimationFrame(initLayout);
 
             const originalOnPropertyChanged = this.onPropertyChanged;
-            this.onPropertyChanged = function (name, value) {
-                if (originalOnPropertyChanged) originalOnPropertyChanged.apply(this, arguments);
-                this.intpos.x = (this.properties.valueX - this.properties.minX) / (this.properties.maxX - this.properties.minX);
-                this.intpos.y = (this.properties.valueY - this.properties.minY) / (this.properties.maxY - this.properties.minY);
-
+            this.onPropertyChanged = function () {
+                if (originalOnPropertyChanged) {
+                    originalOnPropertyChanged.apply(this, arguments);
+                }
+                syncIntposFromProperties();
                 updatePortLabels();
                 updateOutputTypes();
-                draw();
-                if (this.setDirtyCanvas) this.setDirtyCanvas(true, false);
+                requestDraw();
+                this.setDirtyCanvas?.(true, false);
             };
 
             this.onResize = function (size) {
-                if (isDragging) isDragging = false;
-
-                const lastW = this._lastSize?.[0];
-                const lastH = this._lastSize?.[1];
-                const dw = lastW != null ? Math.abs(size[0] - lastW) : 0;
-                const dh = lastH != null ? Math.abs(size[1] - lastH) : 0;
-
-                // Guard vertical resize: block if dragging primarily vertically
-                if (dh > dw * 1.5 && dw < 5 && lastW != null) {
-                    size[0] = lastW;
-                    size[1] = lastH;
-                } else {
-                    // Update height to stay square based on width
-                    if (this.overhead > 0) {
-                        size[1] = size[0] - 8 + this.overhead;
-                    }
-                }
-
-                this._lastSize = [size[0], size[1]];
-
-                // Force DOM height to match canvas square to prevent rendering stretch
-                if (container) {
-                    const h = size[0] - 8;
-                    container.style.height = h + "px";
-                    container.style.minHeight = h + "px";
-                    container.style.maxHeight = h + "px";
-                }
-
-                container.scrollTop = 0;
-                if (container.parentElement) container.parentElement.scrollTop = 0;
-
-                debugLog("onResize result:", size[0], size[1]);
-
+                finishPointerDrag();
+                debugLog("onResize", { incomingSize: [...size] });
+                applyContainerSize(size[1]);
                 requestAnimationFrame(() => {
-                    cachedRect = null;
-                    updateRect();
-                    draw();
+                    requestDraw();
+                    debugLog("onResize:after", { finalSize: [...size] });
                 });
             };
 
             const originalOnRemoved = this.onRemoved;
             this.onRemoved = function () {
-                if (originalOnRemoved) originalOnRemoved.apply(this, arguments);
+                if (originalOnRemoved) {
+                    originalOnRemoved.apply(this, arguments);
+                }
+                finishPointerDrag();
                 canvas.removeEventListener("pointermove", handlePointerMove);
                 canvas.removeEventListener("pointerup", handlePointerUp);
+                canvas.removeEventListener("pointercancel", handlePointerCancel);
+                canvas.removeEventListener("wheel", handleWheel);
             };
 
             const originalOnConfigure = this.onConfigure;
-            this.onConfigure = function (info) {
-                if (originalOnConfigure) originalOnConfigure.apply(this, arguments);
-
-                // Ensure legacy properties are removed when configuring from saved state
-                if (this.properties) {
-                    if ("decimalsX" in this.properties) delete this.properties.decimalsX;
-                    if ("decimalsY" in this.properties) delete this.properties.decimalsY;
+            this.onConfigure = function () {
+                if (originalOnConfigure) {
+                    originalOnConfigure.apply(this, arguments);
                 }
-
+                if (this.properties) {
+                    cleanupLegacyProperties();
+                }
+                syncIntposFromProperties();
                 updatePortLabels();
                 updateOutputTypes();
-                draw();
+                requestDraw();
             };
         };
-    }
+    },
 });
