@@ -12,7 +12,7 @@ A collection of custom nodes for ComfyUI, featuring the versatile Multi-Switch, 
 
    ```bash
    cd ComfyUI/custom_nodes
-   git clone https://github.com/xeinherjer-dev/ComfyUI-XENodes.git
+   git clone https://github.com/xeinherjer-dev/ComfyUI-XENodes.git xenodes
    ```
 
 2. Start (or restart) ComfyUI.
@@ -32,13 +32,18 @@ A general-purpose switch node that selects one input from many and routes it to 
 
 ### Slider
 
-A versatile slider node that outputs a numerical value, compatible with both INT and FLOAT inputs.
+A versatile slider node where the output port type dynamically switches between `INT` and `FLOAT` based on the `step` setting.
 
-- **Automatic Casting**: Automatically returns `int` for whole numbers and `float` for fractional ones, ensuring compatibility across all node types.
+- **Dynamic Type Switching**: Automatically sets the output type to `INT` for integer steps and `FLOAT` for decimal steps, ensuring seamless connectivity with other nodes.
+- **Automatic Casting**: During backend execution, numerical values are appropriately output as `int` for whole numbers and `float` for fractional ones.
 
 ### Slider 2D
 
-A 2D slider node that allows precise value selection on a coordinate plane, outputting both X and Y values.
+An intuitive 2D slider node for manipulating X and Y values simultaneously on a coordinate plane.
+
+- **Precision Auto-Detection**: Automatically adjusts the display precision (number of decimal places) based on the `stepX` and `stepY` settings.
+- **Dynamic Type Switching**: Similar to the Slider node, the output port types for each axis change dynamically based on their respective step settings.
+- **Snap Feature**: Enable the `snap` property to snap the handle to the specified step increments.
 
 ### Save Image
 
