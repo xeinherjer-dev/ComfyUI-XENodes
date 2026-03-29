@@ -339,7 +339,7 @@ app.registerExtension({
                     return;
                 }
 
-                const topOffset = domWidget?.y ?? LEGACY_FALLBACK_TOP_OFFSET;
+                const topOffset = domWidget?.y || LEGACY_FALLBACK_TOP_OFFSET;
                 const bottomGap = getLegacyBottomGap();
                 const canvasHeight = Math.max(
                     nodeHeight - topOffset - bottomGap,
