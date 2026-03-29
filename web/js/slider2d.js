@@ -66,15 +66,11 @@ app.registerExtension({
 
             const debugLog = (label, extra = {}) => {
                 if (!this.properties.debug) return;
-                console.log("[Slider2D]", label, {
-                    mode: isNodes2Environment() ? "nodes2" : "legacy",
-                    nodeSize: this.size ? [...this.size] : null,
-                    widgetY: domWidget?.y ?? null,
-                    widgetH: domWidget?.computedHeight ?? null,
-                    containerH: container.clientHeight,
-                    canvasH: canvas.clientHeight,
-                    ...extra,
-                });
+                const mode = isNodes2Environment() ? "nodes2" : "legacy";
+                const y = domWidget?.y ?? 'undefined';
+                let extraStr = "";
+                for (let k in extra) extraStr += `, ${k}=${extra[k]}`;
+                console.log(`[Slider2D-Diagnostics] ${label} - mode=${mode}, widgetY=${y}${extraStr}`);
             };
 
             const isNodes2Environment = () => {
@@ -234,7 +230,7 @@ app.registerExtension({
 
                     if (valToSet !== null) {
                         widget.value = valToSet;
-                        // Node 2.0のVue状態へ最終値を伝播させるためのコールバック
+                        // Callback to propagate final values to the Vue state in Nodes 2.0
                         if (invokeCallback && typeof widget.callback === "function") {
                             widget.callback(valToSet, app.canvas, this, [valToSet]);
                         }
@@ -242,34 +238,26 @@ app.registerExtension({
                 }
             };
 
-            const updatePortLabels = (isDragging = false) => {
-                if (!this.outputs) return;
-
-                const axisX = getAxisState("X");
-                const axisY = getAxisState("Y");
-                const valueX = this.properties.valueX.toFixed(axisX.decimals);
-                const valueY = this.properties.valueY.toFixed(axisY.decimals);
-                let changed = false;
-
-                if (this.outputs[0] && this.outputs[0].label !== valueX) {
-                    this.outputs[0].label = valueX;
-                    this.outputs[0] = { ...this.outputs[0] };
-                    changed = true;
-                }
-
-                if (this.outputs[1] && this.outputs[1].label !== valueY) {
-                    this.outputs[1].label = valueY;
-                    this.outputs[1] = { ...this.outputs[1] };
-                    changed = true;
-                }
-
-                if (changed) {
-                    this.outputs = [...this.outputs];
-                    if (!isDragging) {
-                        this.setDirtyCanvas?.(true, true);
+            const refreshCoreState = (isDragging = false) => {
+                if (this.outputs) {
+                    let changed = false;
+                    if (this.outputs[0] && this.outputs[0].label !== " ") {
+                        this.outputs[0].label = " ";
+                        this.outputs[0] = { ...this.outputs[0] };
+                        changed = true;
+                    }
+                    if (this.outputs[1] && this.outputs[1].label !== " ") {
+                        this.outputs[1].label = " ";
+                        this.outputs[1] = { ...this.outputs[1] };
+                        changed = true;
+                    }
+                    if (changed) {
+                        this.outputs = [...this.outputs];
+                        if (!isDragging) {
+                            this.setDirtyCanvas?.(true, true);
+                        }
                     }
                 }
-
                 syncWidgets(!isDragging);
             };
 
@@ -335,34 +323,40 @@ app.registerExtension({
 
                 if (isNodes2Environment()) {
                     container.style.width = "100%";
-                    container.style.margin = "0";
-                    container.style.height = "100%";
+                    container.style.margin = "-44px 0px 0px 0px";
+                    container.style.height = "calc(100% + 44px)";
                     container.style.minHeight = "0";
-                    container.style.maxHeight = "100%";
+                    container.style.maxHeight = "none";
                     container.style.alignSelf = "stretch";
                     debugLog("applyContainerSize:nodes2", { requestedNodeHeight: nodeHeight });
                     return;
                 }
 
-                const topOffset = domWidget?.y || LEGACY_FALLBACK_TOP_OFFSET;
+                const topOffset = domWidget?.y ?? 70;
                 const bottomGap = getLegacyBottomGap();
+                
+                // MATH PROVEN: In ComfyUI's Legacy mode, domWidget.y (topOffset) is the offset BELOW the 30px title bar!
+                // Therefore, if domWidget.y = 46, we must pull the container UP by exactly 46px to reach the title bar perfectly.
+                const overlapUp = topOffset;
+                
+                // Because its top is now at the exact bottom of the 30px title bar, its available height is:
                 const canvasHeight = Math.max(
-                    nodeHeight - topOffset - bottomGap,
+                    nodeHeight - 30 - bottomGap, 
                     getMinCanvasHeight()
                 );
 
                 container.style.width = "calc(100% - 8px)";
-                container.style.margin = `0px ${LEGACY_SIDE_MARGIN}px ${bottomGap}px ${LEGACY_SIDE_MARGIN}px`;
+                container.style.margin = `-${overlapUp}px ${LEGACY_SIDE_MARGIN}px ${bottomGap}px ${LEGACY_SIDE_MARGIN}px`;
                 container.style.height = canvasHeight + "px";
                 container.style.minHeight = canvasHeight + "px";
                 container.style.maxHeight = canvasHeight + "px";
                 container.style.alignSelf = "flex-start";
 
-                debugLog("applyContainerSize:legacy", {
-                    requestedNodeHeight: nodeHeight,
-                    appliedHeight: canvasHeight,
-                    bottomGap,
-                    topOffset,
+                debugLog("applyContainerSize:legacy_final", {
+                    reqH: nodeHeight,
+                    appH: canvasHeight,
+                    overlap: overlapUp,
+                    margin: container.style.margin
                 });
             };
 
@@ -431,6 +425,16 @@ app.registerExtension({
                 ctx.beginPath();
                 ctx.arc(handleX, handleY, 5, 0, Math.PI * 2);
                 ctx.stroke();
+
+                ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+                ctx.font = "12px sans-serif";
+                ctx.textAlign = "right";
+                ctx.textBaseline = "middle";
+                const textX = this.properties.valueX.toFixed(axisX.decimals);
+                const textY = this.properties.valueY.toFixed(axisY.decimals);
+                
+                ctx.fillText(textX, w - 8, 16);
+                ctx.fillText(textY, w - 8, 32);
             };
 
             const updateValuesFromPos = (clientX, clientY, shiftKey = false, isDragging = false) => {
@@ -460,7 +464,7 @@ app.registerExtension({
                 this.properties.valueX = roundToDecimals(denormalizeValue(nx, axisX), axisX.decimals);
                 this.properties.valueY = roundToDecimals(denormalizeValue(ny, axisY), axisY.decimals);
 
-                updatePortLabels(isDragging);
+                refreshCoreState(isDragging);
                 draw();
                 // When dragging, use light redraw (second arg false means not set dirty graph)
                 this.setDirtyCanvas?.(true, false);
@@ -478,7 +482,7 @@ app.registerExtension({
                 cachedRect = null;
 
                 // Final sync and reactivity trigger
-                updatePortLabels(false);
+                refreshCoreState(false);
                 this.setDirtyCanvas?.(true, true);
 
                 if (pointerId != null && canvas.hasPointerCapture?.(pointerId)) {
@@ -494,6 +498,14 @@ app.registerExtension({
             const handlePointerCancel = (event) => finishPointerDrag(event.pointerId);
 
             canvas.addEventListener("pointerdown", (event) => {
+                const rect = canvas.getBoundingClientRect();
+                const x = event.clientX - rect.left;
+                const y = event.clientY - rect.top;
+
+                if (x > rect.width - 24 && y < 40) {
+                    return;
+                }
+
                 if (event.button !== 0) return;
                 isDragging = true;
                 event.preventDefault();
@@ -519,6 +531,13 @@ app.registerExtension({
                 minWidth: NODES2_MIN_CANVAS_W,
             });
 
+            // Override node's computeSize to prevent slots from dropping the dom widget Y origin
+            const originalComputeSize = this.computeSize;
+            this.computeSize = function (size) {
+                const computed = originalComputeSize ? originalComputeSize.apply(this, arguments) : [240, 30];
+                return [computed[0], 30]; // Force dom widget layout cursor strictly below title bar
+            };
+
             const hideDataWidgets = () => {
                 if (!this.widgets) return;
                 for (const widget of this.widgets) {
@@ -534,7 +553,7 @@ app.registerExtension({
             };
 
             hideDataWidgets();
-            updatePortLabels();
+            refreshCoreState();
             updateOutputTypes();
 
             let initFrames = 0;
@@ -546,7 +565,7 @@ app.registerExtension({
 
                 hideDataWidgets();
                 syncIntposFromProperties();
-                updatePortLabels();
+                refreshCoreState();
                 updateOutputTypes();
                 applyContainerSize(this.size[1]);
                 requestDraw();
@@ -559,13 +578,17 @@ app.registerExtension({
                     originalOnPropertyChanged.apply(this, arguments);
                 }
                 syncIntposFromProperties();
-                updatePortLabels();
+                refreshCoreState();
                 updateOutputTypes();
                 requestDraw();
                 this.setDirtyCanvas?.(true, false);
             };
 
             this.onResize = function (size) {
+                if (!isNodes2Environment()) {
+                    const minNodeHeight = getMinCanvasHeight() + 30 + getLegacyBottomGap();
+                    size[1] = Math.max(size[1], minNodeHeight);
+                }
                 finishPointerDrag();
                 debugLog("onResize", { incomingSize: [...size] });
                 applyContainerSize(size[1]);
@@ -617,7 +640,7 @@ app.registerExtension({
                 }
 
                 syncIntposFromProperties();
-                updatePortLabels();
+                refreshCoreState();
                 updateOutputTypes();
                 requestDraw();
             };
@@ -651,7 +674,7 @@ app.registerExtension({
                 }
 
                 syncIntposFromProperties();
-                updatePortLabels();
+                refreshCoreState();
                 updateOutputTypes();
             };
         };
