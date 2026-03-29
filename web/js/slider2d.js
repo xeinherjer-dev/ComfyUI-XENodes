@@ -224,13 +224,21 @@ app.registerExtension({
             let cachedRect = null;
             let domWidget;
             let isDragging = false;
-            let lastLabelUpdate = 0;
 
-            const syncWidgets = () => {
+            const syncWidgets = (invokeCallback = false) => {
                 if (!this.widgets) return;
                 for (const widget of this.widgets) {
-                    if (widget.name === "X") widget.value = this.properties.valueX;
-                    if (widget.name === "Y") widget.value = this.properties.valueY;
+                    let valToSet = null;
+                    if (widget.name === "X") valToSet = this.properties.valueX;
+                    if (widget.name === "Y") valToSet = this.properties.valueY;
+
+                    if (valToSet !== null) {
+                        widget.value = valToSet;
+                        // Node 2.0のVue状態へ最終値を伝播させるためのコールバック
+                        if (invokeCallback && typeof widget.callback === "function") {
+                            widget.callback(valToSet, app.canvas, this, [valToSet]);
+                        }
+                    }
                 }
             };
 
@@ -243,38 +251,26 @@ app.registerExtension({
                 const valueY = this.properties.valueY.toFixed(axisY.decimals);
                 let changed = false;
 
-                const now = Date.now();
-                // In Nodes 2.0, we need to spread the object to trigger Vue reactivity, even during drag.
-                // We throttle this to ~30fps (32ms) to balance UI responsiveness and performance (GC/re-renders).
-                const shouldSpread = !isDragging || (now - lastLabelUpdate > 32);
-
                 if (this.outputs[0] && this.outputs[0].label !== valueX) {
                     this.outputs[0].label = valueX;
-                    if (shouldSpread) {
-                        this.outputs[0] = { ...this.outputs[0] };
-                    }
+                    this.outputs[0] = { ...this.outputs[0] };
                     changed = true;
                 }
 
                 if (this.outputs[1] && this.outputs[1].label !== valueY) {
                     this.outputs[1].label = valueY;
-                    if (shouldSpread) {
-                        this.outputs[1] = { ...this.outputs[1] };
-                    }
+                    this.outputs[1] = { ...this.outputs[1] };
                     changed = true;
                 }
 
                 if (changed) {
-                    if (shouldSpread) {
-                        this.outputs = [...this.outputs];
-                        lastLabelUpdate = now;
-                    }
+                    this.outputs = [...this.outputs];
                     if (!isDragging) {
                         this.setDirtyCanvas?.(true, true);
                     }
                 }
 
-                syncWidgets();
+                syncWidgets(!isDragging);
             };
 
             const updateOutputTypes = () => {
@@ -591,18 +587,61 @@ app.registerExtension({
                 canvas.removeEventListener("wheel", handleWheel);
             };
 
+            this.serialize_widgets = true;
+
             const originalOnConfigure = this.onConfigure;
-            this.onConfigure = function () {
+            this.onConfigure = function (info) {
                 if (originalOnConfigure) {
                     originalOnConfigure.apply(this, arguments);
                 }
                 if (this.properties) {
                     cleanupLegacyProperties();
                 }
+
+                // Hydrate from ComfyUI widgets_values first if they exist
+                if (info && Array.isArray(info.widgets_values) && this.widgets) {
+                    for (let i = 0; i < this.widgets.length; i++) {
+                        const widget = this.widgets[i];
+                        const wval = info.widgets_values[i];
+                        if (widget.name === "X" && typeof wval === "number") {
+                            this.properties.valueX = wval;
+                            if (wval > this.properties.maxX) this.properties.maxX = wval;
+                            if (wval < this.properties.minX) this.properties.minX = wval;
+                        }
+                        if (widget.name === "Y" && typeof wval === "number") {
+                            this.properties.valueY = wval;
+                            if (wval > this.properties.maxY) this.properties.maxY = wval;
+                            if (wval < this.properties.minY) this.properties.minY = wval;
+                        }
+                    }
+                }
+
                 syncIntposFromProperties();
                 updatePortLabels();
                 updateOutputTypes();
                 requestDraw();
+            };
+
+            const originalOnSerialize = this.onSerialize;
+            this.onSerialize = function (info) {
+                if (originalOnSerialize) {
+                    originalOnSerialize.apply(this, arguments);
+                }
+
+                info.properties = info.properties || {};
+                Object.assign(info.properties, this.properties);
+
+                if (Array.isArray(info.widgets_values) && this.widgets?.length) {
+                    for (let i = 0; i < this.widgets.length; i++) {
+                        const widget = this.widgets[i];
+                        if (widget.name === "X") {
+                            info.widgets_values[i] = this.properties.valueX;
+                        }
+                        if (widget.name === "Y") {
+                            info.widgets_values[i] = this.properties.valueY;
+                        }
+                    }
+                }
             };
 
             const originalOnConnectionsChange = this.onConnectionsChange;
