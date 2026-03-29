@@ -304,12 +304,10 @@ app.registerExtension({
                 if (this.properties?.hide_connections) {
                     size[1] = buttonCount * BUTTON_HEIGHT + 20;
                     size[0] = Math.max(120, maxLabelWidth + 40);
-                    this.widgets_up = true;
                     this.widgets_start_y = 0;
                 } else {
                     size[1] += 10;
                     size[0] = Math.max(size[0], maxLabelWidth + 60);
-                    this.widgets_up = undefined;
                     this.widgets_start_y = undefined;
                 }
 
