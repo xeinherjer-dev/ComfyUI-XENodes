@@ -89,7 +89,8 @@ app.registerExtension({
 
 				this.onResize = function (size) {
 					const minSize = this.computeSize ? this.computeSize() : [200, 100];
-					size[1] = minSize[1]; // Force height to be minimum
+					size[0] = Math.max(size[0], minSize[0]);
+					size[1] = Math.max(size[1], minSize[1]);
 				};
 
 				return r;
