@@ -224,6 +224,7 @@ app.registerExtension({
             let cachedRect = null;
             let domWidget;
             let isDragging = false;
+            let lastLabelUpdate = 0;
 
             const syncWidgets = () => {
                 if (!this.widgets) return;
@@ -242,10 +243,14 @@ app.registerExtension({
                 const valueY = this.properties.valueY.toFixed(axisY.decimals);
                 let changed = false;
 
+                const now = Date.now();
+                // In Nodes 2.0, we need to spread the object to trigger Vue reactivity, even during drag.
+                // We throttle this to ~30fps (32ms) to balance UI responsiveness and performance (GC/re-renders).
+                const shouldSpread = !isDragging || (now - lastLabelUpdate > 32);
+
                 if (this.outputs[0] && this.outputs[0].label !== valueX) {
                     this.outputs[0].label = valueX;
-                    // Skip reactivity spread during drag
-                    if (!isDragging) {
+                    if (shouldSpread) {
                         this.outputs[0] = { ...this.outputs[0] };
                     }
                     changed = true;
@@ -253,16 +258,20 @@ app.registerExtension({
 
                 if (this.outputs[1] && this.outputs[1].label !== valueY) {
                     this.outputs[1].label = valueY;
-                    // Skip reactivity spread during drag
-                    if (!isDragging) {
+                    if (shouldSpread) {
                         this.outputs[1] = { ...this.outputs[1] };
                     }
                     changed = true;
                 }
 
-                if (changed && !isDragging) {
-                    this.outputs = [...this.outputs];
-                    this.setDirtyCanvas?.(true, true);
+                if (changed) {
+                    if (shouldSpread) {
+                        this.outputs = [...this.outputs];
+                        lastLabelUpdate = now;
+                    }
+                    if (!isDragging) {
+                        this.setDirtyCanvas?.(true, true);
+                    }
                 }
 
                 syncWidgets();
