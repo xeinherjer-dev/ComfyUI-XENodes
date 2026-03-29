@@ -35,29 +35,36 @@ app.registerExtension({
 				};
 
 				if (formatWidget && codecWidget && crfWidget) {
+					const originalCodecOptions = [...codecWidget.options.values];
+
+					const updateCodecs = () => {
+						if (formatWidget.value === "webm") {
+							codecWidget.options.values = ["av1"];
+							if (codecWidget.value !== "av1") {
+								codecWidget.value = "av1";
+								if (codecWidget.callback) codecWidget.callback("av1");
+							}
+						} else {
+							codecWidget.options.values = originalCodecOptions;
+						}
+					};
+
 					const origFormatCallback = formatWidget.callback;
 					formatWidget.callback = function (v) {
-						if (v === "webm") {
-							codecWidget.value = "av1";
-							if (codecWidget.callback) {
-								codecWidget.callback("av1");
-							}
-						}
-						return origFormatCallback ? origFormatCallback.apply(this, arguments) : undefined;
+						const res = origFormatCallback ? origFormatCallback.apply(this, arguments) : undefined;
+						updateCodecs();
+						updateCrf();
+						return res;
 					};
 
 					const origCodecCallback = codecWidget.callback;
 					codecWidget.callback = function (v) {
-						if (formatWidget.value === "webm" && v !== "av1") {
-							// Force AV1 for WebM if they try to change it
-							setTimeout(() => { codecWidget.value = "av1"; }, 1);
-						} else {
-							updateCrf();
-						}
+						updateCrf();
 						return origCodecCallback ? origCodecCallback.apply(this, arguments) : undefined;
 					};
 
 					// Initial sync
+					updateCodecs();
 					updateCrf();
 				}
 
