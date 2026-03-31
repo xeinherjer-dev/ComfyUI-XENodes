@@ -9,7 +9,9 @@ const NODES2_MIN_CANVAS_H = 50;
 const LEGACY_MIN_CANVAS_H = 80;
 const LEGACY_SIDE_MARGIN = 4;
 const LEGACY_BOTTOM_GAP = 16;
-const LEGACY_FALLBACK_TOP_OFFSET = 80;
+// Legacy mode: domWidget.y is always (outputCount + 0.2) * NODE_SLOT_HEIGHT + 2.
+// With 2 outputs and NODE_SLOT_HEIGHT=20 → (2.2 × 20) + 2 = 46. Static value; no runtime read.
+const LEGACY_TOP_OFFSET = (2 + 0.2) * (globalThis.LiteGraph?.NODE_SLOT_HEIGHT ?? 20) + 2;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
@@ -332,12 +334,10 @@ app.registerExtension({
                     return;
                 }
 
-                const topOffset = domWidget?.y ?? 70;
+                // Widget start Y is static: (N_outputs + 0.2) * NODE_SLOT_HEIGHT + 2 = 46.
+                // No need to read domWidget.y at runtime.
+                const overlapUp = LEGACY_TOP_OFFSET;
                 const bottomGap = getLegacyBottomGap();
-                
-                // MATH PROVEN: In ComfyUI's Legacy mode, domWidget.y (topOffset) is the offset BELOW the 30px title bar!
-                // Therefore, if domWidget.y = 46, we must pull the container UP by exactly 46px to reach the title bar perfectly.
-                const overlapUp = topOffset;
                 
                 // Because its top is now at the exact bottom of the 30px title bar, its available height is:
                 const canvasHeight = Math.max(
@@ -556,21 +556,11 @@ app.registerExtension({
             refreshCoreState();
             updateOutputTypes();
 
-            let initFrames = 0;
-            const initLayout = () => {
-                if (initFrames++ < 2) {
-                    requestAnimationFrame(initLayout);
-                    return;
-                }
-
-                hideDataWidgets();
-                syncIntposFromProperties();
-                refreshCoreState();
-                updateOutputTypes();
-                applyContainerSize(this.size[1]);
-                requestDraw();
-            };
-            requestAnimationFrame(initLayout);
+            // applyContainerSize no longer depends on domWidget.y (static offset).
+            // Just defer one frame for the canvas to get its final dimensions.
+            hideDataWidgets();
+            applyContainerSize(this.size[1]);
+            requestAnimationFrame(() => requestDraw());
 
             const originalOnPropertyChanged = this.onPropertyChanged;
             this.onPropertyChanged = function () {
@@ -642,7 +632,9 @@ app.registerExtension({
                 syncIntposFromProperties();
                 refreshCoreState();
                 updateOutputTypes();
-                requestDraw();
+                hideDataWidgets();
+                applyContainerSize(this.size[1]);
+                requestAnimationFrame(() => requestDraw());
             };
 
             const originalOnSerialize = this.onSerialize;
