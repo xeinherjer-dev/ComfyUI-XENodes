@@ -23,7 +23,7 @@ app.registerExtension({
 				const CODEC_CRF_MAP = {
 					'h264': 23,
 					'h265': 28,
-					'av1': 46
+					'av1': 42
 				};
 
 				const updateCrf = () => {
