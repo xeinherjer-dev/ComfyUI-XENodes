@@ -61,8 +61,6 @@ class SaveVideo(io.ComfyNode):
 
         # loop: 0 = play once, N > 0 = loop N times (play N+1 times total)
         total_plays = loop_count + 1
-        if total_plays > 1:
-            images = torch.cat([images] * total_plays, dim=0)
 
         # === Audio transformation ===
         audio_sample_rate = 1
@@ -144,11 +142,12 @@ class SaveVideo(io.ComfyNode):
                     audio_stream = None
 
             # Encode modified frames
-            for frame_tensor in images:
-                img = (frame_tensor * 255).clamp(0, 255).byte().cpu().numpy()  # shape: (H, W, 3)
-                frame = av.VideoFrame.from_ndarray(img, format='rgb24')
-                frame = frame.reformat(format=pix_fmt)
-                output.mux(video_stream.encode(frame))
+            for _ in range(total_plays):
+                for frame_tensor in images:
+                    img = (frame_tensor * 255).clamp(0, 255).byte().cpu().numpy()  # shape: (H, W, 3)
+                    frame = av.VideoFrame.from_ndarray(img, format='rgb24')
+                    frame = frame.reformat(format=pix_fmt)
+                    output.mux(video_stream.encode(frame))
 
             # Flush video encoder
             output.mux(video_stream.encode(None))
