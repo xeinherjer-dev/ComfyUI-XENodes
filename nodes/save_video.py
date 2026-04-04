@@ -23,17 +23,17 @@ class SaveVideo(io.ComfyNode):
             inputs=[
                 io.Video.Input("video", tooltip="The video to save."),
                 io.String.Input("filename_prefix", default="video/ComfyUI", tooltip="The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."),
-                io.Int.Input("loop_count", default=0, min=0, max=100, step=1, tooltip="Loop count. 0 = play once. For mp4/webm, this physically repeats the frames."),
                 io.Combo.Input("format", options=["mp4", "webm"], default="mp4", tooltip="The format to save the video as."),
                 io.Combo.Input("codec", options=["h264", "h265", "av1"], default="av1", tooltip="The codec to use for the video."),
                 io.Float.Input("crf", default=0.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used for encoding. Set to 0 to use encoder defaults."),
+                io.Int.Input("loop_count", default=0, min=0, max=100, step=1, tooltip="Loop count. 0 = play once. For mp4/webm, this physically repeats the frames."),
             ],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
         )
 
     @classmethod
-    def execute(cls, video: Input.Video, filename_prefix: str, loop_count: int, format: str, codec: str, crf: float) -> io.NodeOutput:
+    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float, loop_count: int) -> io.NodeOutput:
         width, height = video.get_dimensions()
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix,
