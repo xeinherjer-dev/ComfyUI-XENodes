@@ -28,7 +28,7 @@ class MultiSwitchNode(io.ComfyNode):
             category="XENodes",
             inputs=[
                 io.Int.Input("select", default=0, min=0, max=49),
-                _io.Autogrow.Input("inputs", template=autogrow_template),
+                _io.Autogrow.Input("inputs", template=autogrow_template, lazy=True),
             ],
             outputs=[
                 io.MatchType.Output(template=template, display_name="output"),
@@ -39,8 +39,14 @@ class MultiSwitchNode(io.ComfyNode):
     @classmethod
     def check_lazy_status(cls, select: int, inputs: _io.Autogrow.Type) -> list[str]:
         selected_key = cls._selected_key(select, inputs)
-        if selected_key is not None and inputs[selected_key] is None:
-            return [f"inputs.{selected_key}"]
+        if selected_key is not None:
+            value = inputs[selected_key]
+            if isinstance(value, tuple):
+                actual_value, full_key = value
+                if actual_value is None:
+                    return [full_key]
+            elif value is None:
+                return [f"inputs.{selected_key}"]
         return []
 
     @classmethod
@@ -48,6 +54,20 @@ class MultiSwitchNode(io.ComfyNode):
         selected_key = cls._selected_key(select, inputs)
         selected_value = inputs[selected_key] if selected_key is not None else None
         return io.NodeOutput(selected_value, select)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        # Workaround for ComfyUI V3 API: graph.py's get_input_info does not expand dynamic inputs.
+        # It checks INPUT_TYPES() explicitly, causing dynamic lazy pins to be unconditionally executed.
+        # We manually inject all 50 possible dynamic inputs here so the engine knows they are lazy.
+        res = super(MultiSwitchNode, cls).INPUT_TYPES()
+        import copy
+        res = copy.deepcopy(res)
+        if "optional" not in res:
+            res["optional"] = {}
+        for i in range(50):
+            res["optional"][f"inputs.input{i:02d}"] = ("*", {"lazy": True})
+        return res
 
 class MultiSwitchExtension(ComfyExtension):
     @override
