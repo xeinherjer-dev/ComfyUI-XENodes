@@ -27,13 +27,14 @@ class SaveVideo(io.ComfyNode):
                 io.Combo.Input("codec", options=["h264", "h265", "av1"], default="av1", tooltip="The codec to use for the video."),
                 io.Float.Input("crf", default=0.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used for encoding. Set to 0 to use encoder defaults."),
                 io.Int.Input("loop_count", default=0, min=0, max=100, step=1, tooltip="Loop count. 0 = play once. For mp4/webm, this physically repeats the frames."),
+                io.Boolean.Input("pingpong", default=False, tooltip="Pingpong animation (images only). Plays frames forward then backward."),
             ],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
         )
 
     @classmethod
-    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float, loop_count: int) -> io.NodeOutput:
+    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float, loop_count: int, pingpong: bool) -> io.NodeOutput:
         width, height = video.get_dimensions()
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix,
@@ -55,9 +56,17 @@ class SaveVideo(io.ComfyNode):
         components = video.get_components()
         frame_rate = Fraction(round(components.frame_rate * 1000), 1000)
 
-        # === Frame sequence transformation ===
+        # === Frame sequence generation ===
         images = components.images  # shape: (N, H, W, 3)
-        n_orig = images.shape[0]
+        num_images = images.shape[0]
+
+        # Generate lightweight index list for streaming frames
+        if pingpong and num_images > 2:
+            frame_indices = list(range(num_images)) + list(range(num_images - 2, 0, -1))
+        else:
+            frame_indices = list(range(num_images))
+            
+        n_orig = len(frame_indices) # Audio logic automatically scales to this elongated pingpong loop length
 
         # loop: 0 = play once, N > 0 = loop N times (play N+1 times total)
         total_plays = loop_count + 1
@@ -143,7 +152,8 @@ class SaveVideo(io.ComfyNode):
 
             # Encode modified frames
             for _ in range(total_plays):
-                for frame_tensor in images:
+                for idx in frame_indices:
+                    frame_tensor = images[idx]
                     img = (frame_tensor * 255).clamp(0, 255).byte().cpu().numpy()  # shape: (H, W, 3)
                     frame = av.VideoFrame.from_ndarray(img, format='rgb24')
                     frame = frame.reformat(format=pix_fmt)
