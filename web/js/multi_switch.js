@@ -85,6 +85,21 @@ app.registerExtension({
                     app.canvas?.setDirty(true, true);
                 }
             });
+
+            const unselectedMode = this.properties?.unselected_mode || "None";
+            options.push({
+                content: `Unselected Mode: ${unselectedMode}`,
+                callback: () => {
+                    const modes = ["None", "Mute", "Bypass"];
+                    const nextMode = modes[(modes.indexOf(unselectedMode) + 1) % modes.length];
+                    this.properties = this.properties || {};
+                    this.properties.unselected_mode = nextMode;
+                    if (this.updateUnselectedNodesModes) {
+                        this.updateUnselectedNodesModes(nextMode === "None");
+                    }
+                    app.canvas?.setDirty(true, true);
+                }
+            });
         };
 
         const originalDrawSlots = nodeType.prototype.drawSlots;
@@ -110,6 +125,9 @@ app.registerExtension({
             this.properties = this.properties || {};
             if (this.properties.hide_connections === undefined) {
                 this.properties.hide_connections = false;
+            }
+            if (this.properties.unselected_mode === undefined) {
+                this.properties.unselected_mode = "None";
             }
 
             this.applyHideConnections = () => {
@@ -202,6 +220,35 @@ app.registerExtension({
 
             let maxLabelWidth = MIN_LABEL_WIDTH;
 
+            this.updateUnselectedNodesModes = (restoreAll = false) => {
+                const modeStr = this.properties?.unselected_mode || "None";
+                const isNone = modeStr === "None";
+                if (isNone && !restoreAll) return;
+
+                const targetMode = modeStr === "Mute" ? 2 : 4; // 2: Mute, 4: Bypass
+                const currentValue = Math.floor(selectWidget.value || 0);
+                const inputSlots = getManagedInputs(this);
+
+                let changed = false;
+                for (let i = 0; i < inputSlots.length; i++) {
+                    const inputSlot = inputSlots[i];
+                    if (inputSlot.link == null) continue;
+
+                    const link = app.graph?.links?.[inputSlot.link];
+                    const originNode = link ? app.graph.getNodeById(link.origin_id) : null;
+                    if (originNode) {
+                        const newMode = (i === currentValue || isNone) ? 0 : targetMode;
+                        if (originNode.mode !== newMode) {
+                            originNode.mode = newMode;
+                            changed = true;
+                        }
+                    }
+                }
+                if (changed && app.graph) {
+                    app.graph.setDirtyCanvas(true, true);
+                }
+            };
+
             const updateButtons = () => {
                 // Check if the select pin is connected
                 const isSelectConnected = this.inputs?.some(i => i.name === "select" && i.link != null);
@@ -220,6 +267,10 @@ app.registerExtension({
                     button.disabled = isSelectConnected;
                     button.style.cursor = isSelectConnected ? "default" : "pointer";
                 });
+
+                if (this.updateUnselectedNodesModes) {
+                    this.updateUnselectedNodesModes();
+                }
             };
 
             const rebuildButtons = this.rebuildButtons = () => {

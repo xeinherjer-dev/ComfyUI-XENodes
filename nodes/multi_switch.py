@@ -5,11 +5,8 @@ from comfy_api.latest import _io
 
 class MultiSwitchNode(io.ComfyNode):
     @staticmethod
-    def _selected_key(select: int, inputs: _io.Autogrow.Type) -> str | None:
-        keys = list(inputs.keys())
-        if 0 <= select < len(keys):
-            return keys[select]
-        return None
+    def _selected_key(select: int) -> str:
+        return f"input{select:02d}"
 
     @classmethod
     def define_schema(cls):
@@ -19,7 +16,7 @@ class MultiSwitchNode(io.ComfyNode):
         autogrow_template = _io.Autogrow.TemplateNames(
             input=io.MatchType.Input("value", template=template, lazy=True),
             names=names,
-            min=1
+            min=0
         )
 
         return io.Schema(
@@ -38,21 +35,26 @@ class MultiSwitchNode(io.ComfyNode):
 
     @classmethod
     def check_lazy_status(cls, select: int, inputs: _io.Autogrow.Type) -> list[str]:
-        selected_key = cls._selected_key(select, inputs)
-        if selected_key is not None:
-            value = inputs[selected_key]
-            if isinstance(value, tuple):
-                actual_value, full_key = value
-                if actual_value is None:
-                    return [full_key]
-            elif value is None:
-                return [f"inputs.{selected_key}"]
+        selected_key = cls._selected_key(select)
+        
+        # If the expected key isn't in inputs yet, it still needs to be evaluated.
+        if selected_key not in inputs:
+            return [f"inputs.{selected_key}"]
+            
+        value = inputs.get(selected_key)
+        if isinstance(value, tuple):
+            actual_value, full_key = value
+            if actual_value is None:
+                return [full_key]
+        elif value is None:
+            return [f"inputs.{selected_key}"]
+            
         return []
 
     @classmethod
     def execute(cls, select: int, inputs: _io.Autogrow.Type) -> io.NodeOutput:
-        selected_key = cls._selected_key(select, inputs)
-        selected_value = inputs[selected_key] if selected_key is not None else None
+        selected_key = cls._selected_key(select)
+        selected_value = inputs.get(selected_key)
         return io.NodeOutput(selected_value, select)
 
     @classmethod
