@@ -4,6 +4,7 @@ from .nodes.slider import comfy_entrypoint as slider_entrypoint
 from .nodes.slider2d import comfy_entrypoint as slider2d_entrypoint
 from .nodes.save_video import comfy_entrypoint as save_video_entrypoint
 from .nodes.save_image import comfy_entrypoint as save_image_entrypoint
+from .nodes.dynamic_combo_selector import comfy_entrypoint as dynamic_combo_selector_entrypoint
 
 WEB_DIRECTORY = "./web"
 
@@ -24,6 +25,7 @@ async def comfy_entrypoint() -> XENodesExtension:
         await slider2d_entrypoint(),
         await save_video_entrypoint(),
         await save_image_entrypoint(),
+        await dynamic_combo_selector_entrypoint(),
     ]
     return XENodesExtension(exts)
 

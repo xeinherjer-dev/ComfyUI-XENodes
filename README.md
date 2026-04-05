@@ -53,6 +53,14 @@ An image saving node with configurable **format** (`png`, `webp`), **lossless** 
 
 A video saving node with configurable **format** (`mp4`, `webm`), **codec** (`h264`, `h265`, `av1`), and **crf** settings.
 
+### Dynamic Combo Selector
+
+A utility node that allows selecting a COMBO (dropdown) value by its numerical **index**.
+
+- **Auto-Discovery**: Dynamically reads the available options from the connected target node.
+- **Index Selection**: Input an `INT` to select items by index.
+- **Dual Output**: Provides both **COMBO** and **STRING** types for flexible connectivity.
+
 ## License
 
 This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
