@@ -216,9 +216,8 @@ app.registerExtension({
                     const isActive = isSelectConnected ? false : index === currentValue;
                     setButtonActiveState(button, isActive);
 
-                    // Disable and gray out (reduce opacity) buttons when connected
+                    // Disable buttons when connected, but do not change opacity to prevent base artifacts from showing
                     button.disabled = isSelectConnected;
-                    button.style.opacity = isSelectConnected ? "0.5" : "1.0";
                     button.style.cursor = isSelectConnected ? "default" : "pointer";
                 });
             };
