@@ -203,8 +203,8 @@ app.registerExtension({
             let maxLabelWidth = MIN_LABEL_WIDTH;
 
             const updateButtons = () => {
-                // Check if the select pin is connected OR if the widget is converted to an input slot
-                const isSelectConnected = (this.inputs?.some(i => i.name === "select" && i.link != null)) || (selectWidget.type === "converted-widget");
+                // Check if the select pin is connected
+                const isSelectConnected = this.inputs?.some(i => i.name === "select" && i.link != null);
                 const currentValue = Math.floor(selectWidget.value || 0);
 
                 // Disable the select widget if connected
