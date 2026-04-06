@@ -112,6 +112,18 @@ app.registerExtension({
             }
         };
 
+        const originalOnPropertyChanged = nodeType.prototype.onPropertyChanged;
+        nodeType.prototype.onPropertyChanged = function (name, value) {
+            if (originalOnPropertyChanged) {
+                originalOnPropertyChanged.apply(this, arguments);
+            }
+            if (name === "hide_connections") {
+                this.applyHideConnections?.();
+            } else if (name === "unselected_mode") {
+                this.updateUnselectedNodesModes?.(value === "None");
+            }
+        };
+
         const originalOnNodeCreated = nodeType.prototype.onNodeCreated;
 
         nodeType.prototype.onNodeCreated = function () {
@@ -195,8 +207,9 @@ app.registerExtension({
                 }
 
                 // Force canvas redraw
-                if (app && app.graph) {
-                    app.graph.setDirtyCanvas(true, true);
+                const graph = this.graph || app.graph;
+                if (graph) {
+                    graph.setDirtyCanvas(true, true);
                 }
             };
 
@@ -230,12 +243,13 @@ app.registerExtension({
                 const inputSlots = getManagedInputs(this);
 
                 let changed = false;
+                const graph = this.graph || app.graph;
                 for (let i = 0; i < inputSlots.length; i++) {
                     const inputSlot = inputSlots[i];
                     if (inputSlot.link == null) continue;
 
-                    const link = app.graph?.links?.[inputSlot.link];
-                    const originNode = link ? app.graph.getNodeById(link.origin_id) : null;
+                    const link = graph?.links?.[inputSlot.link];
+                    const originNode = link ? graph.getNodeById(link.origin_id) : null;
                     if (originNode) {
                         const newMode = (i === currentValue || isNone) ? 0 : targetMode;
                         if (originNode.mode !== newMode) {
@@ -244,8 +258,8 @@ app.registerExtension({
                         }
                     }
                 }
-                if (changed && app.graph) {
-                    app.graph.setDirtyCanvas(true, true);
+                if (changed && graph) {
+                    graph.setDirtyCanvas(true, true);
                 }
             };
 
@@ -281,6 +295,7 @@ app.registerExtension({
                 let maxValidIndex = 0;
                 maxLabelWidth = MIN_LABEL_WIDTH;
 
+                const graph = this.graph || app.graph;
                 for (let i = 0; i < inputSlots.length; i++) {
                     const inputSlot = inputSlots[i];
                     inputSlot.label = formatInputLabel(inputSlot.name);
@@ -289,8 +304,8 @@ app.registerExtension({
 
                     maxValidIndex = Math.max(maxValidIndex, i);
 
-                    const link = app.graph?.links?.[inputSlot.link];
-                    const originNode = link ? app.graph.getNodeById(link.origin_id) : null;
+                    const link = graph?.links?.[inputSlot.link];
+                    const originNode = link ? graph.getNodeById(link.origin_id) : null;
                     const label = `[${i}] ${originNode?.title || originNode?.type || "(Empty)"}`;
 
                     const measuredWidth = measureContext
@@ -392,11 +407,12 @@ app.registerExtension({
                 if (this.flags.collapsed) return;
                 const inputSlots = getManagedInputs(this);
                 let currentFingerprint = "";
+                const graph = this.graph || app.graph;
                 for (let i = 0; i < inputSlots.length; i++) {
                     const inputSlot = inputSlots[i];
                     if (inputSlot.link == null) continue;
-                    const link = app.graph?.links?.[inputSlot.link];
-                    const originNode = link ? app.graph.getNodeById(link.origin_id) : null;
+                    const link = graph?.links?.[inputSlot.link];
+                    const originNode = link ? graph.getNodeById(link.origin_id) : null;
                     currentFingerprint += `${i}:${originNode?.title || originNode?.type || ""}|`;
                 }
 
