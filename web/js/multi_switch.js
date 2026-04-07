@@ -134,13 +134,9 @@ app.registerExtension({
             const selectWidget = this.widgets?.find((widget) => widget.name === "select");
             if (!selectWidget) return result;
 
-            this.properties = this.properties || {};
-            if (this.properties.hide_connections === undefined) {
-                this.properties.hide_connections = false;
-            }
-            if (this.properties.unselected_mode === undefined) {
-                this.properties.unselected_mode = "None";
-            }
+            // Define properties for the property panel
+            this.addProperty("hide_connections", false, "boolean");
+            this.addProperty("unselected_mode", "None", "enum", { values: ["None", "Mute", "Bypass"] });
 
             this.applyHideConnections = () => {
                 const isHidden = this.properties.hide_connections === true;
