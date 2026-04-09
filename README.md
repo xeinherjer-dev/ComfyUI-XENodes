@@ -61,6 +61,13 @@ A utility node that allows selecting a COMBO (dropdown) value by its numerical *
 - **Index Selection**: Input an `INT` to select items by index.
 - **Dual Output**: Provides both **COMBO** and **STRING** types for flexible connectivity.
 
+### Show Any
+
+A visual debug node that displays any input value as text directly on the node.
+
+- **Any Input**: Accepts any data type and converts it to a readable string representation (JSON for complex objects).
+- **Composite ID Support**: Fully compatible with Nodes 2.0 Group Nodes, ensuring progress is saved correctly even when nested.
+
 ## License
 
 This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.

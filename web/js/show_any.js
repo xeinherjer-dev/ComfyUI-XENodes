@@ -2,9 +2,9 @@ import { app } from "../../../scripts/app.js";
 import { ComfyWidgets } from "../../../scripts/widgets.js";
 
 app.registerExtension({
-    name: "XENodes.ShowText",
+    name: "XENodes.ShowAny",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "XENodes.ShowText") {
+        if (nodeData.name === "XENodes.ShowAny") {
 
             /**
              * Populate text preview widgets

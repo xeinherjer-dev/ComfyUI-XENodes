@@ -5,14 +5,14 @@ import logging
 
 from comfy_api.latest import ComfyExtension, io
 
-class ShowTextNode(io.ComfyNode):
+class ShowAnyNode(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         template = io.MatchType.Template("*", allowed_types=io.AnyType)
 
         return io.Schema(
-            node_id="XENodes.ShowText",
-            display_name="Show Text",
+            node_id="XENodes.ShowAny",
+            display_name="Show Any",
             category="XENodes",
             inputs=[
                 io.MatchType.Input("value", template=template, display_name="any"),
@@ -53,7 +53,7 @@ class ShowTextNode(io.ComfyNode):
                 definitions = workflow.get("definitions", {})
                 
                 if not cls.mutate_workflow_data(nodes, str(unique_id), text_str, definitions):
-                    logging.warning(f"[XENodes.ShowText] Failed to update workflow data for node {unique_id}")
+                    logging.warning(f"[XENodes.ShowAny] Failed to update workflow data for node {unique_id}")
 
         # Return original value (for the 'any' output)
         # The 'ui' dict triggers the frontend JavaScript to update the node's visual widget
@@ -84,8 +84,8 @@ class ShowTextNode(io.ComfyNode):
 
             # Intermediate node: dive deeper into the subgraph
             node_type = node.get("type")
-            for sub_list in ShowTextNode._get_sub_nodes(node, node_type, definitions):
-                if sub_list and ShowTextNode.mutate_workflow_data(sub_list, remaining_id, new_text, definitions):
+            for sub_list in ShowAnyNode._get_sub_nodes(node, node_type, definitions):
+                if sub_list and ShowAnyNode.mutate_workflow_data(sub_list, remaining_id, new_text, definitions):
                     return True
 
         return False
@@ -136,11 +136,11 @@ class ShowTextNode(io.ComfyNode):
         return candidates
 
 
-class ShowTextExtension(ComfyExtension):
+class ShowAnyExtension(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        return [ShowTextNode]
+        return [ShowAnyNode]
 
 
-async def comfy_entrypoint() -> ShowTextExtension:
-    return ShowTextExtension()
+async def comfy_entrypoint() -> ShowAnyExtension:
+    return ShowAnyExtension()
