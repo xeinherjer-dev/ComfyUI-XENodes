@@ -18,7 +18,7 @@ class ShowTextNode(io.ComfyNode):
                 io.MatchType.Input("value", template=template, display_name="any"),
             ],
             outputs=[
-                io.String.Output(display_name="STRING"),
+                io.MatchType.Output(template=template, display_name="any"),
             ],
             is_output_node=True,
             hidden=[io.Hidden.unique_id, io.Hidden.extra_pnginfo]
@@ -28,7 +28,7 @@ class ShowTextNode(io.ComfyNode):
     def execute(cls, **kwargs) -> io.NodeOutput:
         value = kwargs.get("value")
 
-        # Convert arbitrary input to string
+        # Convert arbitrary input to its string representation for UI display
         if value is None:
             text_str = "None"
         elif isinstance(value, str):
@@ -41,7 +41,8 @@ class ShowTextNode(io.ComfyNode):
             except Exception:
                 text_str = str(value)
 
-        # Workflow persistence (Subgraph support)
+        # Workflow persistence (Subgraph & Group Node support)
+        # Using the framework's native hidden context which properly resolves composite IDs
         if hasattr(cls, "hidden") and cls.hidden:
             unique_id = cls.hidden.unique_id
             extra_pnginfo = cls.hidden.extra_pnginfo
@@ -50,15 +51,18 @@ class ShowTextNode(io.ComfyNode):
                 workflow = extra_pnginfo["workflow"]
                 nodes = workflow.get("nodes", [])
                 definitions = workflow.get("definitions", {})
+                
                 if not cls.mutate_workflow_data(nodes, str(unique_id), text_str, definitions):
                     logging.warning(f"[XENodes.ShowText] Failed to update workflow data for node {unique_id}")
 
-        return io.NodeOutput(text_str, ui={"text": [text_str]})
+        # Return original value (for the 'any' output)
+        # The 'ui' dict triggers the frontend JavaScript to update the node's visual widget
+        return io.NodeOutput(value, ui={"text": [text_str]})
 
     @staticmethod
     def mutate_workflow_data(nodes: list, target_id: str, new_text: str, definitions: dict = None) -> bool:
         """
-        Split hierarchical node ID (e.g., "7:1") to search recursively and overwrite widgets_values.
+        Splits hierarchical node IDs (e.g., "7:1") to recursively search and overwrite widgets_values.
         Supports ComfyUI Group Node (V2) definitions["subgraphs"] structure.
         """
         id_parts = target_id.split(':', 1)
@@ -69,7 +73,7 @@ class ShowTextNode(io.ComfyNode):
             if str(node.get("id")) != current_id:
                 continue
 
-            # Final target: overwrite widgets_values
+            # Final target node reached: overwrite its widgets_values
             if remaining_id is None:
                 wv = node.setdefault("widgets_values", [])
                 if wv:
@@ -78,7 +82,7 @@ class ShowTextNode(io.ComfyNode):
                     wv.append(new_text)
                 return True
 
-            # Intermediate node: search inside subgraph
+            # Intermediate node: dive deeper into the subgraph
             node_type = node.get("type")
             for sub_list in ShowTextNode._get_sub_nodes(node, node_type, definitions):
                 if sub_list and ShowTextNode.mutate_workflow_data(sub_list, remaining_id, new_text, definitions):
@@ -89,12 +93,12 @@ class ShowTextNode(io.ComfyNode):
     @staticmethod
     def _get_sub_nodes(node: dict, node_type: str, definitions: dict) -> list[list]:
         """
-        Collect child node lists from the node.
-        Supports directly nested / properties / definitions["subgraphs"] storage formats.
+        Collects child node lists from a given node.
+        Supports various storage formats: direct nesting, properties, and definitions["subgraphs"].
         """
         candidates = []
 
-        # 1. Direct nesting
+        # 1. Direct nesting (legacy subgraphs)
         for key in ("nodes", "inner_nodes", "subgraph"):
             val = node.get(key)
             if isinstance(val, list):
@@ -111,7 +115,7 @@ class ShowTextNode(io.ComfyNode):
             elif isinstance(props.get("nodes"), list):
                 candidates.append(props["nodes"])
 
-        # 3. Inside workflow.definitions (Group Node V2)
+        # 3. Inside workflow.definitions (Group Node V2 architecture)
         if definitions and node_type:
             if node_type in definitions:
                 group_def = definitions[node_type]

@@ -13,7 +13,7 @@ app.registerExtension({
             function populate(text) {
                 if (this.widgets) {
                     for (let i = this.widgets.length - 1; i >= 0; i--) {
-                        if (this.widgets[i].name && this.widgets[i].name.startsWith("text_preview_")) {
+                        if (this.widgets[i].is_xenode_preview) {
                             if (this.widgets[i].inputEl) {
                                 this.widgets[i].inputEl.remove();
                             }
@@ -31,10 +31,12 @@ app.registerExtension({
                     if (!Array.isArray(list)) list = [list];
                     for (const l of list) {
                         try {
-                            const w = ComfyWidgets["STRING"](this, "text_preview_" + (this.widgets?.length ?? 0), ["STRING", { multiline: true }], app).widget;
+                            const w = ComfyWidgets["STRING"](this, "", ["STRING", { multiline: true }], app).widget;
                             w.inputEl.readOnly = true;
                             w.inputEl.style.opacity = 0.8; 
                             w.value = l;
+                            w.is_xenode_preview = true;
+                            w.serialize_ignore = true;
                         } catch (e) {
                             console.error("[XENodes] Widget creation failed:", e);
                         }
@@ -56,7 +58,7 @@ app.registerExtension({
                 
                 if (!message) return;
 
-                const texts = message.text || message.string || [];
+                const texts = message.text || [];
                 populate.call(this, texts);
             };
 
