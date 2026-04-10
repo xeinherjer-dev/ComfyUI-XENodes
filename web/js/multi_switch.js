@@ -52,10 +52,10 @@ const createButton = (node, selectWidget, index, label) => {
         event.preventDefault();
         event.stopPropagation();
 
-        if (selectWidget.value === index) return;
-
-        selectWidget.value = index;
-        selectWidget.callback?.(index);
+        // Clicking the already-selected button deselects (sets select to -1)
+        const newValue = selectWidget.value === index ? -1 : index;
+        selectWidget.value = newValue;
+        selectWidget.callback?.(newValue);
         node.change?.();
         node.setDirtyCanvas(true, true);
     };
@@ -313,6 +313,7 @@ app.registerExtension({
                 }
 
                 selectWidget.options = selectWidget.options || {};
+                selectWidget.options.min = -1;
                 selectWidget.options.max = maxValidIndex;
                 updateButtons();
                 container.style.display = container.children.length === 0 ? "none" : "flex";

@@ -24,7 +24,7 @@ class MultiSwitchNode(io.ComfyNode):
             display_name="Multi-Switch",
             category="XENodes",
             inputs=[
-                io.Int.Input("select", default=0, min=0, max=49),
+                io.Int.Input("select", default=0, min=-1, max=49),
                 _io.Autogrow.Input("inputs", template=autogrow_template, lazy=True),
             ],
             outputs=[
@@ -35,6 +35,10 @@ class MultiSwitchNode(io.ComfyNode):
 
     @classmethod
     def check_lazy_status(cls, select: int, inputs: _io.Autogrow.Type) -> list[str]:
+        # select=-1 means "skip": no inputs need to be evaluated.
+        if select < 0:
+            return []
+
         selected_key = cls._selected_key(select)
         
         # If the expected key isn't in inputs yet, it still needs to be evaluated.
@@ -53,6 +57,10 @@ class MultiSwitchNode(io.ComfyNode):
 
     @classmethod
     def execute(cls, select: int, inputs: _io.Autogrow.Type) -> io.NodeOutput:
+        # select=-1 means "skip": output None without evaluating any input.
+        if select < 0:
+            return io.NodeOutput(None, select)
+
         selected_key = cls._selected_key(select)
         selected_value = inputs.get(selected_key)
         return io.NodeOutput(selected_value, select)
