@@ -41,7 +41,7 @@ class ShowAnyNode(io.ComfyNode):
                 nodes = workflow.get("nodes", [])
                 definitions = workflow.get("definitions", {})
 
-        # [Core Requirement] If input is None (unconnected, Muted, etc.), read the saved value from the workflow
+        # If input is None (Muted, etc.), read the saved value from the workflow
         if value is None and unique_id:
             cached_val = cls.get_workflow_widget_value(nodes, str(unique_id), definitions)
             # Overwrite output only if value exists and is a String
