@@ -52,6 +52,30 @@ app.registerExtension({
                 });
             }
 
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                onNodeCreated?.apply(this, arguments);
+                this.properties = this.properties || {};
+                if (this.properties.hold_last_value === undefined) {
+                    this.properties.hold_last_value = false;
+                }
+            };
+
+            // Right-click menu: toggle "Hold Last Value" property
+            const getExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
+            nodeType.prototype.getExtraMenuOptions = function (canvas, options) {
+                getExtraMenuOptions?.apply(this, arguments);
+
+                const isEnabled = this.properties.hold_last_value === true;
+                options.push({
+                    content: isEnabled ? "Hold Last Value: ON  ✓" : "Hold Last Value: OFF",
+                    callback: () => {
+                        this.properties.hold_last_value = !isEnabled;
+                        app.graph.setDirtyCanvas(true, true);
+                    }
+                });
+            };
+
             const onExecuted = nodeType.prototype.onExecuted;
             nodeType.prototype.onExecuted = function(message) {
                 onExecuted?.apply(this, arguments);
@@ -72,11 +96,10 @@ app.registerExtension({
             const onConfigure = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function() {
                 onConfigure?.apply(this, arguments);
+
                 const vals = this[VALUES];
-                
                 if (vals && vals.length) {
                     const dynamicVals = vals.filter(v => typeof v === "string");
-                    
                     if (dynamicVals.length > 0) {
                         requestAnimationFrame(() => populate.call(this, dynamicVals));
                     }
