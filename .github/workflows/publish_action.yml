@@ -22,10 +22,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Force fetch the annotated tag object from remote 
+          # (Workaround for actions/checkout shallow clone limitations)
+          git fetch origin refs/tags/${{ github.ref_name }}:refs/tags/${{ github.ref_name }} --force
+
           # Extract the message from the annotated tag
           TAG_MSG=$(git tag -l --format='%(contents)' ${{ github.ref_name }})
 
-          # Use a default message if the annotation is empty
+          # Fallback to a default message if the annotation is empty
           if [ -z "$TAG_MSG" ]; then
             TAG_MSG="Release ${{ github.ref_name }}"
           fi
