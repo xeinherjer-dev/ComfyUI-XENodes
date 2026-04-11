@@ -6,9 +6,6 @@ import logging
 from comfy_api.latest import ComfyExtension, io
 
 class ShowAnyNode(io.ComfyNode):
-    # Per-instance cache of the last valid value (keyed by unique_id)
-    _last_value: dict = {}
-
     @classmethod
     def define_schema(cls):
         template = io.MatchType.Template("*", allowed_types=io.AnyType)
@@ -31,9 +28,10 @@ class ShowAnyNode(io.ComfyNode):
     def execute(cls, **kwargs) -> io.NodeOutput:
         value = kwargs.get("value")
 
-        # Retrieve unique_id for cache operations
         unique_id = None
-        hold_last_value = False
+        nodes = []
+        definitions = {}
+
         if hasattr(cls, "hidden") and cls.hidden:
             unique_id = cls.hidden.unique_id
             extra_pnginfo = cls.hidden.extra_pnginfo
@@ -43,22 +41,14 @@ class ShowAnyNode(io.ComfyNode):
                 nodes = workflow.get("nodes", [])
                 definitions = workflow.get("definitions", {})
 
-                # Read the property directly from the node representation
-                hold_last_value = cls.get_node_property(nodes, str(unique_id), "hold_last_value", definitions, False)
+        # [Core Requirement] If input is None (unconnected, Muted, etc.), read the saved value from the workflow
+        if value is None and unique_id:
+            cached_val = cls.get_workflow_widget_value(nodes, str(unique_id), definitions)
+            # Overwrite output only if value exists and is a String
+            if isinstance(cached_val, str):
+                value = cached_val
 
-        if unique_id:
-            if value is None and hold_last_value:
-                # Fall back to the cached value when input is None
-                value = cls._last_value.get(unique_id)
-            elif value is not None:
-                if hold_last_value:
-                    # Update the cache with the new valid value
-                    cls._last_value[unique_id] = value
-                else:
-                    # Cache disabled: clear any stored value
-                    cls._last_value.pop(unique_id, None)
-
-        # Convert arbitrary input to its string representation for UI display
+        # Stringify for UI display
         if value is None:
             text_str = "None"
         elif isinstance(value, str):
@@ -71,27 +61,17 @@ class ShowAnyNode(io.ComfyNode):
             except Exception:
                 text_str = str(value)
 
-        # Workflow persistence (Subgraph & Group Node support)
-        # Using the framework's native hidden context which properly resolves composite IDs
-        if hasattr(cls, "hidden") and cls.hidden:
-            extra_pnginfo = cls.hidden.extra_pnginfo
+        # Write back to workflow data (always overwrite for the next run)
+        if hasattr(cls, "hidden") and cls.hidden and unique_id:
+            if not cls.mutate_workflow_data(nodes, str(unique_id), text_str, definitions):
+                logging.warning(f"[XENodes.ShowAny] Failed to update workflow data for node {unique_id}")
 
-            if extra_pnginfo and "workflow" in extra_pnginfo:
-                workflow = extra_pnginfo["workflow"]
-                nodes = workflow.get("nodes", [])
-                definitions = workflow.get("definitions", {})
-
-                if not cls.mutate_workflow_data(nodes, str(unique_id), text_str, definitions):
-                    logging.warning(f"[XENodes.ShowAny] Failed to update workflow data for node {unique_id}")
-
-        # Return original value (for the 'any' output)
-        # The 'ui' dict triggers the frontend JavaScript to update the node's visual widget
         return io.NodeOutput(value, ui={"text": [text_str]})
 
-    @classmethod
-    def get_node_property(cls, nodes: list, target_id: str, prop_name: str, definitions: dict, default=False) -> bool:
+    @staticmethod
+    def get_workflow_widget_value(nodes: list, target_id: str, definitions: dict = None):
         """
-        Splits hierarchical node IDs to recursively search and read a property from a node.
+        Retrieves the saved widget value from the workflow data.
         """
         id_parts = target_id.split(':', 1)
         current_id = id_parts[0]
@@ -101,19 +81,21 @@ class ShowAnyNode(io.ComfyNode):
             if str(node.get("id")) != current_id:
                 continue
 
+            # Once the target node is reached, get the first value of widgets_values
             if remaining_id is None:
-                props = node.get("properties", {})
-                return props.get(prop_name, default)
+                wv = node.get("widgets_values", [])
+                if wv and len(wv) > 0:
+                    return wv[0]
+                return None
 
+            # Recursively search within Subgraph
             node_type = node.get("type")
             for sub_list in ShowAnyNode._get_sub_nodes(node, node_type, definitions):
                 if sub_list:
-                    ret = ShowAnyNode.get_node_property(sub_list, remaining_id, prop_name, definitions, default)
-                    if ret != default:
+                    ret = ShowAnyNode.get_workflow_widget_value(sub_list, remaining_id, definitions)
+                    if ret is not None:
                         return ret
-
-        return default
-
+        return None
 
     @staticmethod
     def mutate_workflow_data(nodes: list, target_id: str, new_text: str, definitions: dict = None) -> bool:
