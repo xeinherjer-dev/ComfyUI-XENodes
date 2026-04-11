@@ -16,6 +16,7 @@ jobs:
         with:
           # Required to fetch tag annotations for the release notes
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Create GitHub Release from Tag Message
         env:
