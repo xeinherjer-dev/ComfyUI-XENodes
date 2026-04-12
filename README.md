@@ -1,6 +1,6 @@
 # ComfyUI-XENodes
 
-A collection of custom nodes for ComfyUI, featuring the versatile Multi-Switch, Slider, Slider 2D, Save Image, and Save Video nodes.
+A collection of custom nodes for ComfyUI, featuring Multi-Switch, Slider, Slider 2D, Save Image, Save Video, Dynamic Combo Selector, and Show Any nodes..
 
 ## Features
 
