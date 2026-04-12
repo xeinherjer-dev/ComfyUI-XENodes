@@ -68,6 +68,28 @@ app.registerExtension({
 					updateCrf();
 				}
 
+				// Intercept DOM widget creation to prevent video preview from forcing large node size
+				const origAddDOMWidget = this.addDOMWidget;
+				if (origAddDOMWidget) {
+					this.addDOMWidget = function(name, type, element, options) {
+						const widget = origAddDOMWidget.apply(this, arguments);
+						if (name === "video-preview") {
+							widget.computeLayoutSize = () => ({
+								minWidth: 150,
+								minHeight: 150
+							});
+							// Ensure container takes full height of the widget slot
+							if (element && element.style) {
+								element.style.height = "100%";
+								element.style.display = "flex";
+								element.style.justifyContent = "center";
+								element.style.alignItems = "center";
+							}
+						}
+						return widget;
+					};
+				}
+
 				this.onResize = function (size) {
 					const minSize = this.computeSize ? this.computeSize() : [200, 100];
 					size[0] = Math.max(size[0], minSize[0]);
