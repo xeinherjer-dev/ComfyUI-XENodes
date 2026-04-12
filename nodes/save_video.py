@@ -24,17 +24,19 @@ class SaveVideo(io.ComfyNode):
                 io.Video.Input("video", tooltip="The video to save."),
                 io.String.Input("filename_prefix", default="video/ComfyUI", tooltip="The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."),
                 io.Combo.Input("format", options=["mp4", "webm"], default="mp4", tooltip="The format to save the video as."),
-                io.Combo.Input("codec", options=["h264", "h265", "av1"], default="av1", tooltip="The codec to use for the video."),
+                io.Combo.Input("codec", options=["h264", "h265", "av1"], default="h264", tooltip="The codec to use for the video."),
                 io.Float.Input("crf", default=0.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used for encoding. Set to 0 to use encoder defaults."),
                 io.Int.Input("loop_count", default=0, min=0, max=100, step=1, tooltip="Loop count. 0 = play once. For mp4/webm, this physically repeats the frames."),
                 io.Boolean.Input("pingpong", default=False, tooltip="Pingpong animation (images only). Plays frames forward then backward."),
+                io.Combo.Input("audio_codec", options=["aac", "opus", "flac"], default="aac", tooltip="The codec to use for the audio."),
+                io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", tooltip="The bitrate to use for the audio codec (ignored if flac)."),
             ],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
         )
 
     @classmethod
-    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float, loop_count: int, pingpong: bool) -> io.NodeOutput:
+    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float, loop_count: int, pingpong: bool, audio_codec: str, audio_bitrate: str) -> io.NodeOutput:
         width, height = video.get_dimensions()
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix,
@@ -145,7 +147,16 @@ class SaveVideo(io.ComfyNode):
             audio_stream = None
             if waveform is not None:
                 try:
-                    audio_stream = output.add_stream('aac', rate=audio_sample_rate, layout=layout)
+                    audio_codec_map = {
+                        "aac": "aac",
+                        "opus": "libopus",
+                        "flac": "flac"
+                    }
+                    av_audio_codec = audio_codec_map.get(audio_codec, "aac")
+                    audio_stream = output.add_stream(av_audio_codec, rate=audio_sample_rate, layout=layout)
+                    
+                    if audio_codec != "flac":
+                        audio_stream.bit_rate = int(audio_bitrate.replace("k", "000"))
                 except Exception as e:
                     print(f"[XENodes] Warning: Failed to add audio stream: {e}")
                     audio_stream = None
