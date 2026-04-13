@@ -103,9 +103,15 @@ class SaveVideo(io.ComfyNode):
                         waveform = torch.cat([waveform] * total_plays, dim=-1)
 
                 layout = {1: 'mono', 2: 'stereo', 6: '5.1'}.get(waveform.shape[0], 'stereo')
+                
+                # Resampling prep for specific codecs like Opus (requires 48k)
+                output_sample_rate = audio_sample_rate
+                if audio_codec == "opus":
+                    output_sample_rate = 48000
             except Exception as e:
                 print(f"[XENodes] Warning: Failed to process audio stream: {e}")
                 waveform = None
+                output_sample_rate = 44100
 
         codec_config = {
             'h264': {'codec': 'libx264', 'pix_fmt': 'yuv420p'},
@@ -153,7 +159,7 @@ class SaveVideo(io.ComfyNode):
                         "flac": "flac"
                     }
                     av_audio_codec = audio_codec_map.get(audio_codec, "aac")
-                    audio_stream = output.add_stream(av_audio_codec, rate=audio_sample_rate, layout=layout)
+                    audio_stream = output.add_stream(av_audio_codec, rate=output_sample_rate, layout=layout)
                     
                     if audio_codec != "flac":
                         audio_stream.bit_rate = int(audio_bitrate.replace("k", "000"))
@@ -175,10 +181,20 @@ class SaveVideo(io.ComfyNode):
 
             # Encode audio
             if audio_stream is not None and waveform is not None:
-                frame = av.AudioFrame.from_ndarray(waveform.float().cpu().contiguous().numpy(), format='fltp', layout=layout)
-                frame.sample_rate = audio_sample_rate
-                frame.pts = 0
-                output.mux(audio_stream.encode(frame))
+                orig_frame = av.AudioFrame.from_ndarray(waveform.float().cpu().contiguous().numpy(), format='fltp', layout=layout)
+                orig_frame.sample_rate = audio_sample_rate
+                orig_frame.pts = 0
+
+                # Actual resampling if needed
+                if audio_sample_rate != output_sample_rate:
+                    resampler = av.AudioResampler(format='fltp', layout=layout, rate=output_sample_rate)
+                    resampled_frames = resampler.resample(orig_frame)
+                    # libopus and other encoders might need frames to be a certain size, muxing directly works often
+                    for f in resampled_frames:
+                        f.pts = None # Let av handle pts for simplicity when resampled
+                        output.mux(audio_stream.encode(f))
+                else:
+                    output.mux(audio_stream.encode(orig_frame))
 
                 # Flush audio encoder
                 output.mux(audio_stream.encode(None))

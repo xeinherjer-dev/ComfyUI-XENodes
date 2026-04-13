@@ -13,6 +13,8 @@ app.registerExtension({
 				const codecWidget = this.widgets.find((w) => w.name === "codec");
 				const crfWidget = this.widgets.find((w) => w.name === "crf");
 				const prefixWidget = this.widgets.find((w) => w.name === "filename_prefix");
+				const audioCodecWidget = this.widgets.find((w) => w.name === "audio_codec");
+				const audioBitrateWidget = this.widgets.find((w) => w.name === "audio_bitrate");
 
 				if (prefixWidget) {
 					prefixWidget.serializeValue = () => {
@@ -66,6 +68,37 @@ app.registerExtension({
 					// Initial sync
 					updateCodecs();
 					updateCrf();
+				}
+
+				if (audioCodecWidget && audioBitrateWidget) {
+					const updateAudioBitrateVisibility = () => {
+						if (audioCodecWidget.value === "flac") {
+							// Hide bitrate widget for flac
+							audioBitrateWidget.hidden = true;
+							audioBitrateWidget.disabled = true;
+						} else {
+							// Restore it
+							audioBitrateWidget.hidden = false;
+							audioBitrateWidget.disabled = false;
+						}
+					};
+
+					const origAudioCodecCallback = audioCodecWidget.callback;
+					audioCodecWidget.callback = function (v) {
+						updateAudioBitrateVisibility();
+                        
+						// Trigger layout reflow
+						if (this.setDirtyCanvas) {
+							requestAnimationFrame(() => {
+								this.setDirtyCanvas(true, true);
+							});
+						}
+
+						return origAudioCodecCallback ? origAudioCodecCallback.apply(this, arguments) : undefined;
+					}.bind(this);
+
+					// Initial sync
+					updateAudioBitrateVisibility();
 				}
 
 				// Intercept DOM widget creation to prevent video preview from forcing large node size
