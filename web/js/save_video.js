@@ -38,16 +38,42 @@ app.registerExtension({
 
 				if (formatWidget && codecWidget && crfWidget) {
 					const originalCodecOptions = [...codecWidget.options.values];
+					const originalAudioCodecOptions = audioCodecWidget ? [...audioCodecWidget.options.values] : [];
+
+					// Defines restricted codec choices based on format
+					const FORMAT_RESTRICTIONS = {
+						'webm': {
+							video: ['av1'],
+							audio: ['opus']
+						}
+					};
 
 					const updateCodecs = () => {
-						if (formatWidget.value === "webm") {
-							codecWidget.options.values = ["av1"];
-							if (codecWidget.value !== "av1") {
-								codecWidget.value = "av1";
-								if (codecWidget.callback) codecWidget.callback("av1");
+						const restrictions = FORMAT_RESTRICTIONS[formatWidget.value];
+
+						if (restrictions) {
+							if (restrictions.video) {
+								codecWidget.options.values = restrictions.video;
+								if (!restrictions.video.includes(codecWidget.value)) {
+									const newCodec = restrictions.video[0];
+									codecWidget.value = newCodec;
+									if (codecWidget.callback) codecWidget.callback(newCodec);
+								}
+							}
+
+							if (audioCodecWidget && restrictions.audio) {
+								audioCodecWidget.options.values = restrictions.audio;
+								if (!restrictions.audio.includes(audioCodecWidget.value)) {
+									const newAudioCodec = restrictions.audio[0];
+									audioCodecWidget.value = newAudioCodec;
+									if (audioCodecWidget.callback) audioCodecWidget.callback(newAudioCodec);
+								}
 							}
 						} else {
 							codecWidget.options.values = originalCodecOptions;
+							if (audioCodecWidget) {
+								audioCodecWidget.options.values = originalAudioCodecOptions;
+							}
 						}
 					};
 
@@ -112,11 +138,37 @@ app.registerExtension({
 								minHeight: 150
 							});
 							// Ensure container takes full height of the widget slot
-							if (element && element.style) {
-								element.style.height = "100%";
-								element.style.display = "flex";
-								element.style.justifyContent = "center";
-								element.style.alignItems = "center";
+							if (element) {
+								Object.assign(element.style, {
+									width: "100%",
+									height: "100%",
+									maxWidth: "100%",
+									maxHeight: "100%",
+									display: "flex",
+									justifyContent: "center",
+									alignItems: "center",
+									overflow: "hidden"
+								});
+
+								// If element is not the video itself, ensure inner video obeys container bounds
+								if (element.tagName !== "VIDEO") {
+									const constrainVideo = () => {
+										element.querySelectorAll("video").forEach(v => {
+											Object.assign(v.style, {
+												width: "100%",
+												height: "100%",
+												maxWidth: "100%",
+												maxHeight: "100%",
+												objectFit: "contain"
+											});
+										});
+									};
+									constrainVideo();
+									const observer = new MutationObserver(constrainVideo);
+									observer.observe(element, { childList: true, subtree: true });
+								} else {
+									element.style.objectFit = "contain";
+								}
 							}
 						}
 						return widget;
