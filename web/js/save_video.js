@@ -16,6 +16,8 @@ app.registerExtension({
 				const audioCodecWidget = this.widgets.find((w) => w.name === "audio_codec");
 				const audioBitrateWidget = this.widgets.find((w) => w.name === "audio_bitrate");
 
+				const syncTasks = [];
+
 				if (prefixWidget) {
 					prefixWidget.serializeValue = () => {
 						return applyTextReplacements(app, prefixWidget.value);
@@ -35,6 +37,7 @@ app.registerExtension({
 						crfWidget.value = crfValue;
 					}
 				};
+				syncTasks.push(updateCrf);
 
 				if (formatWidget && codecWidget && crfWidget) {
 					const originalCodecOptions = [...codecWidget.options.values];
@@ -76,6 +79,7 @@ app.registerExtension({
 							}
 						}
 					};
+					syncTasks.push(updateCodecs);
 
 					const origFormatCallback = formatWidget.callback;
 					formatWidget.callback = function (v) {
@@ -108,6 +112,7 @@ app.registerExtension({
 							audioBitrateWidget.disabled = false;
 						}
 					};
+					syncTasks.push(updateAudioBitrateVisibility);
 
 					const origAudioCodecCallback = audioCodecWidget.callback;
 					audioCodecWidget.callback = function (v) {
@@ -134,8 +139,8 @@ app.registerExtension({
 						const widget = origAddDOMWidget.apply(this, arguments);
 						if (name === "video-preview") {
 							widget.computeLayoutSize = () => ({
-								minWidth: 150,
-								minHeight: 150
+								minWidth: 50,
+								minHeight: 50
 							});
 							// Ensure container takes full height of the widget slot
 							if (element) {
@@ -176,9 +181,18 @@ app.registerExtension({
 				}
 
 				this.onResize = function (size) {
-					const minSize = this.computeSize ? this.computeSize() : [200, 100];
+					const minSize = this.computeSize ? this.computeSize() : [150, 80];
 					size[0] = Math.max(size[0], minSize[0]);
 					size[1] = Math.max(size[1], minSize[1]);
+				};
+
+				const origOnConfigure = this.onConfigure;
+				this.onConfigure = function() {
+					const res = origOnConfigure ? origOnConfigure.apply(this, arguments) : undefined;
+					for (const task of syncTasks) {
+						task();
+					}
+					return res;
 				};
 
 				return r;
