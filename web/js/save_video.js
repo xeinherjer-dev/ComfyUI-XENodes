@@ -138,9 +138,18 @@ app.registerExtension({
 					this.addDOMWidget = function(name, type, element, options) {
 						const widget = origAddDOMWidget.apply(this, arguments);
 						if (name === "video-preview") {
-							widget.computeLayoutSize = () => ({
-								minWidth: 50,
-								minHeight: 50
+							// Use Object.defineProperty to permanently fix computeLayoutSize to return
+							// small minimum dimensions. This prevents useNodeVideo (ComfyUI frontend core)
+							// from overriding it with the video's actual resolution after the video loads,
+							// which would prevent the node from being resized smaller than the video.
+							Object.defineProperty(widget, 'computeLayoutSize', {
+								configurable: true,
+								get() {
+									return () => ({ minWidth: 50, minHeight: 50 });
+								},
+								set(_fn) {
+									// Intentionally ignore attempts to override (e.g. from useNodeVideo)
+								}
 							});
 							// Ensure container takes full height of the widget slot
 							if (element) {
@@ -179,12 +188,6 @@ app.registerExtension({
 						return widget;
 					};
 				}
-
-				this.onResize = function (size) {
-					const minSize = this.computeSize ? this.computeSize() : [150, 80];
-					size[0] = Math.max(size[0], minSize[0]);
-					size[1] = Math.max(size[1], minSize[1]);
-				};
 
 				const origOnConfigure = this.onConfigure;
 				this.onConfigure = function() {
