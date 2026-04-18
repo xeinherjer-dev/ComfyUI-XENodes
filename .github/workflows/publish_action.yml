@@ -14,7 +14,6 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
         with:
-          # Required to fetch tag annotations for the release notes
           fetch-depth: 0
           fetch-tags: true
 
@@ -22,22 +21,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Force fetch the annotated tag object from remote 
-          # (Workaround for actions/checkout shallow clone limitations)
-          git fetch origin refs/tags/${{ github.ref_name }}:refs/tags/${{ github.ref_name }} --force
+          # Force fetch all tags to guarantee the runner has the annotated tag object
+          git fetch --tags --force
 
-          # Extract the message from the annotated tag
+          # Extract the message from the tag
           TAG_MSG=$(git tag -l --format='%(contents)' ${{ github.ref_name }})
 
-          # Fallback to a default message if the annotation is empty
+          # Fallback if somehow still empty
           if [ -z "$TAG_MSG" ]; then
             TAG_MSG="Release ${{ github.ref_name }}"
           fi
 
-          # Create the GitHub Release first so Comfy Registry can index the updates
+          # Create release.
+          # --generate-notes automatically appends the "Full Changelog" link and commit history!
           gh release create ${{ github.ref_name }} \
             --title "Release ${{ github.ref_name }}" \
-            --notes "$TAG_MSG"
+            --notes "$TAG_MSG" \
+            --generate-notes
 
       - name: Publish Custom Node
         uses: Comfy-Org/publish-node-action@main
