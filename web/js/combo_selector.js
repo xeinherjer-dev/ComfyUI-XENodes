@@ -1,7 +1,7 @@
 import { app } from "../../../scripts/app.js";
 
-const EXTENSION_NAME = "XENodes.DynamicComboSelector";
-const NODE_NAME = "XENodes.DynamicComboSelector";
+const EXTENSION_NAME = "XENodes.ComboSelector";
+const NODE_NAME = "XENodes.ComboSelector";
 
 app.registerExtension({
     name: EXTENSION_NAME,

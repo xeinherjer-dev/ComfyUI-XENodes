@@ -3,14 +3,14 @@ from typing_extensions import override
 import json
 from comfy_api.latest import ComfyExtension, io
 
-class DynamicComboSelectorNode(io.ComfyNode):
+class ComboSelectorNode(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         template = io.MatchType.Template("any")
 
         return io.Schema(
-            node_id="XENodes.DynamicComboSelector",
-            display_name="Dynamic Combo Selector",
+            node_id="XENodes.ComboSelector",
+            display_name="Combo Selector",
             category="XENodes",
             inputs=[
                 io.Int.Input("index", default=0, min=0),
@@ -42,10 +42,10 @@ class DynamicComboSelectorNode(io.ComfyNode):
 
         return io.NodeOutput(selected_value, str(selected_value))
 
-class DynamicComboSelectorExtension(ComfyExtension):
+class ComboSelectorExtension(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        return [DynamicComboSelectorNode]
+        return [ComboSelectorNode]
 
-async def comfy_entrypoint() -> DynamicComboSelectorExtension:
-    return DynamicComboSelectorExtension()
+async def comfy_entrypoint() -> ComboSelectorExtension:
+    return ComboSelectorExtension()
