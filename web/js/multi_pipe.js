@@ -427,13 +427,17 @@ app.registerExtension({
 
             const syncOutputs = () => {
                 if (!this._allOutputs && this.outputs?.length > 0) {
-                    this._allOutputs = [...this.outputs];
+                    // Deep copy initial outputs to keep as a safe template
+                    this._allOutputs = this.outputs.map(o => Object.assign({}, o));
                 }
                 if (!this._allOutputs) return;
 
                 const pipeInNode = findConnectedPipeIn(this);
                 const all = this._allOutputs;
-                const newOutputs = [];
+                
+                // Calculate the "expected state" (Target) first
+                const targetOutputs = [];
+                const cacheSlots = [];
 
                 if (pipeInNode) {
                     const pipeInInputs = getManagedInputs(pipeInNode);
@@ -442,10 +446,12 @@ app.registerExtension({
                         if (inp.link != null) maxIdx = Math.max(maxIdx, getSlotIndex(inp.name));
                     }
 
-                    const cacheSlots = [];
                     for (let slotIdx = 0; slotIdx <= maxIdx; slotIdx++) {
-                        const outEntry = all[slotIdx];
-                        if (!outEntry) continue;
+                        const baseEntry = all[slotIdx];
+                        if (!baseEntry) continue;
+
+                        let targetLabel = `slot${String(slotIdx).padStart(2, "0")}`;
+                        let targetType = "*";
 
                         const matchingInput = pipeInInputs.find(
                             (inp) => getSlotIndex(inp.name) === slotIdx
@@ -454,15 +460,15 @@ app.registerExtension({
                         if (matchingInput && matchingInput.link != null) {
                             const type = getConnectedType(pipeInNode, matchingInput);
                             const label = getConnectedLabel(pipeInNode, matchingInput, this.properties.show_origin_title);
-                            outEntry.label = label || `slot${String(slotIdx).padStart(2, "0")}`;
-                            outEntry.type = (type && type !== "*") ? type : "*";
-                            cacheSlots.push({ label: outEntry.label, type: outEntry.type });
+                            targetLabel = label || targetLabel;
+                            targetType = (type && type !== "*") ? type : "*";
+                            cacheSlots.push({ label: targetLabel, type: targetType });
                         } else {
-                            outEntry.label = `slot${String(slotIdx).padStart(2, "0")}`;
-                            outEntry.type = "*";
                             cacheSlots.push(null);
                         }
-                        newOutputs.push(outEntry);
+                        
+                        // Record expected values without mutating the original baseEntry
+                        targetOutputs.push({ baseEntry, label: targetLabel, type: targetType });
                     }
                     saveCache(cacheSlots);
 
@@ -470,25 +476,47 @@ app.registerExtension({
                     const cache = loadCache();
                     if (cache && cache.length > 0) {
                         for (let slotIdx = 0; slotIdx < cache.length; slotIdx++) {
-                            const outEntry = all[slotIdx];
-                            if (!outEntry) continue;
+                            const baseEntry = all[slotIdx];
+                            if (!baseEntry) continue;
                             const cached = cache[slotIdx];
+                            let targetLabel = `slot${String(slotIdx).padStart(2, "0")}`;
+                            let targetType = "*";
                             if (cached) {
-                                outEntry.label = cached.label;
-                                outEntry.type = cached.type;
-                            } else {
-                                outEntry.label = `slot${String(slotIdx).padStart(2, "0")}`;
-                                outEntry.type = "*";
+                                targetLabel = cached.label;
+                                targetType = cached.type;
                             }
-                            newOutputs.push(outEntry);
+                            targetOutputs.push({ baseEntry, label: targetLabel, type: targetType });
                         }
+                    }
+                }
+
+                // Compare with current outputs and build a new array if changed
+                let changed = false;
+                const newOutputs = [];
+
+                if (this.outputs?.length !== targetOutputs.length) {
+                    changed = true;
+                }
+
+                for (let i = 0; i < targetOutputs.length; i++) {
+                    const target = targetOutputs[i];
+                    const current = this.outputs[i];
+
+                    // Check if current pin differs from expected label or type
+                    if (!current || current.label !== target.label || current.type !== target.type) {
+                        changed = true;
+                        // Create a new object to trigger Vue reactivity if changed
+                        newOutputs.push(Object.assign({}, target.baseEntry, { label: target.label, type: target.type }));
+                    } else {
+                        // Maintain original reference if unchanged
+                        newOutputs.push(current);
                     }
                 }
 
                 const graph = this.graph || app.graph;
                 if (graph) {
                     const visible = new Set(newOutputs);
-                    for (const o of all) {
+                    for (const o of this.outputs) {
                         if (visible.has(o)) continue;
                         if (o.links?.length > 0) {
                             for (const linkId of [...o.links]) graph.removeLink(linkId);
@@ -496,18 +524,6 @@ app.registerExtension({
                     }
                 }
                 
-                let changed = false;
-                if (this.outputs?.length !== newOutputs.length) {
-                    changed = true;
-                } else {
-                    for(let i = 0; i < newOutputs.length; i++) {
-                        if(this.outputs[i]?.label !== newOutputs[i].label || this.outputs[i]?.type !== newOutputs[i].type) {
-                            changed = true;
-                            break;
-                        }
-                    }
-                }
-
                 if (changed) {
                     // Force Vue reactivity by modifying array contents in place (Nodes 2.0 hack)
                     this.outputs.splice(0, this.outputs.length, ...newOutputs);
