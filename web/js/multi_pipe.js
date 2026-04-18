@@ -289,7 +289,7 @@ app.registerExtension({
             
             this.properties = this.properties || {};
             this.properties.debug = this.properties.debug ?? false;
-            this.properties.show_origin_title = this.properties.show_origin_title ?? false;
+            this.properties.show_origin_title = this.properties.show_origin_title ?? true;
 
             const updateLabels = () => {
                 let changed = false;
@@ -403,7 +403,7 @@ app.registerExtension({
             this._allOutputs = null;
             this.properties = this.properties || {};
             this.properties.debug = this.properties.debug ?? false;
-            this.properties.show_origin_title = this.properties.show_origin_title ?? false;
+            this.properties.show_origin_title = this.properties.show_origin_title ?? true;
 
             const saveCache = (slots) => { this.properties[CACHE_KEY] = slots; };
             const loadCache = () => this.properties?.[CACHE_KEY] || null;

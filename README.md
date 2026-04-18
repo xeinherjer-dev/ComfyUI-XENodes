@@ -1,6 +1,6 @@
 # ComfyUI-XENodes
 
-A collection of custom nodes for ComfyUI, featuring Multi-Switch, Slider, Slider 2D, Save Image, Save Video, Dynamic Combo Selector, and Show Any nodes..
+A collection of custom nodes for ComfyUI, featuring Multi-Switch, Multi-Pipe, Slider, Slider 2D, Save Image, Save Video, Save Audio, Combo Selector, and Show Any nodes.
 
 ## Features
 
@@ -30,6 +30,13 @@ A general-purpose switch node that selects one input from many and routes it to 
 
 ![Multi-Switch UI](assets/screenshot1.webp)
 
+### Multi-Pipe
+
+Bundle multiple inputs into a single `XE_MULTI_PIPE` connection and unpack them later.
+
+- **Autogrow**: Input slots on `Multi-Pipe In` automatically increase as you connect more nodes.
+- **Dynamic Sync**: `Multi-Pipe Out` automatically synchronizes its output names with the connected `Multi-Pipe In` node.
+
 ### Slider
 
 A versatile slider node where the output port type dynamically switches between `INT` and `FLOAT` based on the `step` setting.
@@ -53,7 +60,15 @@ An image saving node with configurable **format** (`png`, `webp`), **lossless** 
 
 A video saving node with configurable **format** (`mp4`, `webm`), **codec** (`h264`, `h265`, `av1`), and **crf** settings.
 
-### Dynamic Combo Selector
+### Save Audio
+
+Save audio clips natively with professional codec support.
+
+- **Format Support**: Encode to `mp3`, `opus`, or `flac`.
+- **Bitrate Control**: Select from standard bitrates or use variable bitrate (V0) for MP3.
+- **Native Preview**: Includes a built-in audio player for immediate feedback in the ComfyUI interface.
+
+### Combo Selector
 
 A utility node that allows selecting a COMBO (dropdown) value by its numerical **index**.
 
