@@ -136,6 +136,36 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
             continue;
         }
 
+        // 2.5 Penetrate Switch Nodes
+        if (originNode.type === "XENodes.MultiSwitch") {
+            let selectVal = 0;
+            const selectWidget = originNode.widgets?.find(w => w.name === "select");
+            if (selectWidget) selectVal = selectWidget.value;
+            
+            if (selectVal >= 0) {
+                const inputSuffix = `input${String(selectVal).padStart(2, '0')}`;
+                const activeInput = originNode.inputs?.find(inp => inp.name === inputSuffix || inp.name?.endsWith(`.${inputSuffix}`));
+                if (activeInput && activeInput.link != null) {
+                    currentLinkId = activeInput.link;
+                    debugLog(contextNode, `Penetrating MultiSwitch: selected ${inputSuffix}, next linkId=${currentLinkId}`);
+                    continue;
+                }
+            }
+        }
+
+        if (originNode.type === "ComfySwitchNode") {
+            let switchVal = false;
+            const switchWidget = originNode.widgets?.find(w => w.name === "switch" || w.name === "boolean");
+            if (switchWidget) switchVal = switchWidget.value;
+            const inputName = switchVal ? "on_true" : "on_false";
+            const activeInput = originNode.inputs?.find(inp => inp.name === inputName);
+            if (activeInput && activeInput.link != null) {
+                currentLinkId = activeInput.link;
+                debugLog(contextNode, `Penetrating ComfySwitchNode: selected ${inputName}, next linkId=${currentLinkId}`);
+                continue;
+            }
+        }
+
         // 3. Penetrate Subgraph / Group Node
         let innerGraph = originNode.subgraph || originNode.inner_graph;
         if (!innerGraph && typeof originNode.getInnerGraph === "function") {
@@ -261,19 +291,37 @@ app.registerExtension({
 
             const updateLabels = () => {
                 let changed = false;
-                for (const inp of getManagedInputs(this)) {
-                    const label = getConnectedLabel(this, inp, this.properties.show_origin_title);
-                    const idx = getSlotIndex(inp.name);
-                    const newLabel = label || (idx >= 0 ? `slot${String(idx).padStart(2, "0")}` : inp.name);
-                    if (inp.label !== newLabel) {
-                        inp.label = newLabel;
-                        changed = true;
+                
+                // Clone inputs array to force Vue to detect fully new references
+                const newInputs = [];
+                for (let i = 0; i < (this.inputs?.length || 0); i++) {
+                    const inp = this.inputs[i];
+                    if (inp.name?.startsWith(MANAGED_INPUT_PREFIX)) {
+                        const label = getConnectedLabel(this, inp, this.properties.show_origin_title);
+                        const idx = getSlotIndex(inp.name);
+                        const newLabel = label || (idx >= 0 ? `slot${String(idx).padStart(2, "0")}` : inp.name);
+                        if (inp.label !== newLabel) {
+                            newInputs.push(Object.assign({}, inp, { label: newLabel }));
+                            changed = true;
+                            continue;
+                        }
                     }
+                    newInputs.push(inp);
                 }
+
                 if (changed) {
+                    this.inputs = newInputs; // triggers the Vue setter
+                    
                     if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
                     app.canvas?.setDirty(true, true);
-                    if (app.graph && typeof app.graph.change === 'function') app.graph.change();
+                    
+                    const graph = this.graph || app.graph;
+                    if (graph?.trigger) {
+                        // Force full Vue node UI re-evaluation by faking a property change
+                        graph.trigger('node:property:changed', { nodeId: this.id, property: 'title', oldValue: this.title, newValue: this.title });
+                        graph.trigger('node:slot-label:changed', { nodeId: this.id, slotType: 1 }); // INPUT
+                    }
+                    if (graph?.change) graph.change();
                 }
             };
             
@@ -293,7 +341,8 @@ app.registerExtension({
             const originalOnConnectionsChange = this.onConnectionsChange;
             this.onConnectionsChange = function () {
                 const r = originalOnConnectionsChange?.apply(this, arguments);
-                updateLabels();
+                // Delay to allow LiteGraph to finish registering the link before tracing
+                setTimeout(() => updateLabels(), 0);
                 app.canvas?.setDirty(true, true);
                 return r;
             };
@@ -449,7 +498,9 @@ app.registerExtension({
                     }
                 }
 
-                this.outputs = newOutputs;
+                if (changed) {
+                    this.outputs = newOutputs; // Complete array replacement
+                }
 
                 if (changed || !this._pipeSizeSet) {
                     this._pipeSizeSet = true;
@@ -457,16 +508,25 @@ app.registerExtension({
                         const s = this.computeSize();
                         this.setSize([Math.max(this.size?.[0] ?? 180, s[0]), s[1]]);
                     }
+                    
                     if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
                     app.canvas?.setDirty(true, true);
-                    if (app.graph && typeof app.graph.change === 'function') app.graph.change();
+
+                    const graph = this.graph || app.graph;
+                    if (graph?.trigger) {
+                        // Force full Vue node UI re-evaluation by faking a property change
+                        graph.trigger('node:property:changed', { nodeId: this.id, property: 'title', oldValue: this.title, newValue: this.title });
+                        graph.trigger('node:slot-label:changed', { nodeId: this.id, slotType: 2 }); // OUTPUT
+                    }
+                    if (graph?.change) graph.change();
                 }
             };
 
             const originalOnConnectionsChange = this.onConnectionsChange;
             this.onConnectionsChange = function () {
                 const r = originalOnConnectionsChange?.apply(this, arguments);
-                syncOutputs();
+                // Delay to allow LiteGraph to finish registering the link before tracing
+                setTimeout(() => syncOutputs(), 0);
                 return r;
             };
 
