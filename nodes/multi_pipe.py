@@ -13,20 +13,13 @@ MAX_SLOTS = 50
 class MultiPipeInNode(io.ComfyNode):
     @classmethod
     def define_schema(cls):
-        # Use AnyType (io_type="*") so each slot independently accepts any type.
-        autogrow_template = _io.Autogrow.TemplateNames(
-            input=io.AnyType.Input("value"),
-            names=[f"slot{i:02d}" for i in range(MAX_SLOTS)],
-            min=0
-        )
-
         return io.Schema(
             node_id="XENodes.MultiPipeIn",
             display_name="Multi-Pipe In",
             category="XENodes",
             description="Bundle multiple inputs into a single XE_MULTI_PIPE connection. Inputs auto-grow as you connect them.",
             inputs=[
-                _io.Autogrow.Input("slots", template=autogrow_template),
+                XEMultiPipe.Input("pipe", tooltip="Base pipe to extend/override"),
             ],
             outputs=[
                 XEMultiPipe.Output(display_name="pipe", tooltip="Bundled pipe output"),
@@ -34,13 +27,23 @@ class MultiPipeInNode(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, slots: _io.Autogrow.Type) -> io.NodeOutput:
+    def execute(cls, pipe: dict | None = None, **kwargs) -> io.NodeOutput:
         result = {}
 
-        if slots:
-            for key, value in slots.items():
-                if value is not None:
-                    result[key] = value
+        if pipe and isinstance(pipe, dict):
+            import copy
+            result = copy.copy(pipe)
+
+        # Catch kwargs correctly since comfyui provides them
+        for key, value in kwargs.items():
+            if value is not None and (key.startswith("slots.") or key.startswith("slots_")):
+                real_key = key.split(".")[-1].split("_")[-1]
+                result[real_key] = value
+
+        if "slots" in kwargs and isinstance(kwargs["slots"], dict):
+            for k, v in kwargs["slots"].items():
+                if v is not None:
+                    result[k] = v
 
         return io.NodeOutput(result)
 
@@ -54,6 +57,11 @@ class MultiPipeInNode(io.ComfyNode):
             res["optional"] = {}
         for i in range(MAX_SLOTS):
             res["optional"][f"slots.slot{i:02d}"] = ("*", {})
+        # Move 'pipe' from required to optional if it was placed there
+        if "required" in res and "pipe" in res["required"]:
+            res["optional"]["pipe"] = res["required"].pop("pipe")
+        elif "pipe" not in res["optional"]:
+            res["optional"]["pipe"] = ("XE_MULTI_PIPE", {"tooltip": "Base pipe to extend/override"})
         return res
 
 

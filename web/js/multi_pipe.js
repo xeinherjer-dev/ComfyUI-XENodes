@@ -300,38 +300,115 @@ app.registerExtension({
 
             const updateLabels = () => {
                 let changed = false;
+
+                // Build a map of inherited labels/types from the pipe input
+                const inheritedMap = new Map();
+                const pipeInput = (this.inputs || []).find(inp => inp.name === "pipe");
+                if (pipeInput && pipeInput.link != null) {
+                    const tracePipeInAncestors = (node) => {
+                        if (!node) return;
+                        const pIn = (node.inputs || []).find(inp => inp.name === "pipe");
+                        if (pIn && pIn.link != null) {
+                            const graph = node.graph || app.graph;
+                            const origin = traceTrueOrigin(node, graph, pIn.link);
+                            if (origin && origin.node.type === PIPE_IN_NODE) {
+                                tracePipeInAncestors(origin.node);
+                            }
+                        }
+                        for (const inp of getManagedInputs(node)) {
+                            if (inp.link != null) {
+                                const idx = getSlotIndex(inp.name);
+                                const l = getConnectedLabel(node, inp, this.properties.show_origin_title);
+                                inheritedMap.set(idx, l);
+                            }
+                        }
+                    };
+                    const graph = this.graph || app.graph;
+                    const origin = traceTrueOrigin(this, graph, pipeInput.link);
+                    if (origin && origin.node.type === PIPE_IN_NODE) {
+                        tracePipeInAncestors(origin.node);
+                    }
+                }
                 
-                // Clone inputs array to prepare for in-place update
-                const newInputs = [];
+                let maxInheritedIdx = -1;
+                for (const idx of inheritedMap.keys()) {
+                    maxInheritedIdx = Math.max(maxInheritedIdx, idx);
+                }
+
+                let maxConnectedIdx = -1;
+                for (const inp of getManagedInputs(this)) {
+                    if (inp.link != null) {
+                        maxConnectedIdx = Math.max(maxConnectedIdx, getSlotIndex(inp.name));
+                    }
+                }
+
+                let targetMaxIdx = Math.max(maxInheritedIdx, maxConnectedIdx);
+                targetMaxIdx = Math.max(targetMaxIdx, -1);
+
+                // Add missing inputs up to targetMaxIdx + 1 (the empty trailing slot)
+                for (let i = 0; i <= targetMaxIdx + 1; i++) {
+                    const name = `slots.slot${String(i).padStart(2, "0")}`;
+                    if (!this.inputs.find(inp => inp.name === name)) {
+                        this.addInput(name, "*");
+                        changed = true;
+                    }
+                }
+                
+                // Trim trailing strictly-empty slots beyond targetMaxIdx + 1
+                for (let i = (this.inputs?.length || 0) - 1; i >= 0; i--) {
+                    const inp = this.inputs[i];
+                    if (inp.name?.startsWith(MANAGED_INPUT_PREFIX)) {
+                        const idx = getSlotIndex(inp.name);
+                        if (idx > targetMaxIdx + 1 && inp.link == null) {
+                            this.removeInput(i);
+                            changed = true;
+                        }
+                    }
+                }
+
                 for (let i = 0; i < (this.inputs?.length || 0); i++) {
                     const inp = this.inputs[i];
                     if (inp.name?.startsWith(MANAGED_INPUT_PREFIX)) {
-                        const label = getConnectedLabel(this, inp, this.properties.show_origin_title);
                         const idx = getSlotIndex(inp.name);
-                        const newLabel = label || (idx >= 0 ? `slot${String(idx).padStart(2, "0")}` : inp.name);
+                        let calculatedLabel = null;
+                        
+                        if (inp.link != null) {
+                            calculatedLabel = getConnectedLabel(this, inp, this.properties.show_origin_title);
+                        } else if (inheritedMap.has(idx)) {
+                            calculatedLabel = inheritedMap.get(idx);
+                        }
+                        
+                        const newLabel = calculatedLabel || (idx >= 0 ? `slot${String(idx).padStart(2, "0")}` : inp.name);
+                        
                         if (inp.label !== newLabel) {
-                            newInputs.push(Object.assign({}, inp, { label: newLabel }));
+                            inp.label = newLabel;
                             changed = true;
-                            continue;
                         }
                     }
-                    newInputs.push(inp);
                 }
-
+                
                 if (changed) {
-                    // Force Vue reactivity by modifying array contents in place (Nodes 2.0 hack)
-                    this.inputs.splice(0, this.inputs.length, ...newInputs);
-                    
-                    if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
-                    app.canvas?.setDirty(true, true);
-                    
-                    const graph = this.graph || app.graph;
-                    if (graph?.trigger) {
-                        // Force full Vue node UI re-evaluation by faking a property change
-                        graph.trigger('node:property:changed', { nodeId: this.id, property: 'title', oldValue: this.title, newValue: this.title });
-                        graph.trigger('node:slot-label:changed', { nodeId: this.id, slotType: 1 }); // INPUT
+                    // Splice Hack
+                    if (this.inputs) {
+                        for (let i = 0; i < this.inputs.length; i++) {
+                            const inp = this.inputs[i];
+                            this.inputs.splice(i, 1);
+                            this.inputs.splice(i, 0, inp);
+                        }
                     }
-                    if (graph?.change) graph.change();
+
+                    requestAnimationFrame(() => {
+                        if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
+                        app.canvas?.setDirty(true, true);
+                        
+                        const graph = this.graph || app.graph;
+                        if (graph?.trigger) {
+                            // Force full Vue node UI re-evaluation by faking a property change
+                            graph.trigger('node:property:changed', { nodeId: this.id, property: 'title', oldValue: this.title, newValue: this.title });
+                            graph.trigger('node:slot-label:changed', { nodeId: this.id, slotType: 1 }); // INPUT
+                        }
+                        if (graph?.change) graph.change();
+                    });
                 }
             };
             
@@ -361,6 +438,30 @@ app.registerExtension({
             const checkLabels = () => {
                 if (this.flags?.collapsed) return;
                 let fp = `${this.properties.show_origin_title ? "1" : "0"}|`;
+
+                const pipeInput = (this.inputs || []).find(inp => inp.name === "pipe");
+                if (pipeInput && pipeInput.link != null) {
+                    const graph = this.graph || app.graph;
+                    const origin = traceTrueOrigin(this, graph, pipeInput.link);
+                    if (origin && origin.node.type === PIPE_IN_NODE) {
+                        const traceFP = (node) => {
+                            if (!node) return "";
+                            let localFp = "";
+                            const pIn = (node.inputs || []).find(inp => inp.name === "pipe");
+                            if (pIn && pIn.link != null) {
+                                const g = node.graph || app.graph;
+                                const orig = traceTrueOrigin(node, g, pIn.link);
+                                if (orig && orig.node.type === PIPE_IN_NODE) localFp += traceFP(orig.node);
+                            }
+                            for (const mInp of getManagedInputs(node)) {
+                                if (mInp.link != null) localFp += `${node.id}:${mInp.name}:${getConnectedLabel(node, mInp, this.properties.show_origin_title)}|`;
+                            }
+                            return localFp;
+                        }
+                        fp += traceFP(origin.node);
+                    }
+                }
+
                 for (const inp of getManagedInputs(this)) {
                     fp += `${inp.name}:${getConnectedLabel(this, inp, this.properties.show_origin_title) || ""}|`;
                 }
@@ -440,10 +541,34 @@ app.registerExtension({
                 const cacheSlots = [];
 
                 if (pipeInNode) {
-                    const pipeInInputs = getManagedInputs(pipeInNode);
+                    const pipeInInputsMap = new Map();
+
+                    const tracePipeInAncestors = (node) => {
+                        if (!node) return;
+                        const pipeInput = (node.inputs || []).find(inp => inp.name === "pipe");
+                        if (pipeInput && pipeInput.link != null) {
+                            const graph = node.graph || app.graph;
+                            const origin = traceTrueOrigin(node, graph, pipeInput.link);
+                            if (origin && origin.node.type === PIPE_IN_NODE) {
+                                tracePipeInAncestors(origin.node);
+                            }
+                        }
+                        const inputs = getManagedInputs(node);
+                        for (const inp of inputs) {
+                            if (inp.link != null) {
+                                const idx = getSlotIndex(inp.name);
+                                const type = getConnectedType(node, inp);
+                                const label = getConnectedLabel(node, inp, this.properties.show_origin_title);
+                                pipeInInputsMap.set(idx, { type, label });
+                            }
+                        }
+                    };
+
+                    tracePipeInAncestors(pipeInNode);
+
                     let maxIdx = -1;
-                    for (const inp of pipeInInputs) {
-                        if (inp.link != null) maxIdx = Math.max(maxIdx, getSlotIndex(inp.name));
+                    for (const idx of pipeInInputsMap.keys()) {
+                        maxIdx = Math.max(maxIdx, idx);
                     }
 
                     for (let slotIdx = 0; slotIdx <= maxIdx; slotIdx++) {
@@ -453,27 +578,22 @@ app.registerExtension({
                         let targetLabel = `slot${String(slotIdx).padStart(2, "0")}`;
                         let targetType = "*";
 
-                        const matchingInput = pipeInInputs.find(
-                            (inp) => getSlotIndex(inp.name) === slotIdx
-                        );
-
-                        if (matchingInput && matchingInput.link != null) {
-                            const type = getConnectedType(pipeInNode, matchingInput);
-                            const label = getConnectedLabel(pipeInNode, matchingInput, this.properties.show_origin_title);
-                            targetLabel = label || targetLabel;
-                            targetType = (type && type !== "*") ? type : "*";
+                        if (pipeInInputsMap.has(slotIdx)) {
+                            const info = pipeInInputsMap.get(slotIdx);
+                            targetLabel = info.label || targetLabel;
+                            targetType = (info.type && info.type !== "*") ? info.type : "*";
                             cacheSlots.push({ label: targetLabel, type: targetType });
                         } else {
                             cacheSlots.push(null);
                         }
                         
-                        // Record expected values without mutating the original baseEntry
                         targetOutputs.push({ baseEntry, label: targetLabel, type: targetType });
                     }
                     saveCache(cacheSlots);
 
                 } else {
                     const cache = loadCache();
+                    
                     if (cache && cache.length > 0) {
                         for (let slotIdx = 0; slotIdx < cache.length; slotIdx++) {
                             const baseEntry = all[slotIdx];
@@ -490,62 +610,74 @@ app.registerExtension({
                     }
                 }
 
-                // Compare with current outputs and build a new array if changed
+                // Compare with current outputs and mutate to avoid disconnecting
                 let changed = false;
-                const newOutputs = [];
 
-                if (this.outputs?.length !== targetOutputs.length) {
+                const graph = this.graph || app.graph;
+                if (this.outputs?.length > targetOutputs.length) {
+                    changed = true;
+                    if (graph) {
+                        for (let i = targetOutputs.length; i < this.outputs.length; i++) {
+                            const oldOut = this.outputs[i];
+                            if (oldOut && oldOut.links?.length > 0) {
+                                for (const linkId of [...oldOut.links]) graph.removeLink(linkId);
+                            }
+                        }
+                    }
+                } else if (this.outputs?.length < targetOutputs.length) {
                     changed = true;
                 }
 
+                const newOutputs = [];
                 for (let i = 0; i < targetOutputs.length; i++) {
                     const target = targetOutputs[i];
-                    const current = this.outputs[i];
+                    let current = this.outputs[i];
 
-                    // Check if current pin differs from expected label or type
-                    if (!current || current.label !== target.label || current.type !== target.type) {
+                    if (!current) {
                         changed = true;
-                        // Create a new object to trigger Vue reactivity if changed
-                        newOutputs.push(Object.assign({}, target.baseEntry, { label: target.label, type: target.type }));
-                    } else {
-                        // Maintain original reference if unchanged
-                        newOutputs.push(current);
-                    }
-                }
-
-                const graph = this.graph || app.graph;
-                if (graph) {
-                    const visible = new Set(newOutputs);
-                    for (const o of this.outputs) {
-                        if (visible.has(o)) continue;
-                        if (o.links?.length > 0) {
-                            for (const linkId of [...o.links]) graph.removeLink(linkId);
+                        current = Object.assign({}, target.baseEntry, { label: target.label, type: target.type });
+                    } else if (current.label !== target.label || current.type !== target.type) {
+                        changed = true;
+                        // Mutate in place to preserve LiteGraph connection identity
+                        current.label = target.label;
+                        current.type = target.type;
+                        if (target.baseEntry) {
+                            current.name = target.baseEntry.name;
                         }
                     }
+                    newOutputs.push(current);
                 }
-                
+
                 if (changed) {
-                    // Force Vue reactivity by modifying array contents in place (Nodes 2.0 hack)
+                    // Force Vue reactivity while preserving object identities
                     this.outputs.splice(0, this.outputs.length, ...newOutputs);
+                    // Splice Hack for each item
+                    for (let i = 0; i < this.outputs.length; i++) {
+                        const out = this.outputs[i];
+                        this.outputs.splice(i, 1);
+                        this.outputs.splice(i, 0, out);
+                    }
                 }
 
                 if (changed || !this._pipeSizeSet) {
                     this._pipeSizeSet = true;
-                    if (this.computeSize && this.setSize) {
-                        const s = this.computeSize();
-                        this.setSize([Math.max(this.size?.[0] ?? 180, s[0]), s[1]]);
-                    }
-                    
-                    if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
-                    app.canvas?.setDirty(true, true);
+                    requestAnimationFrame(() => {
+                        if (this.computeSize && this.setSize) {
+                            const s = this.computeSize();
+                            this.setSize([Math.max(this.size?.[0] ?? 180, s[0]), s[1]]);
+                        }
+                        
+                        if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
+                        app.canvas?.setDirty(true, true);
 
-                    const graph = this.graph || app.graph;
-                    if (graph?.trigger) {
-                        // Force full Vue node UI re-evaluation by faking a property change
-                        graph.trigger('node:property:changed', { nodeId: this.id, property: 'title', oldValue: this.title, newValue: this.title });
-                        graph.trigger('node:slot-label:changed', { nodeId: this.id, slotType: 2 }); // OUTPUT
-                    }
-                    if (graph?.change) graph.change();
+                        const graph = this.graph || app.graph;
+                        if (graph?.trigger) {
+                            // Force full Vue node UI re-evaluation by faking a property change
+                            graph.trigger('node:property:changed', { nodeId: this.id, property: 'title', oldValue: this.title, newValue: this.title });
+                            graph.trigger('node:slot-label:changed', { nodeId: this.id, slotType: 2 }); // OUTPUT
+                        }
+                        if (graph?.change) graph.change();
+                    });
                 }
             };
 
@@ -563,10 +695,24 @@ app.registerExtension({
                 const pipeInNode = findConnectedPipeIn(this);
                 let fp = `${this.properties.show_origin_title ? "1" : "0"}|`;
                 if (pipeInNode) {
-                    for (const inp of getManagedInputs(pipeInNode)) {
-                        if (inp.link == null) continue;
-                        fp += `${inp.name}:${getConnectedType(pipeInNode, inp)}:${getConnectedLabel(pipeInNode, inp, this.properties.show_origin_title)}|`;
-                    }
+                    const tracePipeInAncestorsFP = (node) => {
+                        if (!node) return "";
+                        let localFp = "";
+                        const pipeInput = (node.inputs || []).find(inp => inp.name === "pipe");
+                        if (pipeInput && pipeInput.link != null) {
+                            const graph = node.graph || app.graph;
+                            const origin = traceTrueOrigin(node, graph, pipeInput.link);
+                            if (origin && origin.node.type === PIPE_IN_NODE) {
+                                localFp += tracePipeInAncestorsFP(origin.node);
+                            }
+                        }
+                        for (const inp of getManagedInputs(node)) {
+                            if (inp.link == null) continue;
+                            localFp += `${node.id}:${inp.name}:${getConnectedType(node, inp)}:${getConnectedLabel(node, inp, this.properties.show_origin_title)}|`;
+                        }
+                        return localFp;
+                    };
+                    fp += tracePipeInAncestorsFP(pipeInNode);
                 } else {
                     fp += `cache:${JSON.stringify(loadCache())}`;
                 }
