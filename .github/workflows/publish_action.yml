@@ -1,11 +1,10 @@
 name: Publish to Comfy registry
+
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-    paths:
-      - "pyproject.toml"
+    tags:
+      - "v*.*.*"
 
 jobs:
   publish-node:
@@ -14,7 +13,33 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+        with:
+          # Required to fetch tag annotations for the release notes
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Create GitHub Release from Tag Message
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Force fetch the annotated tag object from remote 
+          # (Workaround for actions/checkout shallow clone limitations)
+          git fetch origin refs/tags/${{ github.ref_name }}:refs/tags/${{ github.ref_name }} --force
+
+          # Extract the message from the annotated tag
+          TAG_MSG=$(git tag -l --format='%(contents)' ${{ github.ref_name }})
+
+          # Fallback to a default message if the annotation is empty
+          if [ -z "$TAG_MSG" ]; then
+            TAG_MSG="Release ${{ github.ref_name }}"
+          fi
+
+          # Create the GitHub Release first so Comfy Registry can index the updates
+          gh release create ${{ github.ref_name }} \
+            --title "Release ${{ github.ref_name }}" \
+            --notes "$TAG_MSG"
+
       - name: Publish Custom Node
         uses: Comfy-Org/publish-node-action@main
         with:
-          personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }} ## Add your own personal access token to your Github Repository secrets and reference it here.
+          personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
