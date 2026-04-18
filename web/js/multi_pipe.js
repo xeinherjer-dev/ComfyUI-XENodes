@@ -225,13 +225,22 @@ const getConnectedType = (node, inputSlot) => {
     return originOutput?.type || null;
 };
 
-const getConnectedLabel = (node, inputSlot) => {
+const getConnectedLabel = (node, inputSlot, includeTitle = false) => {
     const graph = node.graph || app.graph;
     if (!graph || inputSlot.link == null) return null;
     const origin = traceTrueOrigin(node, graph, inputSlot.link);
     if (!origin) return null;
     const originOutput = origin.node.outputs?.[origin.slot];
-    return originOutput?.label || originOutput?.name || originOutput?.type || null;
+    let label = originOutput?.label || originOutput?.name || originOutput?.type || null;
+    
+    if (includeTitle && label && origin.node) {
+        const title = origin.node.title || origin.node.name || origin.node.type;
+        if (title) {
+            label = `${title}.${label}`;
+        }
+    }
+    
+    return label;
 };
 
 
@@ -248,15 +257,39 @@ app.registerExtension({
                 : undefined;
             this.properties = this.properties || {};
             this.properties.debug = this.properties.debug ?? false;
+            this.properties.show_origin_title = this.properties.show_origin_title ?? false;
 
             const updateLabels = () => {
+                let changed = false;
                 for (const inp of getManagedInputs(this)) {
-                    const label = getConnectedLabel(this, inp);
+                    const label = getConnectedLabel(this, inp, this.properties.show_origin_title);
                     const idx = getSlotIndex(inp.name);
-                    inp.label = label || (idx >= 0 ? `slot${String(idx).padStart(2, "0")}` : inp.name);
+                    const newLabel = label || (idx >= 0 ? `slot${String(idx).padStart(2, "0")}` : inp.name);
+                    if (inp.label !== newLabel) {
+                        inp.label = newLabel;
+                        changed = true;
+                    }
+                }
+                if (changed) {
+                    if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
+                    app.canvas?.setDirty(true, true);
+                    if (app.graph && typeof app.graph.change === 'function') app.graph.change();
                 }
             };
             
+            const originalGetExtraMenuOptions = this.getExtraMenuOptions;
+            this.getExtraMenuOptions = function (_, options) {
+                if (originalGetExtraMenuOptions) {
+                    originalGetExtraMenuOptions.apply(this, arguments);
+                }
+                options.push({
+                    content: this.properties.show_origin_title ? "Hide Origin Node Title" : "Show Origin Node Title",
+                    callback: () => {
+                        this.properties.show_origin_title = !this.properties.show_origin_title;
+                        updateLabels();
+                    }
+                });
+            };
             const originalOnConnectionsChange = this.onConnectionsChange;
             this.onConnectionsChange = function () {
                 const r = originalOnConnectionsChange?.apply(this, arguments);
@@ -268,11 +301,14 @@ app.registerExtension({
             let lastFP = "";
             const checkLabels = () => {
                 if (this.flags?.collapsed) return;
-                let fp = "";
+                let fp = `${this.properties.show_origin_title ? "1" : "0"}|`;
                 for (const inp of getManagedInputs(this)) {
-                    fp += `${inp.name}:${getConnectedLabel(this, inp) || ""}|`;
+                    fp += `${inp.name}:${getConnectedLabel(this, inp, this.properties.show_origin_title) || ""}|`;
                 }
-                if (fp !== lastFP) { lastFP = fp; updateLabels(); app.canvas?.setDirty(true, true); }
+                if (fp !== lastFP) {
+                    lastFP = fp;
+                    updateLabels();
+                }
             };
             this._pipeInInterval = setInterval(checkLabels, 1000);
 
@@ -306,6 +342,7 @@ app.registerExtension({
 
             this.properties = this.properties || {};
             this.properties.debug = this.properties.debug ?? false;
+            this.properties.show_origin_title = this.properties.show_origin_title ?? false;
 
             const saveCache = (slots) => {
                 this.properties[CACHE_KEY] = slots;
@@ -313,6 +350,20 @@ app.registerExtension({
 
             const loadCache = () => {
                 return this.properties?.[CACHE_KEY] || null;
+            };
+            
+            const originalGetExtraMenuOptions = this.getExtraMenuOptions;
+            this.getExtraMenuOptions = function (_, options) {
+                if (originalGetExtraMenuOptions) {
+                    originalGetExtraMenuOptions.apply(this, arguments);
+                }
+                options.push({
+                    content: this.properties.show_origin_title ? "Hide Origin Node Title" : "Show Origin Node Title",
+                    callback: () => {
+                        this.properties.show_origin_title = !this.properties.show_origin_title;
+                        syncOutputs();
+                    }
+                });
             };
 
             const syncOutputs = () => {
@@ -343,7 +394,7 @@ app.registerExtension({
 
                         if (matchingInput && matchingInput.link != null) {
                             const type = getConnectedType(pipeInNode, matchingInput);
-                            const label = getConnectedLabel(pipeInNode, matchingInput);
+                            const label = getConnectedLabel(pipeInNode, matchingInput, this.properties.show_origin_title);
                             outEntry.label = label || `slot${String(slotIdx).padStart(2, "0")}`;
                             outEntry.type = (type && type !== "*") ? type : "*";
                             cacheSlots.push({ label: outEntry.label, type: outEntry.type });
@@ -385,18 +436,31 @@ app.registerExtension({
                         }
                     }
                 }
+                
+                let changed = false;
+                if (this.outputs?.length !== newOutputs.length) {
+                    changed = true;
+                } else {
+                    for(let i = 0; i < newOutputs.length; i++) {
+                        if(this.outputs[i]?.label !== newOutputs[i].label || this.outputs[i]?.type !== newOutputs[i].type) {
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
 
-                const prevLen = this.outputs?.length;
                 this.outputs = newOutputs;
 
-                if (prevLen !== newOutputs.length || !this._pipeSizeSet) {
+                if (changed || !this._pipeSizeSet) {
                     this._pipeSizeSet = true;
                     if (this.computeSize && this.setSize) {
                         const s = this.computeSize();
                         this.setSize([Math.max(this.size?.[0] ?? 180, s[0]), s[1]]);
                     }
+                    if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
+                    app.canvas?.setDirty(true, true);
+                    if (app.graph && typeof app.graph.change === 'function') app.graph.change();
                 }
-                app.canvas?.setDirty(true, true);
             };
 
             const originalOnConnectionsChange = this.onConnectionsChange;
@@ -410,15 +474,14 @@ app.registerExtension({
             const periodicSync = () => {
                 if (this.flags?.collapsed) return;
                 const pipeInNode = findConnectedPipeIn(this);
-                let fp;
+                let fp = `${this.properties.show_origin_title ? "1" : "0"}|`;
                 if (pipeInNode) {
-                    fp = "";
                     for (const inp of getManagedInputs(pipeInNode)) {
                         if (inp.link == null) continue;
-                        fp += `${inp.name}:${getConnectedType(pipeInNode, inp)}:${getConnectedLabel(pipeInNode, inp)}|`;
+                        fp += `${inp.name}:${getConnectedType(pipeInNode, inp)}:${getConnectedLabel(pipeInNode, inp, this.properties.show_origin_title)}|`;
                     }
                 } else {
-                    fp = `cache:${JSON.stringify(loadCache())}`;
+                    fp += `cache:${JSON.stringify(loadCache())}`;
                 }
                 if (fp !== lastFP) { lastFP = fp; syncOutputs(); }
             };
