@@ -2,12 +2,11 @@ from __future__ import annotations
 from typing_extensions import override
 import json
 from comfy_api.latest import ComfyExtension, io
+from comfy_api.latest import _io
 
 class ComboSelectorNode(io.ComfyNode):
     @classmethod
     def define_schema(cls):
-        template = io.MatchType.Template("any")
-
         return io.Schema(
             node_id="XENodes.ComboSelector",
             display_name="Combo Selector",
@@ -17,7 +16,7 @@ class ComboSelectorNode(io.ComfyNode):
                 io.String.Input("hidden_list", default="[]"),
             ],
             outputs=[
-                io.MatchType.Output(template=io.MatchType.Template("COMBO"), display_name="COMBO"),
+                _io.Custom("COMBO").Output(display_name="COMBO"),
                 io.String.Output(display_name="STRING"),
             ],
         )
