@@ -19,7 +19,43 @@ const getSlotIndex = (name) => {
 const getManagedInputs = (node) =>
     (node.inputs || []).filter((inp) => inp.name?.startsWith(MANAGED_INPUT_PREFIX));
 
-// Deep link tracing function (Penetrates Subgraph and Reroute)
+// ─── Penetration Handlers (Strategy Pattern) ─────────────────────────
+// Dictionary to define how to penetrate specific node types (e.g., Reroutes, Switches)
+// Returns the next linkId to trace, or null if it cannot penetrate.
+const PENETRATION_HANDLERS = {
+    // Standard Reroute nodes
+    "Reroute": (node) => node.inputs?.[0]?.link,
+    "Builtin: Reroute": (node) => node.inputs?.[0]?.link,
+
+    // XENodes MultiSwitch
+    "XENodes.MultiSwitch": (node) => {
+        let selectVal = 0;
+        const selectWidget = node.widgets?.find(w => w.name === "select");
+        if (selectWidget) selectVal = selectWidget.value;
+        
+        if (selectVal >= 0) {
+            const inputSuffix = `input${String(selectVal).padStart(2, '0')}`;
+            const activeInput = node.inputs?.find(inp => inp.name === inputSuffix || inp.name?.endsWith(`.${inputSuffix}`));
+            return activeInput?.link;
+        }
+        return null;
+    },
+
+    // ComfyUI Standard Switch Node
+    "ComfySwitchNode": (node) => {
+        let switchVal = false;
+        const switchWidget = node.widgets?.find(w => w.name === "switch" || w.name === "boolean");
+        if (switchWidget) switchVal = switchWidget.value;
+        
+        const inputName = switchVal ? "on_true" : "on_false";
+        const activeInput = node.inputs?.find(inp => inp.name === inputName);
+        return activeInput?.link;
+    }
+};
+
+// ─── Core Tracing Logic ──────────────────────────────────────────────
+
+// Deep link tracing function (Penetrates Subgraph, Reroute, and Switches)
 const traceTrueOrigin = (contextNode, graph, linkId) => {
     if (linkId == null) return null;
     let currentGraph = graph;
@@ -129,39 +165,12 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
             return { node: originNode, slot: originSlot, graph: currentGraph };
         }
 
-        // 2. Penetrate Reroute node
-        if (originNode.type === "Reroute" || originNode.type === "Builtin: Reroute") {
-            currentLinkId = originNode.inputs?.[0]?.link;
-            debugLog(contextNode, `Penetrating Reroute: next linkId=${currentLinkId}`);
-            continue;
-        }
-
-        // 2.5 Penetrate Switch Nodes
-        if (originNode.type === "XENodes.MultiSwitch") {
-            let selectVal = 0;
-            const selectWidget = originNode.widgets?.find(w => w.name === "select");
-            if (selectWidget) selectVal = selectWidget.value;
-            
-            if (selectVal >= 0) {
-                const inputSuffix = `input${String(selectVal).padStart(2, '0')}`;
-                const activeInput = originNode.inputs?.find(inp => inp.name === inputSuffix || inp.name?.endsWith(`.${inputSuffix}`));
-                if (activeInput && activeInput.link != null) {
-                    currentLinkId = activeInput.link;
-                    debugLog(contextNode, `Penetrating MultiSwitch: selected ${inputSuffix}, next linkId=${currentLinkId}`);
-                    continue;
-                }
-            }
-        }
-
-        if (originNode.type === "ComfySwitchNode") {
-            let switchVal = false;
-            const switchWidget = originNode.widgets?.find(w => w.name === "switch" || w.name === "boolean");
-            if (switchWidget) switchVal = switchWidget.value;
-            const inputName = switchVal ? "on_true" : "on_false";
-            const activeInput = originNode.inputs?.find(inp => inp.name === inputName);
-            if (activeInput && activeInput.link != null) {
-                currentLinkId = activeInput.link;
-                debugLog(contextNode, `Penetrating ComfySwitchNode: selected ${inputName}, next linkId=${currentLinkId}`);
+        // 2. Penetrate using registered handlers (Reroute, Switches, etc.)
+        if (PENETRATION_HANDLERS[originNode.type]) {
+            const nextLinkId = PENETRATION_HANDLERS[originNode.type](originNode);
+            if (nextLinkId != null) {
+                currentLinkId = nextLinkId;
+                debugLog(contextNode, `Penetrating ${originNode.type}: next linkId=${currentLinkId}`);
                 continue;
             }
         }
@@ -292,7 +301,7 @@ app.registerExtension({
             const updateLabels = () => {
                 let changed = false;
                 
-                // Clone inputs array to force Vue to detect fully new references
+                // Clone inputs array to prepare for in-place update
                 const newInputs = [];
                 for (let i = 0; i < (this.inputs?.length || 0); i++) {
                     const inp = this.inputs[i];
@@ -310,7 +319,8 @@ app.registerExtension({
                 }
 
                 if (changed) {
-                    this.inputs = newInputs; // triggers the Vue setter
+                    // Force Vue reactivity by modifying array contents in place (Nodes 2.0 hack)
+                    this.inputs.splice(0, this.inputs.length, ...newInputs);
                     
                     if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
                     app.canvas?.setDirty(true, true);
@@ -499,7 +509,8 @@ app.registerExtension({
                 }
 
                 if (changed) {
-                    this.outputs = newOutputs; // Complete array replacement
+                    // Force Vue reactivity by modifying array contents in place (Nodes 2.0 hack)
+                    this.outputs.splice(0, this.outputs.length, ...newOutputs);
                 }
 
                 if (changed || !this._pipeSizeSet) {
