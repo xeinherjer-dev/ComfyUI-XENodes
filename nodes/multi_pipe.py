@@ -3,19 +3,17 @@ from typing_extensions import override
 from comfy_api.latest import ComfyExtension, io
 from comfy_api.latest import _io
 
-# Custom XEPIPE type for pipe connections
-XEPipe = _io.Custom("XEPIPE")
+# Custom XE_MULTI_PIPE type for pipe connections
+XEMultiPipe = _io.Custom("XE_MULTI_PIPE")
 
 # Number of dynamic slots
 MAX_SLOTS = 50
 
 
-class PipeInNode(io.ComfyNode):
+class MultiPipeInNode(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         # Use AnyType (io_type="*") so each slot independently accepts any type.
-        # MatchType.Template shares type resolution across all slots using the same
-        # template — connecting IMAGE to one slot would restrict all others to IMAGE.
         autogrow_template = _io.Autogrow.TemplateNames(
             input=io.AnyType.Input("value"),
             names=[f"slot{i:02d}" for i in range(MAX_SLOTS)],
@@ -23,15 +21,15 @@ class PipeInNode(io.ComfyNode):
         )
 
         return io.Schema(
-            node_id="XENodes.PipeIn",
-            display_name="Pipe In",
-            category="XENodes/Pipe",
-            description="Bundle multiple inputs into a single XEPIPE connection. Inputs auto-grow as you connect them.",
+            node_id="XENodes.MultiPipeIn",
+            display_name="Multi-Pipe In",
+            category="XENodes",
+            description="Bundle multiple inputs into a single XE_MULTI_PIPE connection. Inputs auto-grow as you connect them.",
             inputs=[
                 _io.Autogrow.Input("slots", template=autogrow_template),
             ],
             outputs=[
-                XEPipe.Output(display_name="pipe", tooltip="Bundled pipe output"),
+                XEMultiPipe.Output(display_name="pipe", tooltip="Bundled pipe output"),
             ],
         )
 
@@ -48,8 +46,8 @@ class PipeInNode(io.ComfyNode):
 
     @classmethod
     def INPUT_TYPES(cls):
-        # Workaround for ComfyUI V3 API: same pattern as multi_switch
-        res = super(PipeInNode, cls).INPUT_TYPES()
+        # Workaround for ComfyUI V3 API
+        res = super(MultiPipeInNode, cls).INPUT_TYPES()
         import copy
         res = copy.deepcopy(res)
         if "optional" not in res:
@@ -59,7 +57,7 @@ class PipeInNode(io.ComfyNode):
         return res
 
 
-class PipeOutNode(io.ComfyNode):
+class MultiPipeOutNode(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         outputs = []
@@ -72,12 +70,12 @@ class PipeOutNode(io.ComfyNode):
             )
 
         return io.Schema(
-            node_id="XENodes.PipeOut",
-            display_name="Pipe Out",
-            category="XENodes/Pipe",
-            description="Expand a XEPIPE connection into individual outputs. Outputs sync with the connected Pipe In node.",
+            node_id="XENodes.MultiPipeOut",
+            display_name="Multi-Pipe Out",
+            category="XENodes",
+            description="Expand a XE_MULTI_PIPE connection into individual outputs. Outputs sync with the connected Multi-Pipe In node.",
             inputs=[
-                XEPipe.Input("pipe", tooltip="Pipe input to unpack"),
+                XEMultiPipe.Input("pipe", tooltip="Pipe input to unpack"),
             ],
             outputs=outputs,
         )
@@ -96,11 +94,11 @@ class PipeOutNode(io.ComfyNode):
         return io.NodeOutput(*results)
 
 
-class PipeExtension(ComfyExtension):
+class MultiPipeExtension(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        return [PipeInNode, PipeOutNode]
+        return [MultiPipeInNode, MultiPipeOutNode]
 
 
-async def comfy_entrypoint() -> PipeExtension:
-    return PipeExtension()
+async def comfy_entrypoint() -> MultiPipeExtension:
+    return MultiPipeExtension()
