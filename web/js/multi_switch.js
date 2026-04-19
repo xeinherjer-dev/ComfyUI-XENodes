@@ -52,7 +52,7 @@ const createButton = (node, selectWidget, index, label) => {
         event.preventDefault();
         event.stopPropagation();
 
-        const allowUnselect = node.properties?.allow_unselect !== false;
+        const allowUnselect = node.properties?.allow_unselect === true;
 
         // Clicking the already-selected button deselects (sets select to -1) if allow_unselect property is true
         if (selectWidget.value === index) {
@@ -108,7 +108,7 @@ app.registerExtension({
                 }
             });
 
-            const allowUnselect = this.properties?.allow_unselect !== false;
+            const allowUnselect = this.properties?.allow_unselect === true;
             options.push({
                 content: `Allow Unselect: ${allowUnselect ? "On" : "Off"}`,
                 callback: () => {
@@ -161,7 +161,7 @@ app.registerExtension({
             // Define properties for the property panel
             this.addProperty("hide_connections", false, "boolean");
             this.addProperty("unselected_mode", "None", "enum", { values: ["None", "Mute", "Bypass"] });
-            this.addProperty("allow_unselect", true, "boolean");
+            this.addProperty("allow_unselect", false, "boolean");
 
             this.applyHideConnections = () => {
                 const isHidden = this.properties.hide_connections === true;
@@ -337,7 +337,7 @@ app.registerExtension({
                     container.appendChild(createButton(this, selectWidget, i, label));
                 }
 
-                const allowUnselect = this.properties?.allow_unselect !== false;
+                const allowUnselect = this.properties?.allow_unselect === true;
                 selectWidget.options = selectWidget.options || {};
                 selectWidget.options.min = allowUnselect ? -1 : 0;
                 selectWidget.options.max = maxValidIndex;
