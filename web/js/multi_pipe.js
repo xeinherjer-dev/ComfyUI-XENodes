@@ -206,20 +206,11 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
 
 // ─── Unified State Builder ───────────────────────────────────────────
 
-const getConnectedInfo = (node, inputSlot, includeTitle = false, trace = true) => {
+const getConnectedInfo = (node, inputSlot, includeTitle = false) => {
     const graph = node.graph || app.graph;
     if (!graph || inputSlot.link == null) return null;
     
-    let origin;
-    if (trace) {
-        origin = traceTrueOrigin(node, graph, inputSlot.link);
-    } else {
-        const link = graph.links[inputSlot.link] || app.graph.links[inputSlot.link];
-        if (!link) return null;
-        const originNode = graph.getNodeById(link.origin_id) || app.graph.getNodeById(link.origin_id);
-        if (!originNode) return null;
-        origin = { node: originNode, slot: link.origin_slot, graph };
-    }
+    const origin = traceTrueOrigin(node, graph, inputSlot.link);
     
     if (!origin) return null;
     
@@ -255,7 +246,7 @@ const buildPipeState = (contextNode, includeTitle) => {
         const managed = getManagedInputs(node);
         for (const inp of managed) {
             if (inp.link != null) {
-                const info = getConnectedInfo(node, inp, includeTitle, false);
+                const info = getConnectedInfo(node, inp, includeTitle);
                 if (info) state.set(getSlotIndex(inp.name), info);
             }
         }
