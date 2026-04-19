@@ -52,10 +52,17 @@ const createButton = (node, selectWidget, index, label) => {
         event.preventDefault();
         event.stopPropagation();
 
-        // Clicking the already-selected button deselects (sets select to -1)
-        const newValue = selectWidget.value === index ? -1 : index;
-        selectWidget.value = newValue;
-        selectWidget.callback?.(newValue);
+        const allowUnselect = node.properties?.allow_unselect !== false;
+
+        // Clicking the already-selected button deselects (sets select to -1) if allow_unselect property is true
+        if (selectWidget.value === index) {
+            if (!allowUnselect) return; // Ignore click if already selected and unselect is disallowed
+            selectWidget.value = -1;
+        } else {
+            selectWidget.value = index;
+        }
+
+        selectWidget.callback?.(selectWidget.value);
         node.change?.();
         node.setDirtyCanvas(true, true);
     };
@@ -100,6 +107,19 @@ app.registerExtension({
                     app.canvas?.setDirty(true, true);
                 }
             });
+
+            const allowUnselect = this.properties?.allow_unselect !== false;
+            options.push({
+                content: `Allow Unselect: ${allowUnselect ? "On" : "Off"}`,
+                callback: () => {
+                    this.properties = this.properties || {};
+                    this.properties.allow_unselect = !allowUnselect;
+                    if (this.rebuildButtons) {
+                        this.rebuildButtons();
+                    }
+                    app.canvas?.setDirty(true, true);
+                }
+            });
         };
 
         const originalDrawSlots = nodeType.prototype.drawSlots;
@@ -121,6 +141,10 @@ app.registerExtension({
                 this.applyHideConnections?.();
             } else if (name === "unselected_mode") {
                 this.updateUnselectedNodesModes?.(value === "None");
+            } else if (name === "allow_unselect") {
+                if (this.rebuildButtons) {
+                    this.rebuildButtons();
+                }
             }
         };
 
@@ -137,6 +161,7 @@ app.registerExtension({
             // Define properties for the property panel
             this.addProperty("hide_connections", false, "boolean");
             this.addProperty("unselected_mode", "None", "enum", { values: ["None", "Mute", "Bypass"] });
+            this.addProperty("allow_unselect", true, "boolean");
 
             this.applyHideConnections = () => {
                 const isHidden = this.properties.hide_connections === true;
@@ -312,8 +337,9 @@ app.registerExtension({
                     container.appendChild(createButton(this, selectWidget, i, label));
                 }
 
+                const allowUnselect = this.properties?.allow_unselect !== false;
                 selectWidget.options = selectWidget.options || {};
-                selectWidget.options.min = -1;
+                selectWidget.options.min = allowUnselect ? -1 : 0;
                 selectWidget.options.max = maxValidIndex;
                 updateButtons();
                 container.style.display = container.children.length === 0 ? "none" : "flex";
