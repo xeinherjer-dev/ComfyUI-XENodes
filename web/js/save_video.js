@@ -145,7 +145,7 @@ app.registerExtension({
 							Object.defineProperty(widget, 'computeLayoutSize', {
 								configurable: true,
 								get() {
-									return () => ({ minWidth: 50, minHeight: 50 });
+									return () => ({ minWidth: 50, minHeight: 150 });
 								},
 								set(_fn) {
 									// Intentionally ignore attempts to override (e.g. from useNodeVideo)
