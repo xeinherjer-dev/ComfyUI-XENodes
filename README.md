@@ -36,6 +36,7 @@ Bundle multiple inputs into a single `XE_MULTI_PIPE` connection and unpack them 
 
 - **Autogrow**: Input slots on `Multi-Pipe In` automatically increase as you connect more nodes.
 - **Dynamic Sync**: `Multi-Pipe Out` automatically synchronizes its output names with the connected `Multi-Pipe In` node.
+![Multi-Pipe UI](assets/screenshot2.webp)
 
 ### Slider
 
