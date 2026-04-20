@@ -139,8 +139,9 @@ class SaveAudio(io.ComfyNode):
                 # Flush audio encoder
                 output.mux(audio_stream.encode(None))
 
-        # Using a raw dict in case ui.PreviewAudio is not implemented identically to PreviewVideo
-        return io.NodeOutput(ui={"audio": [ui.SavedResult(file_name, subfolder, io.FolderType.output)]})
+        return io.NodeOutput(
+            ui=ui.SavedAudios([ui.SavedResult(file_name, subfolder, io.FolderType.output)])
+        )
 
 class SaveAudioExtension(ComfyExtension):
     @override

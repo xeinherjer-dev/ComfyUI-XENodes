@@ -5,9 +5,16 @@ app.registerExtension({
 	name: "XENodes.SaveAudio",
 	async beforeRegisterNodeDef(nodeType, nodeData, app) {
 		if (nodeData.name === "XENodes.SaveAudio") {
+			nodeData.input ??= {};
+			nodeData.input.required ??= {};
+			if (!nodeData.input.required.audioUI) {
+				nodeData.input.required.audioUI = ["AUDIO_UI", {}];
+			}
+
 			const onNodeCreated = nodeType.prototype.onNodeCreated;
 			nodeType.prototype.onNodeCreated = function () {
 				const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
+				this.previewMediaType = "audio";
 
 				const codecWidget = this.widgets.find((w) => w.name === "audio_codec");
 				const bitrateWidget = this.widgets.find((w) => w.name === "audio_bitrate");
