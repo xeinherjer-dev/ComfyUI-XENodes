@@ -1,27 +1,6 @@
 import { app } from "../../../scripts/app.js";
 import { applyTextReplacements } from "../../../scripts/utils.js";
 
-function ensureSubgraphPreviewProxy(node, widgetName) {
-	if (!node.widgets) {
-		node.widgets = [];
-	}
-
-	if (node.widgets.some((w) => w.name === widgetName)) {
-		return;
-	}
-
-	node.widgets.push({
-		name: widgetName,
-		type: "xenodes_preview_proxy",
-		value: "",
-		options: { serialize: false, hidden: true },
-		serialize: false,
-		draw: () => undefined,
-		computeSize: () => [0, -4],
-		y: 0,
-	});
-}
-
 app.registerExtension({
 	name: "XENodes.SaveImage",
 	async beforeRegisterNodeDef(nodeType, nodeData, app) {
@@ -29,10 +8,6 @@ app.registerExtension({
 			const onNodeCreated = nodeType.prototype.onNodeCreated;
 			nodeType.prototype.onNodeCreated = function () {
 				const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
-
-				// Keep a dedicated $$ pseudo-widget available so Subgraph promotion
-				// can pick this node up before the real canvas preview widget exists.
-				ensureSubgraphPreviewProxy(this, "$$xenodes-image-preview");
 
 				const prefixWidget = this.widgets.find((w) => w.name === "filename_prefix");
 				const formatWidget = this.widgets.find((w) => w.name === "format");
