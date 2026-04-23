@@ -221,10 +221,11 @@ app.registerExtension({
                     this.change();
                 }
 
-                // Recalculate and update node size to prevent UI collapse
+                // Recalculate height while preserving the user-resized width.
                 if (this.computeSize && this.setSize) {
-                    const newSize = this.computeSize([this.size[0], this.size[1]]);
-                    this.setSize([newSize[0], newSize[1]]);
+                    const minSize = this.computeSize();
+                    const newWidth = Math.max(this.size[0], minSize[0]);
+                    this.setSize([newWidth, minSize[1]]);
                 }
 
                 // Force canvas redraw
@@ -350,13 +351,15 @@ app.registerExtension({
 
                 if (this.size && this.computeSize) {
                     const targetSize = this.computeSize();
-                    if (targetSize[0] > this.size[0] || targetSize[1] !== this.size[1]) {
-                        const newWidth = Math.max(this.size[0], targetSize[0]);
+                    // Preserve the user-resized width: only expand to minWidth if the current width is narrower.
+                    const newWidth = Math.max(this.size[0], targetSize[0]);
+                    const newHeight = targetSize[1];
+                    if (newWidth !== this.size[0] || newHeight !== this.size[1]) {
                         if (this.setSize) {
-                            this.setSize([newWidth, targetSize[1]]);
+                            this.setSize([newWidth, newHeight]);
                         } else {
                             this.size[0] = newWidth;
-                            this.size[1] = targetSize[1];
+                            this.size[1] = newHeight;
                         }
                     }
                 }
@@ -387,14 +390,15 @@ app.registerExtension({
                 if (this.flags.collapsed) return size;
 
                 const buttonCount = container.children.length;
-                const HEADER_HEIGHT = 46;
 
                 if (this.properties?.hide_connections) {
                     size[1] = buttonCount * BUTTON_HEIGHT + 20;
+                    // Returns minimum width; actual width is preserved by callers (rebuildButtons / applyHideConnections).
                     size[0] = Math.max(120, maxLabelWidth + 40);
                     this.widgets_start_y = 0;
                 } else {
                     size[1] += 10;
+                    // Returns minimum width; callers preserve the user-resized width if it is already wider.
                     size[0] = Math.max(size[0], maxLabelWidth + 60);
                     this.widgets_start_y = undefined;
                 }
@@ -406,8 +410,10 @@ app.registerExtension({
             this.onResize = function (size) {
                 originalOnResize?.apply(this, arguments);
                 const minSize = this.computeSize ? this.computeSize() : [200, 100];
+                // Allow the user to freely resize the width, but never below the minimum.
                 size[0] = Math.max(size[0], minSize[0]);
-                size[1] = minSize[1]; // Force height to be minimum
+                // Height is always driven by content (button count), not user drag.
+                size[1] = minSize[1];
             };
 
             const originalSelectCallback = selectWidget.callback;
