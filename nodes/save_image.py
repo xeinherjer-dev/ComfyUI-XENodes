@@ -30,6 +30,7 @@ class SaveImage(io.ComfyNode):
                 io.Boolean.Input("lossless", default=False, tooltip="For WebP, enables lossless encoding. For PNG, this is ignored (always lossless)."),
                 io.Int.Input("quality", default=90, min=0, max=100, tooltip="For WebP, this is 0-100 quality. For PNG, this is compression level 0-9 (default 6)."),
             ],
+            outputs=[io.Image.Output("images")],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
         )
@@ -82,7 +83,7 @@ class SaveImage(io.ComfyNode):
             results.append(SavedResult(file, subfolder, FolderType.output))
             counter += 1
 
-        return io.NodeOutput(ui=SavedImages(results))
+        return io.NodeOutput(images, ui=SavedImages(results))
 
 
 class SaveImageExtension(ComfyExtension):

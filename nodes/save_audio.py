@@ -50,6 +50,7 @@ class SaveAudio(io.ComfyNode):
                 io.Combo.Input("audio_codec", options=list(AUDIO_CODEC_CONFIG.keys()), default="mp3", tooltip="The codec to use for the audio. Recommended: mp3 (for workflow support)."),
                 io.Combo.Input("audio_bitrate", options=["V0", "64k", "128k", "192k", "256k", "320k"], default="192k", tooltip="The bitrate to use for the audio codec."),
             ],
+            outputs=[io.Audio.Output("audio")],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
         )
@@ -140,6 +141,7 @@ class SaveAudio(io.ComfyNode):
                 output.mux(audio_stream.encode(None))
 
         return io.NodeOutput(
+            audio,
             ui=ui.SavedAudios([ui.SavedResult(file_name, subfolder, io.FolderType.output)])
         )
 
