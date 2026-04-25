@@ -400,7 +400,7 @@ app.registerExtension({
                 const buttonCount = container.children.length;
 
                 if (this.properties?.hide_connections) {
-                    size[1] = buttonCount * BUTTON_HEIGHT + 30;
+                    size[1] = buttonCount * BUTTON_HEIGHT + 20;
                     // Returns minimum width; actual width is preserved by callers (rebuildButtons / applyHideConnections).
                     size[0] = Math.max(120, maxLabelWidth + 40);
                     this.widgets_start_y = 0;
