@@ -8,7 +8,7 @@ const NODES2_MIN_CANVAS_W = 50;
 const NODES2_MIN_CANVAS_H = 50;
 const LEGACY_MIN_CANVAS_H = 80;
 const LEGACY_SIDE_MARGIN = 4;
-const LEGACY_BOTTOM_GAP = 16;
+const LEGACY_BOTTOM_GAP = 0;
 // Legacy mode: domWidget.y is always (outputCount + 0.2) * NODE_SLOT_HEIGHT + 2.
 // With 2 outputs and NODE_SLOT_HEIGHT=20 → (2.2 × 20) + 2 = 46. Static value; no runtime read.
 const LEGACY_TOP_OFFSET = (2 + 0.2) * (globalThis.LiteGraph?.NODE_SLOT_HEIGHT ?? 20) + 2;
