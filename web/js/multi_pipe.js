@@ -7,11 +7,12 @@ const CACHE_KEY = "_pipeSlotCache";
 
 // ─── Utility Functions ───────────────────────────────────────────────
 
-function debugLog(node, ...args) {
+const debugLog = (node, ...args) => {
     if (node?.properties?.debug) {
-        console.log(`[Multi-Pipe:${node.type}:${node.id}]`, ...args);
+        console.log(`[Multi-Pipe:${node?.type}:${node?.id}]`, ...args);
     }
-}
+};
+
 
 const getSlotIndex = (name) => {
     if (!name) return -1;
@@ -70,13 +71,18 @@ const PENETRATION_HANDLERS = {
 
 // Deep link tracing function (Penetrates Subgraph, Reroute, and Switches)
 const traceTrueOrigin = (contextNode, graph, linkId) => {
-    if (linkId == null) return null;
+    if (linkId == null) {
+        return null;
+    }
     let currentGraph = graph;
     let currentLinkId = linkId;
     const seen = new Set(); 
+    
 
     while (currentLinkId != null) {
-        if (seen.has(currentLinkId)) break;
+        if (seen.has(currentLinkId)) {
+            break;
+        }
         seen.add(currentLinkId);
 
         const findLinkGlobal = (g, lId) => {
@@ -93,7 +99,9 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
         };
 
         const link = currentGraph.links?.[currentLinkId] || app.graph.links?.[currentLinkId] || findLinkGlobal(app.graph, currentLinkId);
-        if (!link) break;
+        if (!link) {
+            break;
+        }
 
         let originNode = currentGraph.getNodeById(link.origin_id);
         
@@ -178,6 +186,27 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
                     currentGraph = innerGraph;
                     currentLinkId = outNode.inputs?.[0]?.link || outNode.inputs?.[originSlot]?.link;
                     if (currentLinkId != null) continue;
+                } else {
+                    // Nodes 2.0 Subgraph: No physical GraphOutput node. 
+                    // Links are made directly to a virtual output node with a negative ID (e.g., -20).
+                    // The target_slot corresponds to the index of the subgraph's output pin.
+                    let virtualOutputLink = null;
+                    if (innerGraph.links) {
+                        const linkKeys = Object.keys(innerGraph.links);
+                        for (let key of linkKeys) {
+                            let l = innerGraph.links[key];
+                            if (l && l.target_slot === originSlot && l.target_id < 0) {
+                                virtualOutputLink = l;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (virtualOutputLink) {
+                        currentGraph = innerGraph;
+                        currentLinkId = virtualOutputLink.id;
+                        continue;
+                    }
                 }
                 
                 // Deep recursive find
@@ -195,7 +224,9 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
                     return null;
                 };
                 const innerPipeInResult = findPipeInRecursive(innerGraph);
-                if (innerPipeInResult) return { node: innerPipeInResult.node, slot: 0, graph: innerPipeInResult.graph };
+                if (innerPipeInResult) {
+                    return { node: innerPipeInResult.node, slot: 0, graph: innerPipeInResult.graph };
+                }
             }
         }
 
@@ -231,6 +262,7 @@ const buildPipeState = (contextNode, includeTitle) => {
     
     const traceAndMerge = (node) => {
         if (!node) return;
+        
         
         // 1. Trace parent pipe to inherit state first
         const pipeInput = (node.inputs || []).find(inp => inp.name === "pipe");
