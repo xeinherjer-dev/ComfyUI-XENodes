@@ -468,6 +468,11 @@ app.registerExtension({
                     clearInterval(this.title_check_interval);
                     this.title_check_interval = null;
                 }
+                const styleId = `multi-switch-style-${this.id}`;
+                const styleEl = document.getElementById(styleId);
+                if (styleEl) {
+                    styleEl.remove();
+                }
                 return originalOnRemoved?.apply(this, arguments);
             };
 

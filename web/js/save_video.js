@@ -133,6 +133,7 @@ app.registerExtension({
 				}
 
 				// Intercept DOM widget creation to prevent video preview from forcing large node size
+				let videoObserver = null;
 				const origAddDOMWidget = this.addDOMWidget;
 				if (origAddDOMWidget) {
 					this.addDOMWidget = function(name, type, element, options) {
@@ -178,8 +179,9 @@ app.registerExtension({
 										});
 									};
 									constrainVideo();
-									const observer = new MutationObserver(constrainVideo);
-									observer.observe(element, { childList: true, subtree: true });
+
+									videoObserver = new MutationObserver(constrainVideo);
+			                        videoObserver.observe(element, { childList: true, subtree: true });
 								} else {
 									element.style.objectFit = "contain";
 								}
@@ -188,6 +190,15 @@ app.registerExtension({
 						return widget;
 					};
 				}
+
+				const originalOnRemoved = this.onRemoved;
+				this.onRemoved = function() {
+					if (videoObserver) {
+						videoObserver.disconnect();
+						videoObserver = null;
+					}
+					return originalOnRemoved ? originalOnRemoved.apply(this, arguments) : undefined;
+				};
 
 				const origOnConfigure = this.onConfigure;
 				this.onConfigure = function() {
