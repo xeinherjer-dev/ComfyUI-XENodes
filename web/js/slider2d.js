@@ -325,8 +325,8 @@ app.registerExtension({
 
                 if (isNodes2Environment()) {
                     container.style.width = "100%";
-                    container.style.margin = "-44px 0px 0px 0px";
-                    container.style.height = "calc(100% + 44px)";
+                    container.style.margin = "0px";
+                    container.style.height = "100%";
                     container.style.minHeight = "0";
                     container.style.maxHeight = "none";
                     container.style.alignSelf = "stretch";
@@ -334,19 +334,19 @@ app.registerExtension({
                     return;
                 }
 
-                // Widget start Y is static: (N_outputs + 0.2) * NODE_SLOT_HEIGHT + 2 = 46.
-                // No need to read domWidget.y at runtime.
-                const overlapUp = LEGACY_TOP_OFFSET;
+                // Slots are hidden via drawSlots override + CSS + widgets_start_y=0,
+                // so the DOM widget now starts directly below the title bar.
+                // No negative top offset needed.
+                const overlapUp = 0;
                 const bottomGap = getLegacyBottomGap();
                 
-                // Because its top is now at the exact bottom of the 30px title bar, its available height is:
                 const canvasHeight = Math.max(
                     nodeHeight - 30 - bottomGap, 
                     getMinCanvasHeight()
                 );
 
-                container.style.width = "calc(100% - 8px)";
-                container.style.margin = `-${overlapUp}px ${LEGACY_SIDE_MARGIN}px ${bottomGap}px ${LEGACY_SIDE_MARGIN}px`;
+                container.style.width = `calc(100% - ${LEGACY_SIDE_MARGIN * 2}px)`;
+                container.style.margin = `0px ${LEGACY_SIDE_MARGIN}px ${bottomGap}px ${LEGACY_SIDE_MARGIN}px`;
                 container.style.height = canvasHeight + "px";
                 container.style.minHeight = canvasHeight + "px";
                 container.style.maxHeight = canvasHeight + "px";
@@ -433,8 +433,8 @@ app.registerExtension({
                 const textX = this.properties.valueX.toFixed(axisX.decimals);
                 const textY = this.properties.valueY.toFixed(axisY.decimals);
                 
-                ctx.fillText(textX, w - 8, 16);
-                ctx.fillText(textY, w - 8, 32);
+                ctx.fillText(textX, w - 8, 8);
+                ctx.fillText(textY, w - 8, 24);
             };
 
             const updateValuesFromPos = (clientX, clientY, shiftKey = false, isDragging = false) => {
@@ -530,6 +530,31 @@ app.registerExtension({
                 minHeight: getMinCanvasHeight(),
                 minWidth: NODES2_MIN_CANVAS_W,
             });
+
+            // Hide input slot DOM elements but keep output slots visible.
+            // Set widgets_start_y = 0 so the DOM widget starts at the title bar.
+            const applyHideConnections = () => {
+                const styleId = `xe-slider2d-slot-style-${this.id}`;
+                let perNodeStyle = document.getElementById(styleId);
+                if (!perNodeStyle) {
+                    perNodeStyle = document.createElement("style");
+                    perNodeStyle.id = styleId;
+                    document.head.appendChild(perNodeStyle);
+                }
+                perNodeStyle.innerHTML = `
+                    [data-node-id="${this.id}"] .lg-slot.lg-slot--input {
+                        position: absolute !important;
+                        opacity: 0 !important;
+                        pointer-events: none !important;
+                        width: 10px !important;
+                        height: 20px !important;
+                        margin: 0 !important;
+                        padding: 0 !important;
+                    }
+                `;
+                this.widgets_start_y = 0;
+            };
+            applyHideConnections();
 
             // Override node's computeSize to prevent slots from dropping the dom widget Y origin
             const originalComputeSize = this.computeSize;

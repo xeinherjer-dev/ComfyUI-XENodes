@@ -378,7 +378,7 @@ app.registerExtension({
 
             domWidget.computeLayoutSize = () => {
                 const h = container.children.length * BUTTON_HEIGHT;
-                return { minHeight: h, maxHeight: h, minWidth: 0 };
+                return { minHeight: h, minWidth: 0 };
             };
 
             const originalComputeSize = this.computeSize;
@@ -392,7 +392,7 @@ app.registerExtension({
                 const buttonCount = container.children.length;
 
                 if (this.properties?.hide_connections) {
-                    size[1] = buttonCount * BUTTON_HEIGHT + 20;
+                    size[1] = buttonCount * BUTTON_HEIGHT + 30;
                     // Returns minimum width; actual width is preserved by callers (rebuildButtons / applyHideConnections).
                     size[0] = Math.max(120, maxLabelWidth + 40);
                     this.widgets_start_y = 0;

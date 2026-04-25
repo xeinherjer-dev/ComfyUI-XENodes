@@ -2,6 +2,7 @@ import { app } from "../../../scripts/app.js";
 
 const EXTENSION_NAME = "XENodes.Slider";
 const NODE_NAME = "XENodes.Slider";
+const SLIDER_NODE_HEIGHT = 44;
 
 app.registerExtension({
     name: EXTENSION_NAME,
@@ -34,10 +35,11 @@ app.registerExtension({
                         border: 1px solid rgba(255, 255, 255, 0.1);
                         border-radius: 6px;
                         padding: 0px 8px;
-                        margin: -31px 4px 0px 4px; /* Pull up more, remove bottom margin */
+                        margin: 0px 4px 4px 4px;
                         box-sizing: border-box;
                         width: calc(100% - 8px);
-                        height: 20px;
+                        min-height: 20px;
+                        height: calc(100% - 4px);
                         backdrop-filter: blur(4px);
                     }
                     .xe-slider-range {
@@ -250,7 +252,7 @@ app.registerExtension({
 
                 if (this.computeSize && this.setSize) {
                     const newSize = this.computeSize([this.size[0], this.size[1]]);
-                    this.setSize([newSize[0], Math.max(newSize[1], 30)]);
+                    this.setSize([newSize[0], Math.max(newSize[1], SLIDER_NODE_HEIGHT)]);
                 }
                 updateOutputType();
                 app.canvas?.setDirty(true, true);
@@ -259,21 +261,57 @@ app.registerExtension({
 
             const domWidget = this.addDOMWidget("slider_ui", "SLIDER", container, {
                 getValue: () => normalizeValue(this.properties?.value),
-                setValue(v) { onValueConfirm(v); }
+                setValue(v) { onValueConfirm(v); },
+                getMinHeight: () => 44,
             });
 
-            domWidget.computeSize = (width) => [Math.max(width, 180), 20];
+            // Normal display: compact 20px. Show Input in Subgraph: expand to fill.
+            const node = this;
+            domWidget.computeSize = (width) => {
+                const isShowInput = node.graph != null && node.graph !== app.graph;
+                return [Math.max(width, 180), isShowInput ? 44 : 20];
+            };
+
+            domWidget.computeLayoutSize = () => ({
+                minHeight: 44,
+                minWidth: 180,
+            });
+
+            // Hide input slot DOM elements but keep output slots visible.
+            // Set widgets_start_y = 0 so the DOM widget starts at the title bar.
+            const applyHideConnections = () => {
+                const styleId = `xe-slider-style-${this.id}`;
+                let perNodeStyle = document.getElementById(styleId);
+                if (!perNodeStyle) {
+                    perNodeStyle = document.createElement("style");
+                    perNodeStyle.id = styleId;
+                    document.head.appendChild(perNodeStyle);
+                }
+                perNodeStyle.innerHTML = `
+                    [data-node-id="${this.id}"] .lg-slot.lg-slot--input {
+                        position: absolute !important;
+                        opacity: 0 !important;
+                        pointer-events: none !important;
+                        width: 10px !important;
+                        height: 20px !important;
+                        margin: 0 !important;
+                        padding: 0 !important;
+                    }
+                `;
+                this.widgets_start_y = 0;
+            };
+            applyHideConnections();
 
             // Override node's computeSize to enforce compactness
             const originalComputeSize = this.computeSize;
             this.computeSize = function (size) {
                 const computed = originalComputeSize ? originalComputeSize.apply(this, arguments) : [200, 30];
-                return [computed[0], 30]; // Force extremely compact height
+                return [computed[0], SLIDER_NODE_HEIGHT];
             };
 
             this.onResize = function (size) {
                 const minSize = this.computeSize();
-                size[1] = minSize[1]; // Force height to be minimum
+                size[1] = minSize[1];
             };
 
             this.serialize_widgets = true;
