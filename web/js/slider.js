@@ -232,8 +232,8 @@ app.registerExtension({
             const stopPropagation = (e) => e.stopPropagation();
             sliderInput.addEventListener("mousedown", stopPropagation);
             numberInput.addEventListener("mousedown", stopPropagation);
-            sliderInput.addEventListener("wheel", stopPropagation);
-            numberInput.addEventListener("wheel", stopPropagation);
+            sliderInput.addEventListener("wheel", stopPropagation, { passive: true });
+            numberInput.addEventListener("wheel", stopPropagation, { passive: true });
 
             // Hide "value" text from the output port and hide default widget
             let _initFrames = 0;
