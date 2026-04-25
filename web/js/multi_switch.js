@@ -373,12 +373,9 @@ app.registerExtension({
                 app.canvas?.setDirty(true, true);
             };
 
-            let domWidget;
+            const getWidgetLayoutHeight = () => getButtonsLayoutHeight(container);
 
-            const getWidgetLayoutHeight = () =>
-                Math.max(getButtonsLayoutHeight(container), domWidget?.computedHeight ?? 0);
-
-            domWidget = this.addDOMWidget("select_buttons", "BUTTONS", container, {
+            const domWidget = this.addDOMWidget("select_buttons", "BUTTONS", container, {
                 getValue() {
                     return selectWidget.value;
                 },

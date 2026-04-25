@@ -279,12 +279,12 @@ app.registerExtension({
 
             // Hide input slot DOM elements but keep output slots visible.
             // Set widgets_start_y = 0 so the DOM widget starts at the title bar.
+            const slotStyleId = `xe-slider-style-${this.id}`;
             const applyHideConnections = () => {
-                const styleId = `xe-slider-style-${this.id}`;
-                let perNodeStyle = document.getElementById(styleId);
+                let perNodeStyle = document.getElementById(slotStyleId);
                 if (!perNodeStyle) {
                     perNodeStyle = document.createElement("style");
-                    perNodeStyle.id = styleId;
+                    perNodeStyle.id = slotStyleId;
                     document.head.appendChild(perNodeStyle);
                 }
                 perNodeStyle.innerHTML = `
@@ -312,6 +312,13 @@ app.registerExtension({
             this.onResize = function (size) {
                 const minSize = this.computeSize();
                 size[1] = minSize[1];
+            };
+
+            const originalOnRemoved = this.onRemoved;
+            this.onRemoved = function () {
+                const slotStyle = document.getElementById(slotStyleId);
+                slotStyle?.remove();
+                originalOnRemoved?.apply(this, arguments);
             };
 
             this.serialize_widgets = true;
