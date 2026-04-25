@@ -556,13 +556,6 @@ app.registerExtension({
             };
             applyHideConnections();
 
-            // Override node's computeSize to prevent slots from dropping the dom widget Y origin
-            const originalComputeSize = this.computeSize;
-            this.computeSize = function (size) {
-                const computed = originalComputeSize ? originalComputeSize.apply(this, arguments) : [240, 30];
-                return [computed[0], 30]; // Force dom widget layout cursor strictly below title bar
-            };
-
             const hideDataWidgets = () => {
                 if (!this.widgets) return;
                 for (const widget of this.widgets) {

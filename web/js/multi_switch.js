@@ -20,6 +20,12 @@ const clearContainer = (container) => {
     }
 };
 
+const getButtonsContentHeight = (container) =>
+    container.children.length * BUTTON_HEIGHT;
+
+const getButtonsLayoutHeight = (container) =>
+    getButtonsContentHeight(container);
+
 const setButtonActiveState = (button, isActive) => {
     button.style.backgroundColor = isActive ? "#444444" : "#252525";
     button.style.color = isActive ? "white" : "#bbbbbb";
@@ -367,18 +373,23 @@ app.registerExtension({
                 app.canvas?.setDirty(true, true);
             };
 
-            const domWidget = this.addDOMWidget("select_buttons", "BUTTONS", container, {
+            let domWidget;
+
+            const getWidgetLayoutHeight = () =>
+                Math.max(getButtonsLayoutHeight(container), domWidget?.computedHeight ?? 0);
+
+            domWidget = this.addDOMWidget("select_buttons", "BUTTONS", container, {
                 getValue() {
                     return selectWidget.value;
                 },
                 setValue(value) {
                     selectWidget.value = value;
-                }
+                },
+                getMinHeight: getWidgetLayoutHeight,
             });
 
             domWidget.computeLayoutSize = () => {
-                const h = container.children.length * BUTTON_HEIGHT;
-                return { minHeight: h, minWidth: 0 };
+                return { minHeight: getWidgetLayoutHeight(), minWidth: 0 };
             };
 
             const originalComputeSize = this.computeSize;
