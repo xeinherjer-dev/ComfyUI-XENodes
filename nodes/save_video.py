@@ -177,13 +177,18 @@ class SaveVideo(io.ComfyNode):
                     audio_stream = None
 
             # Encode modified frames
+            batch_size = 16
             for _ in range(total_plays):
-                for idx in frame_indices:
-                    frame_tensor = images[idx]
-                    img = (frame_tensor * 255).clamp(0, 255).byte().cpu().numpy()  # shape: (H, W, 3)
-                    frame = av.VideoFrame.from_ndarray(img, format='rgb24')
-                    frame = frame.reformat(format=pix_fmt)
-                    output.mux(video_stream.encode(frame))
+                for i in range(0, len(frame_indices), batch_size):
+                    batch_idxs = frame_indices[i:i + batch_size]
+                    
+                    batch_tensors = images[batch_idxs]
+                    batch_np = (batch_tensors * 255).clamp(0, 255).byte().cpu().numpy()
+                    
+                    for img in batch_np:
+                        frame = av.VideoFrame.from_ndarray(img, format='rgb24')
+                        frame = frame.reformat(format=pix_fmt)
+                        output.mux(video_stream.encode(frame))
 
             # Flush video encoder
             output.mux(video_stream.encode(None))

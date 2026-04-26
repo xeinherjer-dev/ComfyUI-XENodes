@@ -27,7 +27,7 @@ app.registerExtension({
 				const CODEC_CRF_MAP = {
 					'h264': 23,
 					'h265': 28,
-					'av1': 42,
+					'av1': 44,
 					'h264_nvenc': 30,
 					'hevc_nvenc': 35,
 					'av1_nvenc': 42
