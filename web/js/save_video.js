@@ -27,7 +27,10 @@ app.registerExtension({
 				const CODEC_CRF_MAP = {
 					'h264': 23,
 					'h265': 28,
-					'av1': 42
+					'av1': 42,
+					'h264_nvenc': 30,
+					'hevc_nvenc': 35,
+					'av1_nvenc': 42
 				};
 
 				const updateCrf = () => {
@@ -37,7 +40,6 @@ app.registerExtension({
 						crfWidget.value = crfValue;
 					}
 				};
-				syncTasks.push(updateCrf);
 
 				if (formatWidget && codecWidget && crfWidget) {
 					const originalCodecOptions = [...codecWidget.options.values];
@@ -46,7 +48,7 @@ app.registerExtension({
 					// Defines restricted codec choices based on format
 					const FORMAT_RESTRICTIONS = {
 						'webm': {
-							video: ['av1'],
+							video: ['av1', 'av1_nvenc'],
 							audio: ['opus']
 						}
 					};

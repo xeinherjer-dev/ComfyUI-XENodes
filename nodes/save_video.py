@@ -24,8 +24,8 @@ class SaveVideo(io.ComfyNode):
                 io.Video.Input("video", tooltip="The video to save."),
                 io.String.Input("filename_prefix", default="video/ComfyUI", tooltip="The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."),
                 io.Combo.Input("format", options=["mp4", "webm"], default="mp4", tooltip="The format to save the video as."),
-                io.Combo.Input("codec", options=["h264", "h265", "av1"], default="h264", tooltip="The codec to use for the video."),
-                io.Float.Input("crf", default=0.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used for encoding. Set to 0 to use encoder defaults."),
+                io.Combo.Input("codec", options=["h264", "h265", "av1", "h264_nvenc", "hevc_nvenc", "av1_nvenc"], default="h264", tooltip="The codec to use for the video."),
+                io.Float.Input("crf", default=0.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used for encoding (maps to CQ for NVENC). Set to 0 to use encoder defaults."),
                 io.Int.Input("loop_count", default=0, min=0, max=100, step=1, tooltip="Loop count. 0 = play once. For mp4/webm, this physically repeats the frames."),
                 io.Boolean.Input("pingpong", default=False, tooltip="Pingpong animation (images only). Plays frames forward then backward."),
                 io.Combo.Input("audio_codec", options=["aac", "opus", "flac"], default="aac", tooltip="The codec to use for the audio."),
@@ -117,7 +117,10 @@ class SaveVideo(io.ComfyNode):
         codec_config = {
             'h264': {'codec': 'libx264', 'pix_fmt': 'yuv420p'},
             'h265': {'codec': 'libx265', 'pix_fmt': 'yuv420p10le'},
-            'av1':  {'codec': 'libsvtav1', 'pix_fmt': 'yuv420p10le', 'options': {'preset': '6'}}
+            'av1':  {'codec': 'libsvtav1', 'pix_fmt': 'yuv420p10le', 'options': {'preset': '6'}},
+            'h264_nvenc': {'codec': 'h264_nvenc', 'pix_fmt': 'yuv420p'},
+            'hevc_nvenc': {'codec': 'hevc_nvenc', 'pix_fmt': 'yuv420p'},
+            'av1_nvenc':  {'codec': 'av1_nvenc', 'pix_fmt': 'yuv420p'}
         }
 
         config = codec_config.get(codec, codec_config['h264'])
@@ -147,7 +150,12 @@ class SaveVideo(io.ComfyNode):
             if isinstance(base_options, dict):
                 opts.update(base_options)
             if crf > 0:
-                opts['crf'] = str(int(crf))
+                if 'nvenc' in codec:
+                    opts['rc'] = 'vbr'
+                    opts['cq'] = str(int(crf))
+                    opts['b:v'] = '0'
+                else:
+                    opts['crf'] = str(int(crf))
             if opts:
                 video_stream.options = opts
 
