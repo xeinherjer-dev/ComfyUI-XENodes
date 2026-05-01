@@ -101,14 +101,6 @@ app.registerExtension({
 
             this.updateListPreview([]);
 
-            // Extra check for initial connection state for brand new nodes
-            setTimeout(() => {
-                const isIndexConnected = this.inputs?.some(i => i.name === "index" && i.link != null);
-                if (this.comboWidget) {
-                    this.comboWidget.disabled = !!isIndexConnected;
-                }
-            }, 10);
-
             const originalOnConfigure = this.onConfigure;
             this.onConfigure = function(info) {
                 if (originalOnConfigure) {
@@ -124,7 +116,9 @@ app.registerExtension({
                             this.updateListPreview(listValues);
                             hiddenWidget.value = oldVal; // restore exact serialized string just in case
                         }
-                    } catch (e) {}
+                    } catch (e) {
+                        console.warn("[XENodes.ComboSelector] Failed to parse hidden_list value:", e);
+                    }
                 }
                 const isIndexConnected = this.inputs?.some(i => i.name === "index" && i.link != null);
                 if (this.comboWidget) {

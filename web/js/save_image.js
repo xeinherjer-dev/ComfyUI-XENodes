@@ -78,9 +78,9 @@ app.registerExtension({
 					};
 				}
 
-				const onConfigure = nodeType.prototype.onConfigure;
-				nodeType.prototype.onConfigure = function () {
-					const r = onConfigure ? onConfigure.apply(this, arguments) : undefined;
+				const origOnConfigure = this.onConfigure;
+				this.onConfigure = function () {
+					const r = origOnConfigure ? origOnConfigure.apply(this, arguments) : undefined;
 					if (formatWidget) {
 						updateWebpWidgets(formatWidget.value, true);
 					}
