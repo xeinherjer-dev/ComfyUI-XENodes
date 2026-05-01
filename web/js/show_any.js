@@ -13,8 +13,8 @@ app.registerExtension({
                 if (this.widgets) {
                     for (let i = this.widgets.length - 1; i >= 0; i--) {
                         if (this.widgets[i].is_xenode_preview) {
-                            if (this.widgets[i].inputEl) {
-                                this.widgets[i].inputEl.remove();
+                            if (this.widgets[i].element) {
+                                this.widgets[i].element.remove();
                             }
                             this.widgets[i].onRemove?.();
                             this.widgets.splice(i, 1);
@@ -31,8 +31,8 @@ app.registerExtension({
                     for (const l of list) {
                         try {
                             const w = ComfyWidgets["STRING"](this, "", ["STRING", { multiline: true }], app).widget;
-                            w.inputEl.readOnly = true;
-                            w.inputEl.style.opacity = 0.8; 
+                            w.element.readOnly = true;
+                            w.element.style.opacity = 0.8;
                             w.value = l;
                             w.is_xenode_preview = true;
                             w.serialize_ignore = true;
