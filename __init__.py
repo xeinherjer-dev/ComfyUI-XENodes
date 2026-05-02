@@ -8,8 +8,7 @@ from .nodes.save_image import comfy_entrypoint as save_image_entrypoint
 from .nodes.combo_selector import comfy_entrypoint as combo_selector_entrypoint
 from .nodes.show_any import comfy_entrypoint as show_any_entrypoint
 from .nodes.multi_pipe import comfy_entrypoint as multi_pipe_entrypoint
-
-from .nodes.save_ultrahdr import comfy_entrypoint as save_ultrahdr_entrypoint
+from .nodes.save_hdr_video import comfy_entrypoint as save_hdr_video_entrypoint
 
 WEB_DIRECTORY = "./web"
 
@@ -31,10 +30,10 @@ async def comfy_entrypoint() -> XENodesExtension:
         await save_video_entrypoint(),
         await save_audio_entrypoint(),
         await save_image_entrypoint(),
-        await save_ultrahdr_entrypoint(),
         await combo_selector_entrypoint(),
         await show_any_entrypoint(),
         await multi_pipe_entrypoint(),
+        await save_hdr_video_entrypoint(),
     ]
     return XENodesExtension(exts)
 
