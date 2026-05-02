@@ -9,7 +9,6 @@ from fractions import Fraction
 from typing_extensions import override
 
 import torch
-import torchaudio
 
 from comfy_api.latest import ComfyExtension, io, Input, ui
 from comfy.cli_args import args
@@ -50,11 +49,19 @@ class SaveHDRVideo(io.ComfyNode):
             height
         )
 
+        saved_metadata = {}
+        if not args.disable_metadata:
+            if cls.hidden.extra_pnginfo is not None:
+                saved_metadata.update(cls.hidden.extra_pnginfo)
+            if cls.hidden.prompt is not None:
+                saved_metadata["prompt"] = cls.hidden.prompt
+
         file_name = f"{filename}_{counter:05}_.{format}"
         file_path = os.path.join(full_output_folder, file_name)
 
         components = video.get_components()
-        fps = float(components.frame_rate)
+        frame_rate = Fraction(round(components.frame_rate * 1000), 1000)
+        fps = float(frame_rate)
 
         # === Frame sequence generation ===
         images = components.images  # shape: (N, H, W, 3)
@@ -101,7 +108,10 @@ class SaveHDRVideo(io.ComfyNode):
             fd, temp_audio_path = tempfile.mkstemp(suffix=".wav")
             os.close(fd)
             try:
-                torchaudio.save(temp_audio_path, waveform.cpu(), audio_sample_rate)
+                import scipy.io.wavfile
+                # waveform: [channels, samples] -> [samples, channels]
+                audio_data = waveform.t().cpu().numpy()
+                scipy.io.wavfile.write(temp_audio_path, audio_sample_rate, audio_data)
             except Exception as e:
                 print(f"[XENodes] Warning: Failed to save temp audio: {e}")
                 if os.path.exists(temp_audio_path):
@@ -167,9 +177,22 @@ class SaveHDRVideo(io.ComfyNode):
 
         # Audio setup
         if temp_audio_path:
-            cmd += ["-c:a", audio_codec]
+            acodec = audio_codec
+            if acodec == "opus":
+                acodec = "libopus"
+            cmd += ["-c:a", acodec]
+            if audio_codec == "opus":
+                cmd += ["-ar", "48000"] # Opus requires 48kHz
             if audio_codec != "flac":
                 cmd += ["-b:a", audio_bitrate]
+
+        # Add workflow metadata
+        if saved_metadata:
+            try:
+                metadata_json = json.dumps(saved_metadata)
+                cmd += ["-metadata", f"comment={metadata_json}"]
+            except:
+                pass
 
         cmd += [file_path]
 
@@ -182,10 +205,30 @@ class SaveHDRVideo(io.ComfyNode):
                     frame_tensor = images[idx]
                     img = (frame_tensor * 255.0).clamp(0, 255).byte().cpu().numpy()
                     proc.stdin.write(img.tobytes())
+            
+            # Close stdin and check for any immediate errors
+            proc.stdin.close()
+            return_code = proc.wait()
+            if return_code != 0:
+                stderr_output = proc.stderr.read().decode('utf-8')
+                print(f"[XENodes] FFmpeg failed with return code {return_code}")
+                if stderr_output:
+                    print(f"[XENodes] FFmpeg error output:\n{stderr_output}")
+
         except Exception as e:
+            # Capture stderr if available when a pipe error or other exception occurs
+            stderr_output = ""
+            try:
+                if proc.stderr:
+                    stderr_output = proc.stderr.read().decode('utf-8')
+            except:
+                pass
+            
             print(f"[XENodes] Error encoding HDR video: {e}")
+            if stderr_output:
+                print(f"[XENodes] FFmpeg error output:\n{stderr_output}")
         finally:
-            if proc.stdin:
+            if proc.stdin and not proc.stdin.closed:
                 proc.stdin.close()
             proc.wait()
 
