@@ -120,9 +120,35 @@ class SaveHDRVideo(io.ComfyNode):
 
         # Build ffmpeg command
         cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", f"{fps:.06f}", "-i", "-"]
+        input_count = 1
         
         if temp_audio_path:
             cmd += ["-i", temp_audio_path]
+            input_count += 1
+
+        # Add workflow metadata using a temp file to avoid Windows command line length limits (WinError 206)
+        temp_meta_path = None
+        if saved_metadata:
+            try:
+                metadata_json = json.dumps(saved_metadata)
+                fd, temp_meta_path = tempfile.mkstemp(suffix=".txt")
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    f.write(";FFMETADATA1\n")
+                    # Escape special characters for FFMETADATA format
+                    safe_json = metadata_json.replace('\\', '\\\\').replace('=', '\\=').replace(';', '\\;').replace('\n', ' ')
+                    f.write(f"comment={safe_json}\n")
+                
+                # Insert metadata file as an additional input
+                cmd += ["-i", temp_meta_path]
+                metadata_input_index = input_count
+                input_count += 1
+            except Exception as e:
+                print(f"[XENodes] Warning: Failed to prepare metadata file: {e}")
+                if temp_meta_path and os.path.exists(temp_meta_path):
+                    os.remove(temp_meta_path)
+                temp_meta_path = None
+        else:
+            metadata_input_index = -1
 
         # Codec setup
         av_codec = codec
@@ -186,13 +212,9 @@ class SaveHDRVideo(io.ComfyNode):
             if audio_codec != "flac":
                 cmd += ["-b:a", audio_bitrate]
 
-        # Add workflow metadata
-        if saved_metadata:
-            try:
-                metadata_json = json.dumps(saved_metadata)
-                cmd += ["-metadata", f"comment={metadata_json}"]
-            except:
-                pass
+        # Map workflow metadata if it exists
+        if metadata_input_index >= 0:
+            cmd += ["-map_metadata", str(metadata_input_index)]
 
         cmd += [file_path]
 
@@ -235,6 +257,12 @@ class SaveHDRVideo(io.ComfyNode):
         if temp_audio_path and os.path.exists(temp_audio_path):
             try:
                 os.remove(temp_audio_path)
+            except:
+                pass
+        
+        if temp_meta_path and os.path.exists(temp_meta_path):
+            try:
+                os.remove(temp_meta_path)
             except:
                 pass
 
