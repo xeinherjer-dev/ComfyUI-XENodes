@@ -162,17 +162,14 @@ class SaveHDRVideo(io.ComfyNode):
         cmd += ["-c:v", av_codec]
 
         # HDR/10-bit setup
-        if "nvenc" in codec:
-            cmd += ["-pix_fmt", "p010le"]
-        else:
-            cmd += ["-pix_fmt", "yuv420p10le"]
+        cmd += ["-pix_fmt", "yuv420p10le"]
 
         cmd += ["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"]
         
         # Proper SDR to HDR conversion using zscale (matching user reference for quality).
         # We use a 2-step process with gbrpf32le intermediate for maximum precision.
         npl = peak_nits
-        cmd += ["-vf", f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt2020:t=smpte2084:m=bt2020nc:npl={npl}"]
+        cmd += ["-vf", f"setparams=color_primaries=bt709:color_trc=iec61966-2-1:colorspace=bt709,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt2020:t=smpte2084:m=bt2020nc:npl={npl}"]
 
         # Add HDR metadata and CRF
         mastering = "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
@@ -187,8 +184,6 @@ class SaveHDRVideo(io.ComfyNode):
             cmd += ["-tag:v", "hvc1", "-preset", "p6", "-tune", "hq", "-profile:v", "main10"]
             if crf > 0:
                 cmd += ["-rc", "vbr", "-cq", str(int(crf)), "-b:v", "0"]
-            else:
-                cmd += ["-b:v", "15M"] # Default to 15M if CRF is 0 as per user reference
             cmd += ["-bsf:v", "hevc_metadata=colour_primaries=9:transfer_characteristics=16:matrix_coefficients=9"]
         elif "h264" in codec:
             if "nvenc" in codec and crf > 0:
