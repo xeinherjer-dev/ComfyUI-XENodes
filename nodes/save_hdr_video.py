@@ -9,6 +9,7 @@ from fractions import Fraction
 from typing_extensions import override
 
 import torch
+import numpy as np
 
 from comfy_api.latest import ComfyExtension, io, Input, ui
 from comfy.cli_args import args
@@ -118,8 +119,8 @@ class SaveHDRVideo(io.ComfyNode):
                     os.remove(temp_audio_path)
                 temp_audio_path = None
 
-        # Build ffmpeg command
-        cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", f"{fps:.06f}", "-i", "-"]
+        # Build ffmpeg command with 16-bit RGB input for maximum precision during SDR->HDR conversion
+        cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb48le", "-s", f"{width}x{height}", "-r", f"{fps:.06f}", "-i", "-"]
         input_count = 1
         
         if temp_audio_path:
@@ -220,7 +221,8 @@ class SaveHDRVideo(io.ComfyNode):
             for _ in range(total_plays):
                 for idx in frame_indices:
                     frame_tensor = images[idx]
-                    img = (frame_tensor * 255.0).clamp(0, 255).byte().cpu().numpy()
+                    # Convert to 16-bit (uint16) to maintain precision before HDR conversion
+                    img = (frame_tensor * 65535.0).clamp(0, 65535).cpu().numpy().astype(np.uint16)
                     proc.stdin.write(img.tobytes())
             
             # Close stdin and check for any immediate errors
