@@ -27,7 +27,7 @@ class SaveHDRVideo(io.ComfyNode):
                 io.Video.Input("video", tooltip="The video to save."),
                 io.String.Input("filename_prefix", default="video/ComfyUI", tooltip="The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."),
                 io.Combo.Input("format", options=["mp4", "webm"], default="mp4", tooltip="The format to save the video as."),
-                io.Combo.Input("codec", options=["h265", "av1", "hevc_nvenc", "av1_nvenc"], default="h265", tooltip="The codec to use for the video. HDR requires H.265 or AV1."),
+                io.Combo.Input("codec", options=["av1", "av1_nvenc"], default="av1", tooltip="The codec to use for the video. HDR requires AV1."),
                 io.Float.Input("crf", default=0.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used for encoding (maps to CQ for NVENC). Set to 0 to use encoder defaults."),
                 io.Int.Input("loop_count", default=0, min=0, max=100, step=1, tooltip="Loop count. 0 = play once. For mp4/webm, this physically repeats the frames."),
                 io.Boolean.Input("pingpong", default=False, tooltip="Pingpong animation (images only). Plays frames forward then backward."),
@@ -153,11 +153,7 @@ class SaveHDRVideo(io.ComfyNode):
 
         # Codec setup
         av_codec = codec
-        if codec == "h264":
-            av_codec = "libx264"
-        elif codec == "h265":
-            av_codec = "libx265"
-        elif codec == "av1":
+        if codec == "av1":
             av_codec = "libsvtav1"
             
         cmd += ["-c:v", av_codec]
@@ -172,27 +168,10 @@ class SaveHDRVideo(io.ComfyNode):
         npl = peak_nits
         cmd += ["-vf", f"setparams=color_primaries=bt709:color_trc=iec61966-2-1:colorspace=bt709,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt2020:t=smpte2084:m=bt2020nc:npl={npl}"]
 
-        # Add HDR metadata and CRF
-        mastering = "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
-        max_cll = f"{int(peak_nits)},{max(int(peak_nits * 0.4), 1)}"
 
-        if codec == "h265":
-            cmd += ["-tag:v", "hvc1"]
-            if crf > 0:
-                cmd += ["-crf", str(int(crf))]
-            cmd += ["-x265-params", f"hdr-opt=1:repeat-headers=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:master-display={mastering}:max-cll={max_cll}"]
-        elif codec == "hevc_nvenc":
-            cmd += ["-tag:v", "hvc1", "-preset", "p6", "-tune", "hq", "-profile:v", "main10"]
-            if crf > 0:
-                cmd += ["-rc", "vbr", "-cq", str(int(crf)), "-b:v", "0"]
-            cmd += ["-bsf:v", "hevc_metadata=colour_primaries=9:transfer_characteristics=16:matrix_coefficients=9"]
-        elif "h264" in codec:
-            if "nvenc" in codec and crf > 0:
-                cmd += ["-rc", "vbr", "-cq", str(int(crf)), "-b:v", "0"]
-            elif crf > 0:
-                cmd += ["-crf", str(int(crf))]
-        elif "av1" in codec:
-            if "nvenc" in codec and crf > 0:
+
+        if "av1" in av_codec or "svtav1" in av_codec:
+            if "nvenc" in av_codec and crf > 0:
                 cmd += ["-rc", "vbr", "-cq", str(int(crf)), "-b:v", "0"]
             elif crf > 0:
                 cmd += ["-crf", str(int(crf))]
