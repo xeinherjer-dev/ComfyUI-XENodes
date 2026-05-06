@@ -25,7 +25,7 @@ class SaveHDRImage(io.ComfyNode):
                 io.Image.Input("images", tooltip="The images to save."),
                 io.String.Input("filename_prefix", default="image/ComfyUI", tooltip="The prefix for the file to save."),
                 io.Combo.Input("codec", options=["av1", "av1_nvenc"], default="av1", tooltip="The codec to use for AVIF encoding."),
-                io.Float.Input("crf", default=0.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used for encoding (maps to CQ for NVENC). Set to 0 to use encoder defaults."),
+                io.Float.Input("crf", default=10.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used for encoding (maps to CQ for NVENC). Set to 0 to use encoder defaults."),
                 io.Float.Input("peak_nits", default=400.0, min=100.0, max=10000.0, step=10.0, tooltip="Peak brightness in nits. SDR white (100 nits) will be mapped to this target luminance in HDR."),
             ],
             outputs=[io.Image.Output("images")],
@@ -92,31 +92,42 @@ class SaveHDRImage(io.ComfyNode):
 
             if saved_metadata:
                 try:
-                    # Write metadata to ASCII tags that ComfyUI's avif.ts can actually parse.
-                    # It looks for tags with type 2 (ASCII) and checks for "workflow:" or "prompt:" prefix.
+                    # FFmpeg's default metadata mapping (-map_metadata) is incompatible with ComfyUI's AVIF parser, 
+                    # as it doesn't write to the specific Exif boxes the frontend expects.
+                    # We use exiftool to write metadata to ASCII tags that ComfyUI's avif.ts can actually parse.
+                    # avif.ts looks for tags with type 2 (ASCII) and checks for "workflow:" or "prompt:" prefix.
                     # Note: UserComment is type 7 and the current frontend parser fails to read it.
-                    # Use an argument file (@file) with exiftool to avoid Windows command line length limits
-                    args_to_write = ["-overwrite_original"]
-                    if "workflow" in saved_metadata:
-                        workflow_json = json.dumps(saved_metadata["workflow"])
-                        args_to_write.append(f"-ImageDescription=Workflow: {workflow_json}")
-                    if "prompt" in saved_metadata:
-                        prompt_json = json.dumps(saved_metadata["prompt"])
-                        args_to_write.append(f"-Make=Prompt: {prompt_json}")
+                    # Use the most robust method for Windows: write values to temp files and use -TAG<=FILE
+                    # This avoids command line length limits AND issues with newlines in JSON.
+                    exif_cmd = ["exiftool", "-overwrite_original"]
+                    temp_files = []
                     
-                    fd, arg_file_path = tempfile.mkstemp(suffix=".args")
                     try:
-                        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                            for arg in args_to_write:
-                                f.write(arg + "\n")
-                        
-                        subprocess.run(["exiftool", "-@", arg_file_path, current_file_path], check=True, capture_output=True)
+                        if "workflow" in saved_metadata:
+                            workflow_json = json.dumps(saved_metadata["workflow"])
+                            fd, path = tempfile.mkstemp(suffix=".txt")
+                            temp_files.append(path)
+                            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                                f.write(f"workflow:{workflow_json}")
+                            exif_cmd.append(f"-Make<={path}")
+                            
+                        if "prompt" in saved_metadata:
+                            prompt_json = json.dumps(saved_metadata["prompt"])
+                            fd, path = tempfile.mkstemp(suffix=".txt")
+                            temp_files.append(path)
+                            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                                f.write(f"prompt:{prompt_json}")
+                            exif_cmd.append(f"-Model<={path}")
+                            
+                        exif_cmd.append(current_file_path)
+                        subprocess.run(exif_cmd, check=True, capture_output=True)
                     finally:
-                        try:
-                            if os.path.exists(arg_file_path):
-                                os.remove(arg_file_path)
-                        except:
-                            pass
+                        for f_path in temp_files:
+                            try:
+                                if os.path.exists(f_path):
+                                    os.remove(f_path)
+                            except:
+                                pass
                 except Exception as e:
                     print(f"[XENodes] Warning: Failed to write metadata with exiftool for frame {i}: {e}")
 
