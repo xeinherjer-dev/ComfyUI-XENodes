@@ -27,7 +27,7 @@ app.registerExtension({
 				const updateCrf = () => {
 					const codec = codecWidget?.value;
 					const crfValue = CODEC_CRF_MAP[codec];
-					if (crfValue !== undefined && crfWidget && (crfWidget.value === 0 || crfWidget.value === crfWidget.options.default)) {
+					if (crfValue !== undefined && crfWidget) {
 						crfWidget.value = crfValue;
 					}
 				};

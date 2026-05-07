@@ -6,6 +6,7 @@ import json
 import tempfile
 from typing_extensions import override
 
+import torch
 import numpy as np
 
 from comfy_api.latest import ComfyExtension, io, Input, ui
@@ -18,15 +19,18 @@ class SaveHDRImage(io.ComfyNode):
     def define_schema(cls):
         return io.Schema(
             node_id="XENodes.SaveHDRImage",
-            display_name="Save HDR Image (AVIF)",
+            display_name="Save HDR Image",
             category="XENodes",
             description="Saves the input image natively as HDR AVIF using ffmpeg.",
             inputs=[
                 io.Image.Input("images", tooltip="The images to save."),
                 io.String.Input("filename_prefix", default="image/ComfyUI", tooltip="The prefix for the file to save."),
+                io.Combo.Input("format", options=["avif"], default="avif", tooltip="The image format to save."),
                 io.Combo.Input("codec", options=["av1", "av1_nvenc"], default="av1", tooltip="The codec to use for AVIF encoding."),
                 io.Float.Input("crf", default=10.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used for encoding (maps to CQ for NVENC). Set to 0 to use encoder defaults."),
-                io.Float.Input("peak_nits", default=400.0, min=100.0, max=10000.0, step=10.0, tooltip="Peak brightness in nits. SDR white (100 nits) will be mapped to this target luminance in HDR."),
+                io.Float.Input("peak_nits", default=400.0, min=100.0, max=10000.0, step=1.0, tooltip="Peak brightness in nits. SDR white (100 nits) will be mapped to this target luminance in HDR."),
+                io.Float.Input("itm_knee", default=0.0, min=0.0, max=1.0, step=0.01, tooltip="Inverse Tone Mapping (Soft-Knee) threshold. 0.0 starts expansion from black. 0.8 preserves SDR midtones and applies expansion to highlights."),
+                io.Float.Input("itm_exponent", default=1.0, min=1.0, max=10.0, step=0.01, tooltip="Expansion curve exponent. 1.0 = Linear (punchy/bright), 2.0 = Quadratic (soft/natural), >2.0 = even softer transition."),
             ],
             outputs=[io.Image.Output("images")],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
@@ -34,7 +38,7 @@ class SaveHDRImage(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, images: Input.Image, filename_prefix: str, codec: str, crf: float, peak_nits: float) -> io.NodeOutput:
+    def execute(cls, images: Input.Image, filename_prefix: str, format: str, codec: str, crf: float, peak_nits: float, itm_knee: float, itm_exponent: float) -> io.NodeOutput:
         width, height = images[0].shape[1], images[0].shape[0]
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix,
@@ -53,15 +57,17 @@ class SaveHDRImage(io.ComfyNode):
         results = []
         for i in range(images.shape[0]):
             frame_tensor = images[i]
-            current_file_name = f"{filename}_{counter + i:05}_.avif"
+            current_file_name = f"{filename}_{counter + i:05}_.{format}"
             current_file_path = os.path.join(full_output_folder, current_file_name)
 
-            cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb48le", "-s", f"{width}x{height}", "-r", "25", "-i", "-"]
+            cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "gbrpf32le", "-s", f"{width}x{height}", "-r", "25", "-i", "-"]
             av_codec = "libsvtav1" if codec == "av1" else codec
             cmd += ["-c:v", av_codec]
             cmd += ["-pix_fmt", "yuv420p10le"]
             cmd += ["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"]
-            cmd += ["-vf", f"setparams=color_primaries=bt709:color_trc=iec61966-2-1:colorspace=bt709,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt2020:t=smpte2084:m=bt2020nc:npl={peak_nits}"]
+            
+            # Since input is already linear float32 (where 1.0 = 100 nits), we just convert to PQ
+            cmd += ["-vf", "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709,zscale=p=bt2020:t=smpte2084:m=bt2020nc:npl=100"]
 
             if "av1" in av_codec or "svtav1" in av_codec:
                 if "nvenc" in av_codec and crf > 0:
@@ -74,8 +80,24 @@ class SaveHDRImage(io.ComfyNode):
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
             try:
-                img = (frame_tensor * 65535.0).clamp(0, 65535).cpu().numpy().astype(np.uint16)
-                proc.stdin.write(img.tobytes())
+                # Convert sRGB to Linear (IEC 61966-2-1 standard)
+                # frame_tensor is expected to be in [0, 1]
+                linear = torch.where(frame_tensor <= 0.04045, frame_tensor / 12.92, ((frame_tensor + 0.055) / 1.055) ** 2.4)
+                
+                # Apply Soft-Knee Inverse Tone Mapping (Power Curve)
+                scale = peak_nits / 100.0
+                if itm_knee < 1.0:
+                    # y = x + a * max(0, x - knee)^exponent
+                    # a = (scale - 1.0) / (1.0 - knee)^exponent
+                    a = (scale - 1.0) / ((1.0 - itm_knee) ** itm_exponent)
+                    diff = torch.clamp(linear - itm_knee, min=0.0)
+                    linear = linear + a * (diff ** itm_exponent)
+
+                # Convert to GBR planar format (gbrpf32le)
+                gbr_planar = linear[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
+                img_bytes = gbr_planar.cpu().numpy().astype(np.float32).tobytes()
+                
+                proc.stdin.write(img_bytes)
                 proc.stdin.close()
                 return_code = proc.wait()
                 if return_code != 0:

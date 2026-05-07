@@ -29,11 +29,13 @@ class SaveHDRVideo(io.ComfyNode):
                 io.Combo.Input("format", options=["mp4", "webm"], default="mp4", tooltip="The format to save the video as."),
                 io.Combo.Input("codec", options=["av1", "av1_nvenc"], default="av1", tooltip="The codec to use for the video. HDR requires AV1."),
                 io.Float.Input("crf", default=0.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used for encoding (maps to CQ for NVENC). Set to 0 to use encoder defaults."),
+                io.Float.Input("peak_nits", default=400.0, min=100.0, max=10000.0, step=1.0, tooltip="Peak brightness in nits. SDR white (100 nits) will be mapped to this target luminance in HDR."),
+                io.Float.Input("itm_knee", default=0.0, min=0.0, max=1.0, step=0.01, tooltip="Inverse Tone Mapping (Soft-Knee) threshold. 0.0 starts expansion from black. 0.8 preserves SDR midtones and applies expansion to highlights."),
+                io.Float.Input("itm_exponent", default=1.0, min=1.0, max=10.0, step=0.01, tooltip="Expansion curve exponent. 1.0 = Linear (punchy/bright), 2.0 = Quadratic (soft/natural), >2.0 = even softer transition."),
                 io.Int.Input("loop_count", default=0, min=0, max=100, step=1, tooltip="Loop count. 0 = play once. For mp4/webm, this physically repeats the frames."),
                 io.Boolean.Input("pingpong", default=False, tooltip="Pingpong animation (images only). Plays frames forward then backward."),
                 io.Combo.Input("audio_codec", options=["aac", "opus", "flac"], default="aac", tooltip="The codec to use for the audio."),
                 io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", tooltip="The bitrate to use for the audio codec (ignored if flac)."),
-                io.Float.Input("peak_nits", default=400.0, min=100.0, max=10000.0, step=10.0, tooltip="Peak brightness in nits. SDR white (100 nits) will be mapped to this target luminance in HDR."),
             ],
             outputs=[io.Video.Output("video")],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
@@ -41,7 +43,7 @@ class SaveHDRVideo(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float, loop_count: int, pingpong: bool, audio_codec: str, audio_bitrate: str, peak_nits: float) -> io.NodeOutput:
+    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float, loop_count: int, pingpong: bool, audio_codec: str, audio_bitrate: str, peak_nits: float, itm_knee: float, itm_exponent: float) -> io.NodeOutput:
         width, height = video.get_dimensions()
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix,
@@ -119,8 +121,8 @@ class SaveHDRVideo(io.ComfyNode):
                     os.remove(temp_audio_path)
                 temp_audio_path = None
 
-        # Build ffmpeg command with 16-bit RGB input for maximum precision during SDR->HDR conversion
-        cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb48le", "-s", f"{width}x{height}", "-r", f"{fps:.06f}", "-i", "-"]
+        # Build ffmpeg command with 32-bit float input for maximum precision during SDR->HDR conversion
+        cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "gbrpf32le", "-s", f"{width}x{height}", "-r", f"{fps:.06f}", "-i", "-"]
         input_count = 1
         
         if temp_audio_path:
@@ -131,13 +133,17 @@ class SaveHDRVideo(io.ComfyNode):
         temp_meta_path = None
         if saved_metadata:
             try:
-                metadata_json = json.dumps(saved_metadata)
                 fd, temp_meta_path = tempfile.mkstemp(suffix=".txt")
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
                     f.write(";FFMETADATA1\n")
-                    # Escape special characters for FFMETADATA format
-                    safe_json = metadata_json.replace('\\', '\\\\').replace('=', '\\=').replace(';', '\\;').replace('\n', ' ')
-                    f.write(f"comment={safe_json}\n")
+                    for key, value in saved_metadata.items():
+                        # ComfyUI frontend often looks for 'Workflow' and 'Prompt' (case-insensitive or specific)
+                        # We write them as separate entries in the FFMETADATA format.
+                        tag_name = key.capitalize() if key in ["workflow", "prompt"] else key
+                        json_str = json.dumps(value)
+                        # Escape special characters for FFMETADATA format
+                        safe_json = json_str.replace('\\', '\\\\').replace('=', '\\=').replace(';', '\\;').replace('\n', ' ')
+                        f.write(f"{tag_name}={safe_json}\n")
                 
                 # Insert metadata file as an additional input
                 cmd += ["-i", temp_meta_path]
@@ -161,14 +167,14 @@ class SaveHDRVideo(io.ComfyNode):
         # HDR/10-bit setup
         cmd += ["-pix_fmt", "yuv420p10le"]
 
+        if format == "mp4":
+            cmd += ["-movflags", "use_metadata_tags"]
+
         cmd += ["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"]
         
-        # Proper SDR to HDR conversion using zscale (matching user reference for quality).
-        # We use a 2-step process with gbrpf32le intermediate for maximum precision.
-        npl = peak_nits
-        cmd += ["-vf", f"setparams=color_primaries=bt709:color_trc=iec61966-2-1:colorspace=bt709,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt2020:t=smpte2084:m=bt2020nc:npl={npl}"]
-
-
+        # Proper SDR to HDR conversion using zscale.
+        # Since input is already linear float32 (where 1.0 = 100 nits), we just convert to PQ
+        cmd += ["-vf", "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709,zscale=p=bt2020:t=smpte2084:m=bt2020nc:npl=100"]
 
         if "av1" in av_codec or "svtav1" in av_codec:
             if "nvenc" in av_codec and crf > 0:
@@ -200,9 +206,24 @@ class SaveHDRVideo(io.ComfyNode):
             for _ in range(total_plays):
                 for idx in frame_indices:
                     frame_tensor = images[idx]
-                    # Convert to 16-bit (uint16) to maintain precision before HDR conversion
-                    img = (frame_tensor * 65535.0).clamp(0, 65535).cpu().numpy().astype(np.uint16)
-                    proc.stdin.write(img.tobytes())
+                    
+                    # Convert sRGB to Linear (IEC 61966-2-1 standard)
+                    linear = torch.where(frame_tensor <= 0.04045, frame_tensor / 12.92, ((frame_tensor + 0.055) / 1.055) ** 2.4)
+                    
+                    # Apply Soft-Knee Inverse Tone Mapping (Power Curve)
+                    scale = peak_nits / 100.0
+                    if itm_knee < 1.0:
+                        # y = x + a * max(0, x - knee)^exponent
+                        # a = (scale - 1.0) / (1.0 - knee)^exponent
+                        a = (scale - 1.0) / ((1.0 - itm_knee) ** itm_exponent)
+                        diff = torch.clamp(linear - itm_knee, min=0.0)
+                        linear = linear + a * (diff ** itm_exponent)
+
+                    # Convert to GBR planar format (gbrpf32le)
+                    gbr_planar = linear[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
+                    img_bytes = gbr_planar.cpu().numpy().astype(np.float32).tobytes()
+                    
+                    proc.stdin.write(img_bytes)
             
             # Close stdin and check for any immediate errors
             proc.stdin.close()

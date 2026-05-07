@@ -25,16 +25,14 @@ app.registerExtension({
 				}
 
 				const CODEC_CRF_MAP = {
-					'h265': 28,
-					'av1': 44,
-					'hevc_nvenc': 35,
-					'av1_nvenc': 42
+					'av1': 32,
+					'av1_nvenc': 30
 				};
 
 				const updateCrf = () => {
 					const codec = codecWidget?.value;
 					const crfValue = CODEC_CRF_MAP[codec];
-					if (crfValue !== undefined && crfWidget && (crfWidget.value === 0 || crfWidget.value === crfWidget.options.default)) {
+					if (crfValue !== undefined && crfWidget) {
 						crfWidget.value = crfValue;
 					}
 				};
