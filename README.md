@@ -6,6 +6,10 @@ A collection of custom nodes for ComfyUI, featuring Multi-Switch, Multi-Pipe, Sl
 
 - **Nodes 2.0 Support**: Modern UI and compatibility for latest ComfyUI versions.
 
+## Requirements
+
+- **FFmpeg**: Required for `Save HDR Image` and `Save HDR Video` nodes. Ensure `ffmpeg` is installed and available in your system's PATH.
+
 ## Installation
 
 1. Clone this repository into your `ComfyUI/custom_nodes` directory:
