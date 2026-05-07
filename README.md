@@ -1,6 +1,6 @@
 # ComfyUI-XENodes
 
-A collection of custom nodes for ComfyUI, featuring Multi-Switch, Multi-Pipe, Slider, Slider 2D, Save Image, Save Video, Save Audio, Combo Selector, and Show Any nodes.
+A collection of custom nodes for ComfyUI, featuring Multi-Switch, Multi-Pipe, Slider, Slider 2D, Save Image, Save Video, Save Audio, Save HDR Image, Save HDR Video, Combo Selector, and Show Any nodes.
 
 ## Features
 
@@ -68,6 +68,14 @@ Save audio clips natively with professional codec support.
 - **Format Support**: Encode to `mp3`, `opus`, or `flac`.
 - **Bitrate Control**: Select from standard bitrates or use variable bitrate (V0) for MP3.
 - **Native Preview**: Includes a built-in audio player for immediate feedback in the ComfyUI interface.
+
+### Save HDR Image
+
+Save images in HDR format (AVIF) with support for PQ (SMPTE ST 2084) color space.
+
+### Save HDR Video
+
+Save videos in HDR format with support for high bit-depth and PQ color space.
 
 ### Combo Selector
 
