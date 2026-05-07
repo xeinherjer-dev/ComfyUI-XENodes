@@ -17,7 +17,7 @@ class SaveImage(io.ComfyNode):
         return io.Schema(
             node_id="XENodes.SaveImage",
             display_name="Save Image",
-            category="XENodes",
+            category="xenodes/image",
             description="Saves the input images as PNG or WebP. WebP supports lossless and quality control.",
             inputs=[
                 io.Image.Input("images", tooltip="The images to save."),

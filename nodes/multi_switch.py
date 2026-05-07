@@ -22,7 +22,7 @@ class MultiSwitchNode(io.ComfyNode):
         return io.Schema(
             node_id="XENodes.MultiSwitch",
             display_name="Multi-Switch",
-            category="XENodes",
+            category="xenodes/utils",
             inputs=[
                 io.Int.Input("select", default=0, min=-1, max=49),
                 _io.Autogrow.Input("inputs", template=autogrow_template, lazy=True),

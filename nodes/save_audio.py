@@ -42,7 +42,7 @@ class SaveAudio(io.ComfyNode):
         return io.Schema(
             node_id="XENodes.SaveAudio",
             display_name="Save Audio",
-            category="XENodes",
+            category="xenodes/audio",
             description="Saves the input audio natively with standard codec support. MP3, Opus, FLAC.",
             inputs=[
                 io.Audio.Input("audio", tooltip="The audio to save."),

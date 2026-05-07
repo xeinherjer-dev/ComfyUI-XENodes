@@ -18,7 +18,7 @@ class SaveVideo(io.ComfyNode):
         return io.Schema(
             node_id="XENodes.SaveVideo",
             display_name="Save Video",
-            category="XENodes",
+            category="xenodes/video",
             description="Saves the input video natively with AV1/CRF support, independently of core save_to.",
             inputs=[
                 io.Video.Input("video", tooltip="The video to save."),

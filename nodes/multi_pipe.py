@@ -16,7 +16,7 @@ class MultiPipeInNode(io.ComfyNode):
         return io.Schema(
             node_id="XENodes.MultiPipeIn",
             display_name="Multi-Pipe In",
-            category="XENodes",
+            category="xenodes/utils",
             description="Bundle multiple inputs into a single XE_MULTI_PIPE connection. Inputs auto-grow as you connect them.",
             inputs=[
                 XEMultiPipe.Input("pipe", tooltip="Base pipe to extend/override"),
@@ -80,7 +80,7 @@ class MultiPipeOutNode(io.ComfyNode):
         return io.Schema(
             node_id="XENodes.MultiPipeOut",
             display_name="Multi-Pipe Out",
-            category="XENodes",
+            category="xenodes/utils",
             description="Expand a XE_MULTI_PIPE connection into individual outputs. Outputs sync with the connected Multi-Pipe In node.",
             inputs=[
                 XEMultiPipe.Input("pipe", tooltip="Pipe input to unpack"),

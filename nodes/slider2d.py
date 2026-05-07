@@ -20,7 +20,7 @@ class Slider2DNode(io.ComfyNode):
         return io.Schema(
             node_id="XENodes.Slider2D",
             display_name="Slider 2D",
-            category="XENodes",
+            category="xenodes/utils",
             inputs=[
                 io.Float.Input("X", default=512.0, min=-4294967296.0, max=4294967296.0),
                 io.Float.Input("Y", default=512.0, min=-4294967296.0, max=4294967296.0),

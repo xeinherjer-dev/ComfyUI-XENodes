@@ -10,7 +10,7 @@ class ComboSelectorNode(io.ComfyNode):
         return io.Schema(
             node_id="XENodes.ComboSelector",
             display_name="Combo Selector",
-            category="XENodes",
+            category="xenodes/utils",
             inputs=[
                 io.Int.Input("index", default=0, min=0),
                 io.String.Input("hidden_list", default="[]"),

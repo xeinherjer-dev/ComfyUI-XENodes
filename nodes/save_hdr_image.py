@@ -20,7 +20,8 @@ class SaveHDRImage(io.ComfyNode):
         return io.Schema(
             node_id="XENodes.SaveHDRImage",
             display_name="Save HDR Image",
-            category="XENodes",
+            category="xenodes/experimental",
+            is_experimental=True,
             description="Saves the input image natively as HDR AVIF using ffmpeg.",
             inputs=[
                 io.Image.Input("images", tooltip="The images to save."),

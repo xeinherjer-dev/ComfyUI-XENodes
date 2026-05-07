@@ -13,7 +13,7 @@ class ShowAnyNode(io.ComfyNode):
         return io.Schema(
             node_id="XENodes.ShowAny",
             display_name="Show Any",
-            category="XENodes",
+            category="xenodes/utils",
             inputs=[
                 io.MatchType.Input("value", template=template, display_name="any"),
             ],
