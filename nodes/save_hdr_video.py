@@ -32,18 +32,19 @@ class SaveHDRVideo(io.ComfyNode):
                 io.Float.Input("peak_nits", default=400.0, min=100.0, max=10000.0, step=1.0, tooltip="Peak brightness in nits. SDR white (100 nits) will be mapped to this target luminance in HDR."),
                 io.Float.Input("itm_knee", default=0.0, min=0.0, max=1.0, step=0.01, tooltip="Inverse Tone Mapping (Soft-Knee) threshold. 0.0 starts expansion from black. 0.8 preserves SDR midtones and applies expansion to highlights."),
                 io.Float.Input("itm_exponent", default=1.0, min=1.0, max=10.0, step=0.01, tooltip="Expansion curve exponent. 1.0 = Linear (punchy/bright), 2.0 = Quadratic (soft/natural), >2.0 = even softer transition."),
+                io.Combo.Input("hdr_type", options=["PQ", "HLG"], default="PQ", tooltip="The HDR transfer function to use. PQ (SMPTE ST 2084) is standard for most HDR10 content. HLG (Hybrid Log-Gamma) is often used for broadcasting."),
                 io.Int.Input("loop_count", default=0, min=0, max=100, step=1, tooltip="Loop count. 0 = play once. For mp4/webm, this physically repeats the frames."),
                 io.Boolean.Input("pingpong", default=False, tooltip="Pingpong animation (images only). Plays frames forward then backward."),
                 io.Combo.Input("audio_codec", options=["aac", "opus", "flac"], default="aac", tooltip="The codec to use for the audio."),
                 io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", tooltip="The bitrate to use for the audio codec (ignored if flac)."),
             ],
-            outputs=[io.Video.Output("video")],
+            outputs=None,
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
         )
 
     @classmethod
-    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float, loop_count: int, pingpong: bool, audio_codec: str, audio_bitrate: str, peak_nits: float, itm_knee: float, itm_exponent: float) -> io.NodeOutput:
+    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float, loop_count: int, pingpong: bool, audio_codec: str, audio_bitrate: str, peak_nits: float, itm_knee: float, itm_exponent: float, hdr_type: str) -> io.NodeOutput:
         width, height = video.get_dimensions()
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix,
@@ -170,11 +171,15 @@ class SaveHDRVideo(io.ComfyNode):
         if format == "mp4":
             cmd += ["-movflags", "use_metadata_tags"]
 
-        cmd += ["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"]
+        trc = "smpte2084" if hdr_type == "PQ" else "arib-std-b67"
+        cmd += ["-color_primaries", "bt2020", "-color_trc", trc, "-colorspace", "bt2020nc"]
         
         # Proper SDR to HDR conversion using zscale.
-        # Since input is already linear float32 (where 1.0 = 100 nits), we just convert to PQ
-        cmd += ["-vf", "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709,zscale=p=bt2020:t=smpte2084:m=bt2020nc:npl=100"]
+        # Since input is already linear float32 (where 1.0 = 100 nits), we just convert to PQ or HLG
+        zscale_trc = "smpte2084" if hdr_type == "PQ" else "arib-std-b67"
+        zscale_params = f"p=bt2020:t={zscale_trc}:m=bt2020nc:npl=100"
+            
+        cmd += ["-vf", f"setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709,zscale={zscale_params}"]
 
         if "av1" in av_codec or "svtav1" in av_codec:
             if "nvenc" in av_codec and crf > 0:
@@ -202,22 +207,38 @@ class SaveHDRVideo(io.ComfyNode):
         # Run ffmpeg
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
+        # Cache for processed frames to avoid redundant ITM calculation during loops
+        unique_processed = [None] * num_images
+
         try:
             for _ in range(total_plays):
                 for idx in frame_indices:
-                    frame_tensor = images[idx]
-                    
-                    # Convert sRGB to Linear (IEC 61966-2-1 standard)
-                    linear = torch.where(frame_tensor <= 0.04045, frame_tensor / 12.92, ((frame_tensor + 0.055) / 1.055) ** 2.4)
-                    
-                    # Apply Soft-Knee Inverse Tone Mapping (Power Curve)
-                    scale = peak_nits / 100.0
-                    if itm_knee < 1.0:
-                        # y = x + a * max(0, x - knee)^exponent
-                        # a = (scale - 1.0) / (1.0 - knee)^exponent
-                        a = (scale - 1.0) / ((1.0 - itm_knee) ** itm_exponent)
-                        diff = torch.clamp(linear - itm_knee, min=0.0)
-                        linear = linear + a * (diff ** itm_exponent)
+                    if unique_processed[idx] is None:
+                        frame_tensor = images[idx]
+                        
+                        # Convert sRGB to Linear (IEC 61966-2-1 standard)
+                        linear = torch.where(frame_tensor <= 0.04045, frame_tensor / 12.92, ((frame_tensor + 0.055) / 1.055) ** 2.4)
+                        
+                        # Apply Soft-Knee Inverse Tone Mapping (Power Curve)
+                        # We calculate expansion based on luminance to preserve color (hue)
+                        luma_weights = torch.tensor([0.2126, 0.7152, 0.0722], device=linear.device)
+                        luma = torch.sum(linear * luma_weights, dim=-1, keepdim=True)
+                        
+                        scale = peak_nits / 100.0
+                        if itm_knee < 1.0:
+                            # y = x + a * max(0, x - knee)^exponent
+                            # a = (scale - 1.0) / (1.0 - knee)^exponent
+                            a = (scale - 1.0) / ((1.0 - itm_knee) ** itm_exponent)
+                            luma_diff = torch.clamp(luma - itm_knee, min=0.0)
+                            luma_hdr = luma + a * (luma_diff ** itm_exponent)
+                            
+                            # Apply the same expansion ratio to all channels to preserve color
+                            multiplier = (luma_hdr + 1e-6) / (luma + 1e-6)
+                            linear = linear * multiplier
+                        
+                        unique_processed[idx] = linear.clone()
+                    else:
+                        linear = unique_processed[idx]
 
                     # Convert to GBR planar format (gbrpf32le)
                     gbr_planar = linear[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
@@ -263,7 +284,8 @@ class SaveHDRVideo(io.ComfyNode):
             except:
                 pass
 
-        return io.NodeOutput(video, ui=ui.PreviewVideo([ui.SavedResult(file_name, subfolder, io.FolderType.output)]))
+        # Return only UI (preview)
+        return io.NodeOutput(ui=ui.PreviewVideo([ui.SavedResult(file_name, subfolder, io.FolderType.output)]))
 
 class SaveHDRVideoExtension(ComfyExtension):
     @override

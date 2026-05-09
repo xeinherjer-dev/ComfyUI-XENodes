@@ -4,6 +4,7 @@ import os
 import subprocess
 import json
 import tempfile
+import math
 from typing_extensions import override
 
 import torch
@@ -33,7 +34,7 @@ class SaveHDRImage(io.ComfyNode):
                 io.Float.Input("itm_knee", default=0.0, min=0.0, max=1.0, step=0.01, tooltip="Inverse Tone Mapping (Soft-Knee) threshold. 0.0 starts expansion from black. 0.8 preserves SDR midtones and applies expansion to highlights."),
                 io.Float.Input("itm_exponent", default=1.0, min=1.0, max=10.0, step=0.01, tooltip="Expansion curve exponent. 1.0 = Linear (punchy/bright), 2.0 = Quadratic (soft/natural), >2.0 = even softer transition."),
             ],
-            outputs=[io.Image.Output("images")],
+            outputs=[io.Image.Output("gainmap")],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
         )
@@ -56,6 +57,7 @@ class SaveHDRImage(io.ComfyNode):
                 saved_metadata["prompt"] = cls.hidden.prompt
 
         results = []
+        gainmaps = []
         for i in range(images.shape[0]):
             frame_tensor = images[i]
             current_file_name = f"{filename}_{counter + i:05}_.{format}"
@@ -86,16 +88,43 @@ class SaveHDRImage(io.ComfyNode):
                 linear = torch.where(frame_tensor <= 0.04045, frame_tensor / 12.92, ((frame_tensor + 0.055) / 1.055) ** 2.4)
                 
                 # Apply Soft-Knee Inverse Tone Mapping (Power Curve)
+                # We calculate expansion based on luminance to preserve color (hue)
+                luma_weights = torch.tensor([0.2126, 0.7152, 0.0722], device=linear.device)
+                luma = torch.sum(linear * luma_weights, dim=-1, keepdim=True)
+                
                 scale = peak_nits / 100.0
                 if itm_knee < 1.0:
                     # y = x + a * max(0, x - knee)^exponent
                     # a = (scale - 1.0) / (1.0 - knee)^exponent
                     a = (scale - 1.0) / ((1.0 - itm_knee) ** itm_exponent)
-                    diff = torch.clamp(linear - itm_knee, min=0.0)
-                    linear = linear + a * (diff ** itm_exponent)
+                    luma_diff = torch.clamp(luma - itm_knee, min=0.0)
+                    luma_hdr = luma + a * (luma_diff ** itm_exponent)
+                    
+                    # Apply the same expansion ratio to all channels to preserve color
+                    ratio = (luma_hdr + 1e-6) / (luma + 1e-6)
+                    linear_hdr = linear * ratio
+                else:
+                    linear_hdr = linear
+                    ratio = torch.ones_like(luma)
 
-                # Convert to GBR planar format (gbrpf32le)
-                gbr_planar = linear[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
+                
+                # Normalize Gainmap to [0, 1] for visualization and standard usage.
+                # We use log-scale normalization which is standard for HDR gainmaps (e.g. Ultra HDR).
+                # ratio 1.0 (no gain) -> 0.0
+                # ratio 'scale' (max gain) -> 1.0
+                if scale > 1.0:
+                    gainmap_luma = torch.log2(ratio) / math.log2(scale)
+                else:
+                    gainmap_luma = torch.zeros_like(ratio)
+                
+                gainmap_luma = torch.clamp(gainmap_luma, 0.0, 1.0)
+                
+                # Convert to 3-channel grayscale for ComfyUI Image compatibility (N, H, W, 3)
+                gainmap_rgb = gainmap_luma.repeat(1, 1, 3)
+                gainmaps.append(gainmap_rgb.clone())
+
+                # Convert to GBR planar format (gbrpf32le) for ffmpeg (using linear_hdr)
+                gbr_planar = linear_hdr[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
                 img_bytes = gbr_planar.cpu().numpy().astype(np.float32).tobytes()
                 
                 proc.stdin.write(img_bytes)
@@ -156,7 +185,8 @@ class SaveHDRImage(io.ComfyNode):
 
             results.append(SavedResult(current_file_name, subfolder, io.FolderType.output))
 
-        return io.NodeOutput(images, ui=SavedImages(results))
+        output_gainmaps = torch.stack(gainmaps, dim=0)
+        return io.NodeOutput(output_gainmaps, ui=SavedImages(results))
 
 class SaveHDRImageExtension(ComfyExtension):
     @override
