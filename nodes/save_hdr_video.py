@@ -32,7 +32,6 @@ class SaveHDRVideo(io.ComfyNode):
                 io.Float.Input("peak_nits", default=400.0, min=100.0, max=10000.0, step=1.0, tooltip="Peak brightness in nits. SDR white (100 nits) will be mapped to this target luminance in HDR."),
                 io.Float.Input("itm_knee", default=0.0, min=0.0, max=1.0, step=0.01, tooltip="Inverse Tone Mapping (Soft-Knee) threshold. 0.0 starts expansion from black. 0.8 preserves SDR midtones and applies expansion to highlights."),
                 io.Float.Input("itm_exponent", default=1.0, min=1.0, max=10.0, step=0.01, tooltip="Expansion curve exponent. 1.0 = Linear (punchy/bright), 2.0 = Quadratic (soft/natural), >2.0 = even softer transition."),
-                io.Combo.Input("hdr_type", options=["PQ", "HLG"], default="PQ", tooltip="The HDR transfer function to use. PQ (SMPTE ST 2084) is standard for most HDR10 content. HLG (Hybrid Log-Gamma) is often used for broadcasting."),
                 io.Int.Input("loop_count", default=0, min=0, max=100, step=1, tooltip="Loop count. 0 = play once. For mp4/webm, this physically repeats the frames."),
                 io.Boolean.Input("pingpong", default=False, tooltip="Pingpong animation (images only). Plays frames forward then backward."),
                 io.Combo.Input("audio_codec", options=["aac", "opus", "flac"], default="aac", tooltip="The codec to use for the audio."),
@@ -44,7 +43,7 @@ class SaveHDRVideo(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float, loop_count: int, pingpong: bool, audio_codec: str, audio_bitrate: str, peak_nits: float, itm_knee: float, itm_exponent: float, hdr_type: str) -> io.NodeOutput:
+    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float, loop_count: int, pingpong: bool, audio_codec: str, audio_bitrate: str, peak_nits: float, itm_knee: float, itm_exponent: float) -> io.NodeOutput:
         width, height = video.get_dimensions()
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix,
@@ -171,12 +170,12 @@ class SaveHDRVideo(io.ComfyNode):
         if format == "mp4":
             cmd += ["-movflags", "use_metadata_tags"]
 
-        trc = "smpte2084" if hdr_type == "PQ" else "arib-std-b67"
+        trc = "smpte2084"
         cmd += ["-color_primaries", "bt2020", "-color_trc", trc, "-colorspace", "bt2020nc"]
         
         # Proper SDR to HDR conversion using zscale.
         # Since input is already linear float32 (where 1.0 = 100 nits), we just convert to PQ or HLG
-        zscale_trc = "smpte2084" if hdr_type == "PQ" else "arib-std-b67"
+        zscale_trc = "smpte2084"
         zscale_params = f"p=bt2020:t={zscale_trc}:m=bt2020nc:npl=100"
             
         cmd += ["-vf", f"setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709,zscale={zscale_params}"]
