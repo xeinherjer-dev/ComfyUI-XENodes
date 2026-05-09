@@ -21,7 +21,8 @@ class SaveHDRVideo(io.ComfyNode):
         return io.Schema(
             node_id="XENodes.SaveHDRVideo",
             display_name="Save HDR Video",
-            category="xenodes/video",
+            category="xenodes/experimental",
+            is_experimental=True,
             description="Saves the input video natively as HDR using ffmpeg, without AI processing models.",
             inputs=[
                 io.Video.Input("video", tooltip="The video to save."),
