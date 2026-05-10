@@ -20,8 +20,8 @@ app.registerExtension({
 				}
 
 				const CODEC_CRF_MAP = {
-					'av1': 10,
-					'av1_nvenc': 10 // Defaulting to 10 as per python file, but can be adjusted
+					'av1': 2,
+					'av1_nvenc': 2 
 				};
 
 				const updateCrf = () => {

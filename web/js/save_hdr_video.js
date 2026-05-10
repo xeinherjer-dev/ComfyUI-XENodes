@@ -25,7 +25,7 @@ app.registerExtension({
 				}
 
 				const CODEC_CRF_MAP = {
-					'av1': 32,
+					'av1': 30,
 					'av1_nvenc': 30
 				};
 

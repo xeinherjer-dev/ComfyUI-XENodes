@@ -64,13 +64,21 @@ class SaveHDRImage(io.ComfyNode):
             current_file_path = os.path.join(full_output_folder, current_file_name)
 
             cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "gbrpf32le", "-s", f"{width}x{height}", "-r", "25", "-i", "-"]
-            av_codec = "libsvtav1" if codec == "av1" else codec
+            codec_config = {
+                "av1": {"codec": "libsvtav1", "options": {"preset": "6"}},
+                "av1_nvenc": {"codec": "av1_nvenc", "options": {"preset": "p7"}}
+            }
+            config = codec_config.get(codec, codec_config["av1"])
+            av_codec = config["codec"]
             cmd += ["-c:v", av_codec]
+
+            for key, value in config.get("options", {}).items():
+                cmd += [f"-{key}", str(value)]
             cmd += ["-pix_fmt", "yuv420p10le"]
             cmd += ["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"]
             
             # Since input is already linear float32 (where 1.0 = 100 nits), we just convert to PQ
-            cmd += ["-vf", "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709,zscale=p=bt2020:t=smpte2084:m=bt2020nc:npl=100"]
+            cmd += ["-vf", "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709,zscale=p=bt2020:t=smpte2084:m=bt2020nc:npl=100:dither=error_diffusion"]
 
             if "av1" in av_codec or "svtav1" in av_codec:
                 if "nvenc" in av_codec and crf > 0:

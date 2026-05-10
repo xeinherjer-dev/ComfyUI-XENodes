@@ -159,11 +159,16 @@ class SaveHDRVideo(io.ComfyNode):
             metadata_input_index = -1
 
         # Codec setup
-        av_codec = codec
-        if codec == "av1":
-            av_codec = "libsvtav1"
-            
+        codec_config = {
+            "av1": {"codec": "libsvtav1", "options": {"preset": "6"}},
+            "av1_nvenc": {"codec": "av1_nvenc", "options": {"preset": "p7"}}
+        }
+        config = codec_config.get(codec, codec_config["av1"])
+        av_codec = config["codec"]
         cmd += ["-c:v", av_codec]
+
+        for key, value in config.get("options", {}).items():
+            cmd += [f"-{key}", str(value)]
 
         # HDR/10-bit setup
         cmd += ["-pix_fmt", "yuv420p10le"]
@@ -177,7 +182,7 @@ class SaveHDRVideo(io.ComfyNode):
         # Proper SDR to HDR conversion using zscale.
         # Since input is already linear float32 (where 1.0 = 100 nits), we just convert to PQ or HLG
         zscale_trc = "smpte2084"
-        zscale_params = f"p=bt2020:t={zscale_trc}:m=bt2020nc:npl=100"
+        zscale_params = f"p=bt2020:t={zscale_trc}:m=bt2020nc:npl=100:dither=error_diffusion"
             
         cmd += ["-vf", f"setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709,zscale={zscale_params}"]
 
