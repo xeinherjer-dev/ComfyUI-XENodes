@@ -212,38 +212,30 @@ class SaveHDRVideo(io.ComfyNode):
         # Run ffmpeg
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
-        # Cache for processed frames to avoid redundant ITM calculation during loops
-        unique_processed = [None] * num_images
-
         try:
             for _ in range(total_plays):
                 for idx in frame_indices:
-                    if unique_processed[idx] is None:
-                        frame_tensor = images[idx]
+                    frame_tensor = images[idx]
+                    
+                    # Convert sRGB to Linear (IEC 61966-2-1 standard)
+                    linear = torch.where(frame_tensor <= 0.04045, frame_tensor / 12.92, ((frame_tensor + 0.055) / 1.055) ** 2.4)
+                    
+                    # Apply Soft-Knee Inverse Tone Mapping (Power Curve)
+                    # We calculate expansion based on luminance to preserve color (hue)
+                    luma_weights = torch.tensor([0.2126, 0.7152, 0.0722], device=linear.device)
+                    luma = torch.sum(linear * luma_weights, dim=-1, keepdim=True)
+                    
+                    scale = peak_nits / 100.0
+                    if itm_knee < 1.0:
+                        # y = x + a * max(0, x - knee)^exponent
+                        # a = (scale - 1.0) / (1.0 - knee)^exponent
+                        a = (scale - 1.0) / ((1.0 - itm_knee) ** itm_exponent)
+                        luma_diff = torch.clamp(luma - itm_knee, min=0.0)
+                        luma_hdr = luma + a * (luma_diff ** itm_exponent)
                         
-                        # Convert sRGB to Linear (IEC 61966-2-1 standard)
-                        linear = torch.where(frame_tensor <= 0.04045, frame_tensor / 12.92, ((frame_tensor + 0.055) / 1.055) ** 2.4)
-                        
-                        # Apply Soft-Knee Inverse Tone Mapping (Power Curve)
-                        # We calculate expansion based on luminance to preserve color (hue)
-                        luma_weights = torch.tensor([0.2126, 0.7152, 0.0722], device=linear.device)
-                        luma = torch.sum(linear * luma_weights, dim=-1, keepdim=True)
-                        
-                        scale = peak_nits / 100.0
-                        if itm_knee < 1.0:
-                            # y = x + a * max(0, x - knee)^exponent
-                            # a = (scale - 1.0) / (1.0 - knee)^exponent
-                            a = (scale - 1.0) / ((1.0 - itm_knee) ** itm_exponent)
-                            luma_diff = torch.clamp(luma - itm_knee, min=0.0)
-                            luma_hdr = luma + a * (luma_diff ** itm_exponent)
-                            
-                            # Apply the same expansion ratio to all channels to preserve color
-                            multiplier = (luma_hdr + 1e-6) / (luma + 1e-6)
-                            linear = linear * multiplier
-                        
-                        unique_processed[idx] = linear.clone()
-                    else:
-                        linear = unique_processed[idx]
+                        # Apply the same expansion ratio to all channels to preserve color
+                        multiplier = (luma_hdr + 1e-6) / (luma + 1e-6)
+                        linear = linear * multiplier
 
                     # Convert to GBR planar format (gbrpf32le)
                     gbr_planar = linear[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
