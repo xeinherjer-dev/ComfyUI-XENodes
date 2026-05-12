@@ -119,8 +119,8 @@ class SaveVideo(io.ComfyNode):
             'h265': {'codec': 'libx265', 'pix_fmt': 'yuv420p10le', 'options': {'preset': 'slow'}},
             'av1':  {'codec': 'libsvtav1', 'pix_fmt': 'yuv420p10le', 'options': {'preset': '6'}},
             'h264_nvenc': {'codec': 'h264_nvenc', 'pix_fmt': 'yuv420p', 'options': {'preset': 'p7'}},
-            'hevc_nvenc': {'codec': 'hevc_nvenc', 'pix_fmt': 'yuv420p', 'options': {'preset': 'p7'}},
-            'av1_nvenc':  {'codec': 'av1_nvenc', 'pix_fmt': 'yuv420p', 'options': {'preset': 'p7'}}
+            'hevc_nvenc': {'codec': 'hevc_nvenc', 'pix_fmt': 'p010le', 'options': {'preset': 'p7'}},
+            'av1_nvenc':  {'codec': 'av1_nvenc', 'pix_fmt': 'p010le', 'options': {'preset': 'p7'}}
         }
 
         config = codec_config.get(codec, codec_config['h264'])
