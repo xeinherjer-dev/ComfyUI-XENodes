@@ -160,8 +160,8 @@ class SaveHDRVideo(io.ComfyNode):
 
         # Codec setup
         codec_config = {
-            "av1": {"codec": "libsvtav1", "options": {}},
-            "av1_nvenc": {"codec": "av1_nvenc", "options": {}}
+            "av1": {"codec": "libsvtav1", "options": {"preset": "6"}},
+            "av1_nvenc": {"codec": "av1_nvenc", "options": {"preset": "p7"}}
         }
         config = codec_config.get(codec, codec_config["av1"])
         av_codec = config["codec"]

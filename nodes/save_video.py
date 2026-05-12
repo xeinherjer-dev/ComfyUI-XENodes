@@ -115,12 +115,12 @@ class SaveVideo(io.ComfyNode):
                 output_sample_rate = 44100
 
         codec_config = {
-            'h264': {'codec': 'libx264', 'pix_fmt': 'yuv420p', 'options': {}},
-            'h265': {'codec': 'libx265', 'pix_fmt': 'yuv420p10le', 'options': {}},
-            'av1':  {'codec': 'libsvtav1', 'pix_fmt': 'yuv420p10le', 'options': {}},
-            'h264_nvenc': {'codec': 'h264_nvenc', 'pix_fmt': 'yuv420p', 'options': {}},
-            'hevc_nvenc': {'codec': 'hevc_nvenc', 'pix_fmt': 'yuv420p', 'options': {}},
-            'av1_nvenc':  {'codec': 'av1_nvenc', 'pix_fmt': 'yuv420p', 'options': {}}
+            'h264': {'codec': 'libx264', 'pix_fmt': 'yuv420p', 'options': {'preset': 'slow'}},
+            'h265': {'codec': 'libx265', 'pix_fmt': 'yuv420p10le', 'options': {'preset': 'slow'}},
+            'av1':  {'codec': 'libsvtav1', 'pix_fmt': 'yuv420p10le', 'options': {'preset': '6'}},
+            'h264_nvenc': {'codec': 'h264_nvenc', 'pix_fmt': 'yuv420p', 'options': {'preset': 'p7'}},
+            'hevc_nvenc': {'codec': 'hevc_nvenc', 'pix_fmt': 'yuv420p', 'options': {'preset': 'p7'}},
+            'av1_nvenc':  {'codec': 'av1_nvenc', 'pix_fmt': 'yuv420p', 'options': {'preset': 'p7'}}
         }
 
         config = codec_config.get(codec, codec_config['h264'])
