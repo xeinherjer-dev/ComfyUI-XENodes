@@ -144,14 +144,16 @@ app.registerExtension({
 
             if (type === LiteGraph.OUTPUT && slotIndex === 0) {
                 const linkId = typeof link_info === "object" ? link_info.id : link_info;
-                const link = isConnected ? app.graph.links[linkId] : null;
+                // Use this.graph instead of app.graph so links resolve correctly inside Subgraphs
+                const activeGraph = this.graph ?? app.graph;
+                const link = isConnected ? (activeGraph.links[linkId] ?? app.graph.links[linkId]) : null;
 
                 if (!link) {
                     if (this.updateListPreview) this.updateListPreview([]);
                     return result;
                 }
 
-                const targetNode = app.graph.getNodeById(link.target_id);
+                const targetNode = activeGraph.getNodeById(link.target_id) ?? app.graph.getNodeById(link.target_id);
                 if (!targetNode) return result;
 
                 const targetSlot = link.target_slot;
