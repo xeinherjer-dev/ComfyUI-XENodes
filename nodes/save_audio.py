@@ -6,8 +6,9 @@ import json
 from typing_extensions import override
 
 from comfy_api.latest import ComfyExtension, io, Input, ui
-from comfy.cli_args import args
 import folder_paths
+
+from ..utils.metadata import get_saved_metadata
 
 AUDIO_CODEC_CONFIG = {
     "mp3": {
@@ -65,12 +66,7 @@ class SaveAudio(io.ComfyNode):
             folder_paths.get_output_directory()
         )
 
-        saved_metadata = {}
-        if not args.disable_metadata:
-            if cls.hidden.extra_pnginfo is not None:
-                saved_metadata.update(cls.hidden.extra_pnginfo)
-            if cls.hidden.prompt is not None:
-                saved_metadata["prompt"] = cls.hidden.prompt
+        saved_metadata = get_saved_metadata(cls)
 
         file_name = f"{filename}_{counter:05}_.{format_ext}"
         file_path = os.path.join(full_output_folder, file_name)

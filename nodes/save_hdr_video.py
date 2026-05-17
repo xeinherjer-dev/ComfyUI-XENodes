@@ -12,8 +12,12 @@ import torch
 import numpy as np
 
 from comfy_api.latest import ComfyExtension, io, Input, ui
-from comfy.cli_args import args
 import folder_paths
+
+from ..utils.audio import expand_audio_waveform
+from ..utils.video import generate_frame_indices
+from ..utils.color import apply_inverse_tone_mapping
+from ..utils.metadata import get_saved_metadata
 
 class SaveHDRVideo(io.ComfyNode):
     @classmethod
@@ -55,12 +59,7 @@ class SaveHDRVideo(io.ComfyNode):
             height
         )
 
-        saved_metadata = {}
-        if not args.disable_metadata:
-            if cls.hidden.extra_pnginfo is not None:
-                saved_metadata.update(cls.hidden.extra_pnginfo)
-            if cls.hidden.prompt is not None:
-                saved_metadata["prompt"] = cls.hidden.prompt
+        saved_metadata = get_saved_metadata(cls)
 
         file_name = f"{filename}_{counter:05}_.{format}"
         file_path = os.path.join(full_output_folder, file_name)
@@ -82,32 +81,9 @@ class SaveHDRVideo(io.ComfyNode):
         total_plays = loop_count + 1
 
         # === Audio transformation ===
-        audio_sample_rate = 44100
-        waveform = None
-
-        if getattr(components, 'audio', None) is not None:
-            try:
-                audio_sample_rate = int(components.audio['sample_rate'])
-                raw_waveform = components.audio['waveform']
-
-                raw_waveform = raw_waveform[0]
-                samples_per_frame = audio_sample_rate / fps
-                n_orig_samples = math.ceil(samples_per_frame * n_orig)
-                total_samples_needed = math.ceil(samples_per_frame * (n_orig * total_plays))
-
-                if raw_waveform.shape[-1] > n_orig_samples:
-                    if raw_waveform.shape[-1] >= total_samples_needed:
-                        waveform = raw_waveform[:, :total_samples_needed]
-                    else:
-                        repeats = math.ceil(total_samples_needed / raw_waveform.shape[-1])
-                        waveform = torch.cat([raw_waveform] * repeats, dim=-1)[:, :total_samples_needed]
-                else:
-                    waveform = raw_waveform[:, :n_orig_samples]
-                    if total_plays > 1:
-                        waveform = torch.cat([waveform] * total_plays, dim=-1)
-            except Exception as e:
-                print(f"[XENodes] Warning: Failed to process audio stream: {e}")
-                waveform = None
+        waveform, audio_sample_rate, _ = expand_audio_waveform(components, fps, n_orig, total_plays)
+        if waveform is None:
+            audio_sample_rate = 44100
 
         temp_audio_path = None
         if waveform is not None:
@@ -219,28 +195,10 @@ class SaveHDRVideo(io.ComfyNode):
                 for idx in frame_indices:
                     frame_tensor = images[idx]
                     
-                    # Convert sRGB to Linear (IEC 61966-2-1 standard)
-                    linear = torch.where(frame_tensor <= 0.04045, frame_tensor / 12.92, ((frame_tensor + 0.055) / 1.055) ** 2.4)
-                    
-                    # Apply Soft-Knee Inverse Tone Mapping (Power Curve)
-                    # We calculate expansion based on luminance to preserve color (hue)
-                    luma_weights = torch.tensor([0.2126, 0.7152, 0.0722], device=linear.device)
-                    luma = torch.sum(linear * luma_weights, dim=-1, keepdim=True)
-                    
-                    scale = peak_nits / 100.0
-                    if itm_knee < 1.0:
-                        # y = x + a * max(0, x - knee)^exponent
-                        # a = (scale - 1.0) / (1.0 - knee)^exponent
-                        a = (scale - 1.0) / ((1.0 - itm_knee) ** itm_exponent)
-                        luma_diff = torch.clamp(luma - itm_knee, min=0.0)
-                        luma_hdr = luma + a * (luma_diff ** itm_exponent)
-                        
-                        # Apply the same expansion ratio to all channels to preserve color
-                        multiplier = (luma_hdr + 1e-6) / (luma + 1e-6)
-                        linear = linear * multiplier
+                    linear_hdr, _, _ = apply_inverse_tone_mapping(frame_tensor, peak_nits, itm_knee, itm_exponent)
 
                     # Convert to GBR planar format (gbrpf32le)
-                    gbr_planar = linear[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
+                    gbr_planar = linear_hdr[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
                     img_bytes = gbr_planar.cpu().numpy().astype(np.float32).tobytes()
                     
                     proc.stdin.write(img_bytes)

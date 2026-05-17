@@ -12,8 +12,10 @@ import numpy as np
 
 from comfy_api.latest import ComfyExtension, io, Input, ui
 from comfy_api.latest._ui import SavedImages, SavedResult
-from comfy.cli_args import args
 import folder_paths
+
+from ..utils.color import apply_inverse_tone_mapping
+from ..utils.metadata import get_saved_metadata
 
 class SaveHDRImage(io.ComfyNode):
     @classmethod
@@ -49,12 +51,7 @@ class SaveHDRImage(io.ComfyNode):
             height
         )
 
-        saved_metadata = {}
-        if not args.disable_metadata:
-            if cls.hidden.extra_pnginfo is not None:
-                saved_metadata.update(cls.hidden.extra_pnginfo)
-            if cls.hidden.prompt is not None:
-                saved_metadata["prompt"] = cls.hidden.prompt
+        saved_metadata = get_saved_metadata(cls)
 
         results = []
         gainmaps = []
@@ -91,31 +88,9 @@ class SaveHDRImage(io.ComfyNode):
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
             try:
-                # Convert sRGB to Linear (IEC 61966-2-1 standard)
-                # frame_tensor is expected to be in [0, 1]
-                linear = torch.where(frame_tensor <= 0.04045, frame_tensor / 12.92, ((frame_tensor + 0.055) / 1.055) ** 2.4)
-                
-                # Apply Soft-Knee Inverse Tone Mapping (Power Curve)
-                # We calculate expansion based on luminance to preserve color (hue)
-                luma_weights = torch.tensor([0.2126, 0.7152, 0.0722], device=linear.device)
-                luma = torch.sum(linear * luma_weights, dim=-1, keepdim=True)
-                
-                scale = peak_nits / 100.0
-                if itm_knee < 1.0:
-                    # y = x + a * max(0, x - knee)^exponent
-                    # a = (scale - 1.0) / (1.0 - knee)^exponent
-                    a = (scale - 1.0) / ((1.0 - itm_knee) ** itm_exponent)
-                    luma_diff = torch.clamp(luma - itm_knee, min=0.0)
-                    luma_hdr = luma + a * (luma_diff ** itm_exponent)
-                    
-                    # Apply the same expansion ratio to all channels to preserve color
-                    ratio = (luma_hdr + 1e-6) / (luma + 1e-6)
-                    linear_hdr = linear * ratio
-                else:
-                    linear_hdr = linear
-                    ratio = torch.ones_like(luma)
+                # Convert sRGB to Linear and Apply Inverse Tone Mapping
+                linear_hdr, ratio, scale = apply_inverse_tone_mapping(frame_tensor, peak_nits, itm_knee, itm_exponent)
 
-                
                 # Normalize Gainmap to [0, 1] for visualization and standard usage.
                 # We use log-scale normalization which is standard for HDR gainmaps (e.g. Ultra HDR).
                 # ratio 1.0 (no gain) -> 0.0

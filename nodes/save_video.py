@@ -9,8 +9,11 @@ from fractions import Fraction
 from typing_extensions import override
 
 from comfy_api.latest import ComfyExtension, io, Input, ui
-from comfy.cli_args import args
 import folder_paths
+
+from ..utils.audio import expand_audio_waveform
+from ..utils.video import generate_frame_indices
+from ..utils.metadata import get_saved_metadata
 
 class SaveVideo(io.ComfyNode):
     @classmethod
@@ -46,12 +49,7 @@ class SaveVideo(io.ComfyNode):
             height
         )
 
-        saved_metadata = {}
-        if not args.disable_metadata:
-            if cls.hidden.extra_pnginfo is not None:
-                saved_metadata.update(cls.hidden.extra_pnginfo)
-            if cls.hidden.prompt is not None:
-                saved_metadata["prompt"] = cls.hidden.prompt
+        saved_metadata = get_saved_metadata(cls)
 
         file_name = f"{filename}_{counter:05}_.{format}"
         file_path = os.path.join(full_output_folder, file_name)
@@ -64,55 +62,21 @@ class SaveVideo(io.ComfyNode):
         num_images = images.shape[0]
 
         # Generate lightweight index list for streaming frames
-        if pingpong and num_images > 2:
-            frame_indices = list(range(num_images)) + list(range(num_images - 2, 0, -1))
-        else:
-            frame_indices = list(range(num_images))
-            
+        frame_indices = generate_frame_indices(num_images, pingpong)
         n_orig = len(frame_indices) # Audio logic automatically scales to this elongated pingpong loop length
 
         # loop: 0 = play once, N > 0 = loop N times (play N+1 times total)
         total_plays = loop_count + 1
 
         # === Audio transformation ===
-        audio_sample_rate = 1
-        waveform = None
-        layout = 'stereo'
-
-        if getattr(components, 'audio', None) is not None:
-            try:
-                audio_sample_rate = int(components.audio['sample_rate'])
-                raw_waveform = components.audio['waveform']  # shape: (batch, channels, samples)
-                samples_per_frame = audio_sample_rate / float(frame_rate)
-
-                raw_waveform = raw_waveform[0]  # shape: (channels, samples)
-                n_orig_samples = math.ceil(samples_per_frame * n_orig)
-                total_samples_needed = math.ceil(samples_per_frame * (n_orig * total_plays))
-
-                if raw_waveform.shape[-1] > n_orig_samples:
-                    # Original audio is longer than 1 loop of images. Use the continuous audio.
-                    if raw_waveform.shape[-1] >= total_samples_needed:
-                        waveform = raw_waveform[:, :total_samples_needed]
-                    else:
-                        # If audio runs out before all loops finish, repeat the available audio
-                        repeats = math.ceil(total_samples_needed / raw_waveform.shape[-1])
-                        waveform = torch.cat([raw_waveform] * repeats, dim=-1)[:, :total_samples_needed]
-                else:
-                    # Regular case: audio is exactly image length (or shorter). Repeat per image loop.
-                    waveform = raw_waveform[:, :n_orig_samples]
-                    if total_plays > 1:
-                        waveform = torch.cat([waveform] * total_plays, dim=-1)
-
-                layout = {1: 'mono', 2: 'stereo', 6: '5.1'}.get(waveform.shape[0], 'stereo')
-                
-                # Resampling prep for specific codecs like Opus (requires 48k)
-                output_sample_rate = audio_sample_rate
-                if audio_codec == "opus":
-                    output_sample_rate = 48000
-            except Exception as e:
-                print(f"[XENodes] Warning: Failed to process audio stream: {e}")
-                waveform = None
-                output_sample_rate = 44100
+        waveform, audio_sample_rate, layout = expand_audio_waveform(components, float(frame_rate), n_orig, total_plays)
+        output_sample_rate = audio_sample_rate
+        if waveform is not None:
+            # Resampling prep for specific codecs like Opus (requires 48k)
+            if audio_codec == "opus":
+                output_sample_rate = 48000
+        else:
+            output_sample_rate = 44100
 
         codec_config = {
             'h264': {'codec': 'libx264', 'pix_fmt': 'yuv420p', 'options': {'preset': 'slow'}},
