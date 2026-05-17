@@ -284,7 +284,7 @@ class SaveHDRVideo(io.ComfyNode):
                 pass
 
         # Return the input video and UI (preview)
-        return io.NodeOutput(video=video, ui=ui.PreviewVideo([ui.SavedResult(file_name, subfolder, io.FolderType.output)]))
+        return io.NodeOutput(video, ui=ui.PreviewVideo([ui.SavedResult(file_name, subfolder, io.FolderType.output)]))
 
 class SaveHDRVideoExtension(ComfyExtension):
     @override
