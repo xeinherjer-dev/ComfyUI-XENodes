@@ -128,7 +128,7 @@ function createRow(row, showNav, node) {
     const toggleContainer = document.createElement("div");
     toggleContainer.style.cssText = `
         display: flex; align-items: center;
-        width: 64px; height: 22px; border-radius: 11px;
+        width: 48px; height: 22px; border-radius: 11px;
         background: #181818; border: 1.5px solid #333;
         padding: 0; position: relative; cursor: pointer;
         transition: background 0.15s, border-color 0.15s;
@@ -139,7 +139,7 @@ function createRow(row, showNav, node) {
     // Status text (true / false) inside toggle
     const statusText = document.createElement("span");
     statusText.style.cssText = `
-        font-size: 9px; font-family: sans-serif; font-weight: bold;
+        font-size: 11px; font-family: sans-serif; font-weight: 600;
         position: absolute; transition: all 0.15s ease-in-out;
         pointer-events: none; user-select: none;
     `;
@@ -164,7 +164,7 @@ function createRow(row, showNav, node) {
         if (toggled) {
             toggleContainer.style.background = "#1c1d20";
             toggleContainer.style.borderColor = "#44464d";
-            knob.style.left = "43px"; // Right-aligned
+            knob.style.left = "29px"; // Right-aligned
             statusText.textContent = "on";
             statusText.style.color = "#eee";
             statusText.style.left = "8px"; // Text on left
@@ -175,7 +175,7 @@ function createRow(row, showNav, node) {
             knob.style.left = "4px"; // Left-aligned
             statusText.textContent = "off";
             statusText.style.color = "#555860";
-            statusText.style.left = "23px"; // Text on right
+            statusText.style.left = "21px"; // Text on right
             statusText.style.opacity = "1";
         }
     };
