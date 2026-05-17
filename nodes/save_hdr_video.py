@@ -38,7 +38,9 @@ class SaveHDRVideo(io.ComfyNode):
                 io.Combo.Input("audio_codec", options=["aac", "opus", "flac"], default="aac", tooltip="The codec to use for the audio."),
                 io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", tooltip="The bitrate to use for the audio codec (ignored if flac)."),
             ],
-            outputs=None,
+            outputs=[
+                io.Video.Output("video", tooltip="The input video."),
+            ],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
         )
@@ -281,8 +283,8 @@ class SaveHDRVideo(io.ComfyNode):
             except:
                 pass
 
-        # Return only UI (preview)
-        return io.NodeOutput(ui=ui.PreviewVideo([ui.SavedResult(file_name, subfolder, io.FolderType.output)]))
+        # Return the input video and UI (preview)
+        return io.NodeOutput(video=video, ui=ui.PreviewVideo([ui.SavedResult(file_name, subfolder, io.FolderType.output)]))
 
 class SaveHDRVideoExtension(ComfyExtension):
     @override
