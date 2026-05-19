@@ -262,6 +262,16 @@ app.registerExtension({
             let maxLabelWidth = MIN_LABEL_WIDTH;
 
             this.updateUnselectedNodesModes = (restoreAll = false) => {
+                // Skip during graph load (reload) to prevent overwriting saved states
+                if (app.configuringGraph) {
+                    return;
+                }
+
+                // Do not interfere with upstream nodes if this node itself is Muted (2) or Bypassed (4)
+                if ((this.mode === 2 || this.mode === 4) && !restoreAll) {
+                    return;
+                }
+
                 const modeStr = this.properties?.unselected_mode || "None";
                 const isNone = modeStr === "None";
                 if (isNone && !restoreAll) return;
