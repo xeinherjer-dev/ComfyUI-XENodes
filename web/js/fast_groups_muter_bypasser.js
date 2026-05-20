@@ -457,7 +457,7 @@ app.registerExtension({
 
             // 1. Mode switch
             options.push({
-                content: `Mode: ${mode === "mute" ? "🔇 Mute" : "⏭ Bypass"} (click to switch)`,
+                content: `Mode: ${mode === "mute" ? "🔇 Mute" : "⏭ Bypass"}`,
                 callback: () => {
                     this.properties = this.properties ?? {};
                     this.properties.actionMode = mode === "mute" ? "bypass" : "mute";
@@ -467,7 +467,7 @@ app.registerExtension({
 
             // 2. Show subgraphs switch
             options.push({
-                content: `Show Subgraphs: ${showAll ? "✅ ON" : "❌ OFF"} (click to switch)`,
+                content: `Show Subgraphs: ${showAll ? "✅ ON" : "❌ OFF"}`,
                 callback: () => {
                     this.properties = this.properties ?? {};
                     this.properties.showAllGraphs = !showAll;
@@ -482,7 +482,7 @@ app.registerExtension({
                 "always one": "default"
             };
             options.push({
-                content: `Restriction: ⚙️ ${restriction} (click to switch)`,
+                content: `Restriction: ⚙️ ${restriction}`,
                 callback: () => {
                     this.properties = this.properties ?? {};
                     this.properties.toggleRestriction = nextRestrictionMap[restriction] ?? "default";
@@ -492,7 +492,7 @@ app.registerExtension({
 
             // 4. Match title (prompt input)
             options.push({
-                content: `Filter Title (RegEx): "${matchTitle || "(none)"}" (click to edit)`,
+                content: `Filter Title (RegEx): "${matchTitle || "(none)"}"`,
                 callback: () => {
                     const val = prompt("Filter by group title (RegEx):", matchTitle);
                     if (val !== null) {
@@ -505,7 +505,7 @@ app.registerExtension({
 
             // 5. Match colors (prompt input)
             options.push({
-                content: `Filter Colors: "${matchColors || "(none)"}" (click to edit)`,
+                content: `Filter Colors: "${matchColors || "(none)"}"`,
                 callback: () => {
                     const val = prompt("Filter by group colors (comma-separated, e.g. 'red, blue, #3a2222'):", matchColors);
                     if (val !== null) {
