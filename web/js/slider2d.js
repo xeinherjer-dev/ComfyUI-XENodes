@@ -3,7 +3,7 @@ import { app } from "../../../scripts/app.js";
 const EXTENSION_NAME = "XENodes.Slider2D";
 const NODE_NAME = "XENodes.Slider2D";
 
-const DEFAULT_SIZE = [240, 312];
+const DEFAULT_SIZE = [240, 240];
 const NODES2_MIN_CANVAS_W = 50;
 const NODES2_MIN_CANVAS_H = 50;
 const LEGACY_MIN_CANVAS_H = 80;
@@ -575,6 +575,12 @@ app.registerExtension({
             // Just defer one frame for the canvas to get its final dimensions.
             hideDataWidgets();
             applyContainerSize(this.size[1]);
+
+            // Force remove all input slots to prevent any external connections
+            if (this.inputs && this.inputs.length > 0) {
+                this.inputs = [];
+            }
+
             requestAnimationFrame(() => requestDraw());
 
             const originalOnPropertyChanged = this.onPropertyChanged;
@@ -651,6 +657,12 @@ app.registerExtension({
                 updateOutputTypes();
                 hideDataWidgets();
                 applyContainerSize(this.size[1]);
+
+                // Force remove all input slots to prevent any external connections
+                if (this.inputs && this.inputs.length > 0) {
+                    this.inputs = [];
+                }
+
                 requestAnimationFrame(() => requestDraw());
             };
 
@@ -685,6 +697,17 @@ app.registerExtension({
                 syncIntposFromProperties();
                 refreshCoreState();
                 updateOutputTypes();
+            };
+
+            const originalOnDrawForeground = this.onDrawForeground;
+            this.onDrawForeground = function(ctx) {
+                const response = originalOnDrawForeground ? originalOnDrawForeground.apply(this, arguments) : undefined;
+                if (this.mode === 2 || this.mode === 4) {
+                    container.style.opacity = "0.4";
+                } else {
+                    container.style.opacity = "1.0";
+                }
+                return response;
             };
         };
     },

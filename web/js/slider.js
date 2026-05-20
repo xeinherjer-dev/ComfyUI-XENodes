@@ -161,12 +161,10 @@ app.registerExtension({
                 sliderInput.value = valToSet;
                 numberInput.value = valToSet;
 
-                // Disable if connected to an input node
-                const isConnected = this.inputs && this.inputs.some(i => i.name === "value" && i.link != null);
-                sliderInput.disabled = isConnected;
-                numberInput.disabled = isConnected;
-                container.style.opacity = isConnected ? "0.5" : "1.0";
-                sliderInput.style.cursor = isConnected ? "default" : "pointer";
+                sliderInput.disabled = false;
+                numberInput.disabled = false;
+                container.style.opacity = "1.0";
+                sliderInput.style.cursor = "pointer";
 
                 syncDataWidgets(valToSet);
                 hideDataWidgets();
@@ -254,6 +252,12 @@ app.registerExtension({
                     const newSize = this.computeSize([this.size[0], this.size[1]]);
                     this.setSize([newSize[0], Math.max(newSize[1], SLIDER_NODE_HEIGHT)]);
                 }
+
+                // Force remove all input slots to prevent any external connections
+                if (this.inputs && this.inputs.length > 0) {
+                    this.inputs = [];
+                }
+
                 updateOutputType();
                 app.canvas?.setDirty(true, true);
             };
@@ -347,6 +351,12 @@ app.registerExtension({
 
                 updateInputs();
                 updateOutputType();
+
+                // Force remove all input slots to prevent any external connections
+                if (this.inputs && this.inputs.length > 0) {
+                    this.inputs = [];
+                }
+
                 requestAnimationFrame(() => {
                     updateInputs();
                     updateOutputType();
@@ -378,9 +388,17 @@ app.registerExtension({
                 if (originalOnConnectionsChange) {
                     originalOnConnectionsChange.apply(this, arguments);
                 }
+            };
 
-                updateInputs();
-                updateOutputType();
+            const originalOnDrawForeground = this.onDrawForeground;
+            this.onDrawForeground = function(ctx) {
+                const response = originalOnDrawForeground ? originalOnDrawForeground.apply(this, arguments) : undefined;
+                if (this.mode === 2 || this.mode === 4) {
+                    container.style.opacity = "0.4";
+                } else {
+                    container.style.opacity = "1.0";
+                }
+                return response;
             };
         };
     }

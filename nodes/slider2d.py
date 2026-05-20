@@ -22,8 +22,8 @@ class Slider2DNode(io.ComfyNode):
             display_name="Slider 2D",
             category="xenodes/utils",
             inputs=[
-                io.Float.Input("X", default=512.0, min=-4294967296.0, max=4294967296.0),
-                io.Float.Input("Y", default=512.0, min=-4294967296.0, max=4294967296.0),
+                io.Float.Input("X", default=512.0, min=-4294967296.0, max=4294967296.0, socketless=True),
+                io.Float.Input("Y", default=512.0, min=-4294967296.0, max=4294967296.0, socketless=True),
             ],
             outputs=[
                 _NumberOutput(display_name="X"),

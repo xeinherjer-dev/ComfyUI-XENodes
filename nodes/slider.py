@@ -20,7 +20,7 @@ class SliderNode(io.ComfyNode):
             display_name="Slider",
             category="xenodes/utils",
             inputs=[
-                io.Float.Input("value", default=20.0, min=-4294967296.0, max=4294967296.0),
+                io.Float.Input("value", default=20.0, min=-4294967296.0, max=4294967296.0, socketless=True),
             ],
             outputs=[
                 _NumberOutput(display_name=" "),

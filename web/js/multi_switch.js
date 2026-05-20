@@ -488,9 +488,18 @@ app.registerExtension({
 
             const originalOnDrawForeground = this.onDrawForeground;
             this.onDrawForeground = function (ctx) {
-                return originalOnDrawForeground
+                const response = originalOnDrawForeground
                     ? originalOnDrawForeground.apply(this, arguments)
                     : undefined;
+                
+                // Make the DOM container semi-transparent when node is Muted (2) or Bypassed (4)
+                if (this.mode === 2 || this.mode === 4) {
+                    container.style.opacity = "0.4";
+                } else {
+                    container.style.opacity = "1.0";
+                }
+
+                return response;
             };
 
             rebuildButtons();
