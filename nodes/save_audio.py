@@ -119,22 +119,45 @@ class SaveAudio(io.ComfyNode):
                     audio_stream = None
 
             if audio_stream is not None and waveform is not None:
-                orig_frame = av.AudioFrame.from_ndarray(waveform.float().cpu().contiguous().numpy(), format='fltp', layout=layout)
-                orig_frame.sample_rate = audio_sample_rate
-                orig_frame.pts = 0
+                try:
+                    # 1. Create the original audio frame
+                    orig_frame = av.AudioFrame.from_ndarray(waveform.float().cpu().contiguous().numpy(), format='fltp', layout=layout)
+                    orig_frame.sample_rate = audio_sample_rate
+                    orig_frame.pts = 0
 
-                # Actual resampling if needed
-                if audio_sample_rate != output_sample_rate:
-                    resampler = av.AudioResampler(format='fltp', layout=layout, rate=output_sample_rate)
+                    # 2. Get the encoder's required frame size (fallback to None if 0 for variable frame size)
+                    encoder_frame_size = audio_stream.codec_context.frame_size
+                    if encoder_frame_size == 0:
+                        encoder_frame_size = None
+
+                    # 3. Always use AudioResampler to handle resampling and splitting into required frame sizes
+                    resampler = av.AudioResampler(
+                        format='fltp',
+                        layout=layout,
+                        rate=output_sample_rate,
+                        frame_size=encoder_frame_size
+                    )
+
+                    # 4. Process and encode the main data
                     resampled_frames = resampler.resample(orig_frame)
                     for f in resampled_frames:
                         f.pts = None
-                        output.mux(audio_stream.encode(f))
-                else:
-                    output.mux(audio_stream.encode(orig_frame))
+                        for packet in audio_stream.encode(f):
+                            output.mux(packet)
 
-                # Flush audio encoder
-                output.mux(audio_stream.encode(None))
+                    # 5. Flush and collect the remaining data in the resampler buffer
+                    flush_frames = resampler.resample(None)
+                    for f in flush_frames:
+                        f.pts = None
+                        for packet in audio_stream.encode(f):
+                            output.mux(packet)
+
+                    # 6. Flush the audio encoder itself to output the final packet
+                    for packet in audio_stream.encode(None):
+                        output.mux(packet)
+
+                except Exception as e:
+                    print(f"[XENodes] Error during audio encoding: {e}")
 
         return io.NodeOutput(
             audio,
