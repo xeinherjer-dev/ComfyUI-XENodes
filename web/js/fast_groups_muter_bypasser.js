@@ -503,17 +503,70 @@ app.registerExtension({
                 },
             });
 
-            // 5. Match colors (prompt input)
-            options.push({
-                content: `Filter Colors: "${matchColors || "(none)"}"`,
-                callback: () => {
-                    const val = prompt("Filter by group colors (comma-separated, e.g. 'red, blue, #3a2222'):", matchColors);
-                    if (val !== null) {
+            // 5. Match colors (submenu selection + prompt input fallback)
+            const currentColors = matchColors
+                ? matchColors.split(",").map(c => c.trim().toLowerCase()).filter(c => c)
+                : [];
+
+            const colorOptions = [
+                {
+                    content: "Clear All (none)",
+                    callback: () => {
                         this.properties = this.properties ?? {};
-                        this.properties.matchColors = val;
+                        this.properties.matchColors = "";
                         this._rebuildGroups?.();
                     }
                 },
+                {
+                    content: "Edit raw text...",
+                    callback: () => {
+                        const val = prompt("Filter by group colors (comma-separated, e.g. 'red, blue, #3a2222'):", this.properties.matchColors ?? "");
+                        if (val !== null) {
+                            this.properties = this.properties ?? {};
+                            this.properties.matchColors = val;
+                            this._rebuildGroups?.();
+                        }
+                    }
+                },
+                null // Separator
+            ];
+
+            const standardColors = [
+                { name: "Red", value: "red" },
+                { name: "Blue", value: "blue" },
+                { name: "Green", value: "green" },
+                { name: "Yellow", value: "yellow" },
+                { name: "Purple", value: "purple" },
+                { name: "Pink", value: "pink" },
+                { name: "Cyan", value: "cyan" },
+                { name: "Brown", value: "brown" },
+                { name: "Pale Blue", value: "pale_blue" }
+            ];
+
+            for (const col of standardColors) {
+                const isSelected = currentColors.includes(col.value);
+                colorOptions.push({
+                    content: `${isSelected ? "✅" : "⬜"} ${col.name}`,
+                    callback: () => {
+                        this.properties = this.properties ?? {};
+                        let nextColors;
+                        if (isSelected) {
+                            nextColors = currentColors.filter(c => c !== col.value);
+                        } else {
+                            nextColors = [...currentColors, col.value];
+                        }
+                        this.properties.matchColors = nextColors.join(", ");
+                        this._rebuildGroups?.();
+                    }
+                });
+            }
+
+            options.push({
+                content: `Filter Colors: "${matchColors || "(none)"}"`,
+                has_submenu: true,
+                submenu: {
+                    options: colorOptions
+                }
             });
 
             options.push(null);
