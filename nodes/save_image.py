@@ -37,6 +37,9 @@ class SaveImage(io.ComfyNode):
 
     @classmethod
     def execute(cls, images: Input.Image, filename_prefix: str, format: str, lossless: bool, quality: int) -> io.NodeOutput:
+        if images is None or len(images) == 0:
+            return io.NodeOutput(images, ui=SavedImages([]))
+
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix,
             folder_paths.get_output_directory(),

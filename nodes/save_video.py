@@ -11,7 +11,7 @@ from typing_extensions import override
 from comfy_api.latest import ComfyExtension, io, Input, ui
 import folder_paths
 
-from ..utils.audio import expand_audio_waveform
+from ..utils.audio import expand_audio_waveform, encode_audio_to_stream
 from ..utils.video import generate_frame_indices
 from ..utils.metadata import get_saved_metadata
 
@@ -157,23 +157,10 @@ class SaveVideo(io.ComfyNode):
 
             # Encode audio
             if audio_stream is not None and waveform is not None:
-                orig_frame = av.AudioFrame.from_ndarray(waveform.float().cpu().contiguous().numpy(), format='fltp', layout=layout)
-                orig_frame.sample_rate = audio_sample_rate
-                orig_frame.pts = 0
-
-                # Actual resampling if needed
-                if audio_sample_rate != output_sample_rate:
-                    resampler = av.AudioResampler(format='fltp', layout=layout, rate=output_sample_rate)
-                    resampled_frames = resampler.resample(orig_frame)
-                    # libopus and other encoders might need frames to be a certain size, muxing directly works often
-                    for f in resampled_frames:
-                        f.pts = None # Let av handle pts for simplicity when resampled
-                        output.mux(audio_stream.encode(f))
-                else:
-                    output.mux(audio_stream.encode(orig_frame))
-
-                # Flush audio encoder
-                output.mux(audio_stream.encode(None))
+                try:
+                    encode_audio_to_stream(output, audio_stream, waveform, audio_sample_rate, output_sample_rate, layout)
+                except Exception as e:
+                    print(f"[XENodes] Error during audio encoding in video: {e}")
 
         return io.NodeOutput(video, ui=ui.PreviewVideo([ui.SavedResult(file_name, subfolder, io.FolderType.output)]))
 

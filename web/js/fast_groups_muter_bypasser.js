@@ -31,7 +31,12 @@ const ROW_HEIGHT = 36; // px per group row
 /** All direct-child LGraphNodes of a group (flat, no recursion into Subgraphs). */
 function getGroupNodes(group) {
     if (!group._children) return [];
-    return Array.from(group._children).filter((c) => c instanceof LGraphNode);
+    return Array.from(group._children).filter((c) => {
+        if (!(c instanceof LGraphNode)) return false;
+        // Exclude subgraph nodes to prevent muting/bypassing inner workflows
+        if (c.is_subgraph || c.type === "Subgraph" || c.type?.includes("Subgraph")) return false;
+        return true;
+    });
 }
 
 /** Apply mode to a flat node list (no recursion). */

@@ -9,6 +9,7 @@ from comfy_api.latest import ComfyExtension, io, Input, ui
 import folder_paths
 
 from ..utils.metadata import get_saved_metadata
+from ..utils.audio import encode_audio_to_stream
 
 AUDIO_CODEC_CONFIG = {
     "mp3": {
@@ -120,42 +121,7 @@ class SaveAudio(io.ComfyNode):
 
             if audio_stream is not None and waveform is not None:
                 try:
-                    # 1. Create the original audio frame
-                    orig_frame = av.AudioFrame.from_ndarray(waveform.float().cpu().contiguous().numpy(), format='fltp', layout=layout)
-                    orig_frame.sample_rate = audio_sample_rate
-                    orig_frame.pts = 0
-
-                    # 2. Get the encoder's required frame size (fallback to None if 0 for variable frame size)
-                    encoder_frame_size = audio_stream.codec_context.frame_size
-                    if encoder_frame_size == 0:
-                        encoder_frame_size = None
-
-                    # 3. Always use AudioResampler to handle resampling and splitting into required frame sizes
-                    resampler = av.AudioResampler(
-                        format='fltp',
-                        layout=layout,
-                        rate=output_sample_rate,
-                        frame_size=encoder_frame_size
-                    )
-
-                    # 4. Process and encode the main data
-                    resampled_frames = resampler.resample(orig_frame)
-                    for f in resampled_frames:
-                        f.pts = None
-                        for packet in audio_stream.encode(f):
-                            output.mux(packet)
-
-                    # 5. Flush and collect the remaining data in the resampler buffer
-                    flush_frames = resampler.resample(None)
-                    for f in flush_frames:
-                        f.pts = None
-                        for packet in audio_stream.encode(f):
-                            output.mux(packet)
-
-                    # 6. Flush the audio encoder itself to output the final packet
-                    for packet in audio_stream.encode(None):
-                        output.mux(packet)
-
+                    encode_audio_to_stream(output, audio_stream, waveform, audio_sample_rate, output_sample_rate, layout)
                 except Exception as e:
                     print(f"[XENodes] Error during audio encoding: {e}")
 
