@@ -285,11 +285,10 @@ app.registerExtension({
                     if (isInnerNode) {
                         // Guard: If another extension (like comfyui-easy-use) has already measured 
                         // and set a duration, skip our manual calculation to prevent double counting.
-                        if (prevNode.executionDuration) {
-                            return;
+                        if (!prevNode.executionDuration) {
+                            const oldDuration = prevNode.executionDuration || 0;
+                            prevNode.executionDuration = oldDuration + elapsed;
                         }
-                        const oldDuration = prevNode.executionDuration || 0;
-                        prevNode.executionDuration = oldDuration + elapsed;
                     }
                 }
             }
