@@ -215,7 +215,7 @@ function addTimeBadgeToNode(node) {
 
                 const badge = new BadgeClass({
                     text: text,
-                    fgColor: "rgba(241, 245, 249, 0.95)",
+                    fgColor: "rgba(148, 163, 184, 0.85)", // Subtle Slate 400 gray for non-intrusive metadata display
                     bgColor: "rgba(15, 23, 42, 0.85)",
                     fontSize: 12,
                     padding: 6,
