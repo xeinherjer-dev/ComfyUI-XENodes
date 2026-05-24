@@ -1,15 +1,14 @@
 /**
- * [XENodes.SubgraphTimeTaken]
- * - Records execution times for nodes nested inside subgraphs.
- * - Sums up and draws the accumulated execution duration badge on parent subgraph nodes.
- * - Note: Displaying badges on individual nodes depends on comfyui-easy-use,
- *   but this script works standalone to record inner times and display parent total badges.
+ * [XENodes.NodeExecutionTime]
+ * - Measures and records execution duration for all nodes in the workflow.
+ * - Dynamically sums up and draws aggregated execution time badges on parent subgraph nodes.
+ * - Works standalone or alongside other extensions (like EasyUse), automatically preventing double counting.
  */
 
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 
-console.log("[XENodes.SubgraphTimeTaken] Script loaded and initializing...");
+console.log("[XENodes.NodeExecutionTime] Script loaded and initializing...");
 
 /**
  * Safely retrieves the list of inner nodes from a subgraph parent node (e.g., GroupNode)
@@ -70,7 +69,7 @@ function findNodeRecursive(graph, id) {
     // 1. Direct match check
     let node = graph.getNodeById(idStr) || graph.getNodeById(Number(id));
     if (node) return node;
-
+ 
     // 2. Composite ID parsing (e.g. "33.0" or "33:0")
     const separators = [".", ":"];
     for (const sep of separators) {
@@ -115,7 +114,7 @@ function findNodeRecursive(graph, id) {
             if (currentNode) return currentNode;
         }
     }
-
+ 
     // 3. Recursive fallback search
     if (graph._nodes) {
         for (const n of graph._nodes) {
@@ -140,7 +139,7 @@ function findNodeRecursive(graph, id) {
             }
         }
     }
-    
+     
     return null;
 }
 
@@ -194,48 +193,48 @@ function addTimeBadgeToNode(node) {
     if (!node.badges) {
         node.badges = [];
     }
-        
-        // Prevent duplicate registration of the time badge
-        const hasTimeBadge = node.badges.some(b => b && b.isXENodesTimeBadge);
-        if (!hasTimeBadge) {
-            const timeBadgeGetter = () => {
-                // Try to retrieve standard LGraphBadge class (might be global or on LiteGraph)
-                const BadgeClass = globalThis.LGraphBadge || (globalThis.LiteGraph && globalThis.LiteGraph.LGraphBadge);
-                if (!BadgeClass) return null;
+    
+    // Prevent duplicate registration of the time badge
+    const hasTimeBadge = node.badges.some(b => b && b.isXENodesTimeBadge);
+    if (!hasTimeBadge) {
+        const timeBadgeGetter = () => {
+            // Try to retrieve standard LGraphBadge class (might be global or on LiteGraph)
+            const BadgeClass = globalThis.LGraphBadge || (globalThis.LiteGraph && globalThis.LiteGraph.LGraphBadge);
+            if (!BadgeClass) return null;
 
-                const isEnabled = app.ui.settings.getSettingValue("XENodes.NodeExecutionTime.Enabled") !== false;
-                const duration = getNodeExecutionDuration(node);
+            const isEnabled = app.ui.settings.getSettingValue("XENodes.NodeExecutionTime.Enabled") !== false;
+            const duration = getNodeExecutionDuration(node);
 
-                // Set text to empty string when disabled or has no duration.
-                // LiteGraph and ComfyUI automatically handle empty text badges as invisible (visible = false).
-                // Returning null here causes Uncaught TypeError: Cannot read properties of null in LGraphNode.ts:drawBadges.
-                const text = (isEnabled && duration > 0)
-                    ? (duration < 1 ? `${Math.round(duration * 1000)}ms` : `${duration.toFixed(2)}s`)
-                    : "";
+            // Set text to empty string when disabled or has no duration.
+            // LiteGraph and ComfyUI automatically handle empty text badges as invisible (visible = false).
+            // Returning null here causes Uncaught TypeError: Cannot read properties of null in LGraphNode.ts:drawBadges.
+            const text = (isEnabled && duration > 0)
+                ? (duration < 1 ? `${Math.round(duration * 1000)}ms` : `${duration.toFixed(2)}s`)
+                : "";
 
-                const badge = new BadgeClass({
-                    text: text,
-                    fgColor: "rgba(148, 163, 184, 0.85)", // Subtle Slate 400 gray for non-intrusive metadata display
-                    bgColor: "rgba(15, 23, 42, 0.85)",
-                    fontSize: 12,
-                    padding: 6,
-                    height: 20,
-                    cornerRadius: 5
-                });
-                
-                // Identify this badge specifically as our time badge
-                badge.isXENodesTimeBadge = true;
-                return badge;
-            };
+            const badge = new BadgeClass({
+                text: text,
+                fgColor: "rgba(148, 163, 184, 0.85)", // Subtle Slate 400 gray for non-intrusive metadata display
+                bgColor: "rgba(15, 23, 42, 0.85)",
+                fontSize: 12,
+                padding: 6,
+                height: 20,
+                cornerRadius: 5
+            });
             
-            // Mark the getter function itself as well
-            timeBadgeGetter.isXENodesTimeBadge = true;
-            node.badges.push(timeBadgeGetter);
-        }
+            // Identify this badge specifically as our time badge
+            badge.isXENodesTimeBadge = true;
+            return badge;
+        };
+        
+        // Mark the getter function itself as well
+        timeBadgeGetter.isXENodesTimeBadge = true;
+        node.badges.push(timeBadgeGetter);
+    }
 }
 
 app.registerExtension({
-    name: "XENodes.SubgraphTimeTaken",
+    name: "XENodes.NodeExecutionTime",
     nodeCreated(node) {
         addTimeBadgeToNode(node);
     },
@@ -252,7 +251,7 @@ app.registerExtension({
         let lastNodeId = null;
         let startTime = 0;
 
-        console.log("[XENodes.SubgraphTimeTaken] Extension registered successfully. Hooking up API events.");
+        console.log("[XENodes.NodeExecutionTime] Extension registered successfully. Hooking up API events.");
 
         // Clear execution durations recursively when a new run starts
         api.addEventListener("execution_start", () => {
