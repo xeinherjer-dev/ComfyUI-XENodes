@@ -193,10 +193,11 @@ function getNodeExecutionDuration(node, isRoot = true) {
 function drawTimeBadge(ctx, node, text) {
     ctx.save();
     
-    ctx.font = "bold 10px Inter, system-ui, -apple-system, sans-serif";
+    // Match the font size and style of standard LGraphBadge (12px)
+    ctx.font = "bold 12px Inter, system-ui, -apple-system, sans-serif";
     const textWidth = ctx.measureText(text).width;
-    const badgeWidth = textWidth + 12;
-    const badgeHeight = 16;
+    const badgeWidth = textWidth + 12; // 6px padding on left/right
+    const badgeHeight = 20; // Match standard LGraphBadge height (20px)
     
     const titleHeight = node.constructor.title_height || LiteGraph.NODE_TITLE_HEIGHT || 30;
     const x = 6;
@@ -206,7 +207,7 @@ function drawTimeBadge(ctx, node, text) {
     ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
     ctx.beginPath();
     if (ctx.roundRect) {
-        ctx.roundRect(x, y, badgeWidth, badgeHeight, 4);
+        ctx.roundRect(x, y, badgeWidth, badgeHeight, 5); // Match standard corner radius (5px)
     } else {
         ctx.rect(x, y, badgeWidth, badgeHeight);
     }
@@ -219,7 +220,9 @@ function drawTimeBadge(ctx, node, text) {
     
     // Text drawing: clean off-white
     ctx.fillStyle = "rgba(241, 245, 249, 0.95)";
-    ctx.fillText(text, x + 6, y + 11);
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    ctx.fillText(text, x + 6, y + badgeHeight / 2 + 1);
     
     ctx.restore();
 }
