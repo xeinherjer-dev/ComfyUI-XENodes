@@ -185,51 +185,70 @@ function getNodeExecutionDuration(node, isRoot = true) {
 }
 
 /**
- * Renders a glassmorphism style execution time badge on the top of the node.
- * @param {CanvasRenderingContext2D} ctx - Canvas context.
- * @param {LGraphNode} node - Node on which to draw.
- * @param {string} text - Formatted time text.
+ * Safely adds a dynamic execution time badge getter to the node's badges array.
+ * @param {LGraphNode} node - The LiteGraph node.
  */
-function drawTimeBadge(ctx, node, text) {
-    ctx.save();
+function addTimeBadgeToNode(node) {
+    if (!node) return;
     
-    // Match the font size and style of standard LGraphBadge (12px)
-    ctx.font = "bold 12px Inter, system-ui, -apple-system, sans-serif";
-    const textWidth = ctx.measureText(text).width;
-    const badgeWidth = textWidth + 12; // 6px padding on left/right
-    const badgeHeight = 20; // Match standard LGraphBadge height (20px)
-    
-    const titleHeight = node.constructor.title_height || LiteGraph.NODE_TITLE_HEIGHT || 30;
-    const x = 6;
-    const y = -titleHeight - badgeHeight - 2;
-    
-    // Glassmorphism background: semi-transparent Slate 900
-    ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
-    ctx.beginPath();
-    if (ctx.roundRect) {
-        ctx.roundRect(x, y, badgeWidth, badgeHeight, 5); // Match standard corner radius (5px)
-    } else {
-        ctx.rect(x, y, badgeWidth, badgeHeight);
+    if (!node.badges) {
+        node.badges = [];
     }
-    ctx.fill();
-    
-    // Thin subtle border
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    
-    // Text drawing: clean off-white
-    ctx.fillStyle = "rgba(241, 245, 249, 0.95)";
-    ctx.textBaseline = "middle";
-    ctx.textAlign = "left";
-    ctx.fillText(text, x + 6, y + badgeHeight / 2 + 1);
-    
-    ctx.restore();
+        
+        // Prevent duplicate registration of the time badge
+        const hasTimeBadge = node.badges.some(b => b && b.isXENodesTimeBadge);
+        if (!hasTimeBadge) {
+            const timeBadgeGetter = () => {
+                // Try to retrieve standard LGraphBadge class (might be global or on LiteGraph)
+                const BadgeClass = globalThis.LGraphBadge || (globalThis.LiteGraph && globalThis.LiteGraph.LGraphBadge);
+                if (!BadgeClass) return null;
+
+                const isEnabled = app.ui.settings.getSettingValue("XENodes.NodeExecutionTime.Enabled") !== false;
+                const duration = getNodeExecutionDuration(node);
+
+                // Set text to empty string when disabled or has no duration.
+                // LiteGraph and ComfyUI automatically handle empty text badges as invisible (visible = false).
+                // Returning null here causes Uncaught TypeError: Cannot read properties of null in LGraphNode.ts:drawBadges.
+                const text = (isEnabled && duration > 0)
+                    ? (duration < 1 ? `${Math.round(duration * 1000)}ms` : `${duration.toFixed(2)}s`)
+                    : "";
+
+                const badge = new BadgeClass({
+                    text: text,
+                    fgColor: "rgba(241, 245, 249, 0.95)",
+                    bgColor: "rgba(15, 23, 42, 0.85)",
+                    fontSize: 12,
+                    padding: 6,
+                    height: 20,
+                    cornerRadius: 5
+                });
+                
+                // Identify this badge specifically as our time badge
+                badge.isXENodesTimeBadge = true;
+                return badge;
+            };
+            
+            // Mark the getter function itself as well
+            timeBadgeGetter.isXENodesTimeBadge = true;
+            node.badges.push(timeBadgeGetter);
+        }
 }
 
 app.registerExtension({
     name: "XENodes.SubgraphTimeTaken",
+    nodeCreated(node) {
+        addTimeBadgeToNode(node);
+    },
     setup() {
+        // Register the setting in ComfyUI Settings menu
+        app.ui.settings.addSetting({
+            id: "XENodes.NodeExecutionTime.Enabled",
+            category: ["XENodes", "Node Execution Time"],
+            name: "Display Execution Time Badge",
+            type: "boolean",
+            defaultValue: true,
+        });
+
         let lastNodeId = null;
         let startTime = 0;
 
@@ -262,6 +281,14 @@ app.registerExtension({
 
         // Track executed node durations
         api.addEventListener("executing", (event) => {
+            // Guard: Skip measurement if the feature is disabled in settings
+            const isEnabled = app.ui.settings.getSettingValue("XENodes.NodeExecutionTime.Enabled") !== false;
+            if (!isEnabled) {
+                lastNodeId = null;
+                startTime = 0;
+                return;
+            }
+
             let currentNodeId = null;
             if (event.detail !== null && event.detail !== undefined) {
                 if (typeof event.detail === "object") {
@@ -281,17 +308,14 @@ app.registerExtension({
                 
                 const prevNode = findNodeRecursive(app.graph, lastNodeId);
                 if (prevNode) {
-                    // Only track and modify duration for nodes INSIDE subgraphs.
-                    // Root-level nodes are already perfectly managed by EasyUse/ComfyUI core.
-                    const isInnerNode = prevNode.graph && prevNode.graph !== app.graph;
-                    
-                    if (isInnerNode) {
-                        // Guard: If another extension (like comfyui-easy-use) has already measured 
-                        // and set a duration, skip our manual calculation to prevent double counting.
-                        if (!prevNode.executionDuration) {
-                            const oldDuration = prevNode.executionDuration || 0;
-                            prevNode.executionDuration = oldDuration + elapsed;
-                        }
+                    // Guard: If another extension (like comfyui-easy-use) has already measured 
+                    // and set a duration, skip our manual calculation to prevent double counting.
+                    if (!prevNode.executionDuration) {
+                        const oldDuration = prevNode.executionDuration || 0;
+                        prevNode.executionDuration = oldDuration + elapsed;
+                        
+                        // Trigger canvas redraw to update the dynamic badges real-time
+                        prevNode.setDirtyCanvas(true, true);
                     }
                 }
             }
@@ -300,33 +324,11 @@ app.registerExtension({
             startTime = now;
         });
 
-        // Patch LGraphNode globally to draw parent subgraph badges
-        if (typeof LGraphNode !== "undefined" && LGraphNode.prototype) {
-            const originalOnDrawForeground = LGraphNode.prototype.onDrawForeground;
-            
-            LGraphNode.prototype.onDrawForeground = function(ctx) {
-                const result = originalOnDrawForeground ? originalOnDrawForeground.apply(this, arguments) : undefined;
-                
-                // Identify if this is a parent node of standard or custom subgraphs
-                const isGroupNode = typeof this.getInnerNodes === "function" || 
-                                    (this.type && this.type.startsWith("workflow>"));
-                const isSubgraphParent = isGroupNode || !!this.subgraph;
-                
-                if (isSubgraphParent) {
-                    const duration = getNodeExecutionDuration(this);
-                    if (duration > 0) {
-                        const formatted = duration < 1 
-                            ? `${Math.round(duration * 1000)}ms` 
-                            : `${duration.toFixed(2)}s`;
-                        
-                        drawTimeBadge(ctx, this, formatted);
-                    }
-                }
-                
-                return result;
-            };
-        } else {
-            console.error("[XENodes.SubgraphTimeTaken] Failed to patch LGraphNode prototype: LGraphNode is undefined.");
+        // Add badges to existing nodes already loaded in the graph
+        if (app.graph && app.graph._nodes) {
+            app.graph._nodes.forEach(node => {
+                addTimeBadgeToNode(node);
+            });
         }
     }
 });
