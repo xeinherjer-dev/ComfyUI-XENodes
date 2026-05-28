@@ -1,6 +1,6 @@
 # ComfyUI-XENodes
 
-A collection of custom nodes for ComfyUI, featuring Multi-Switch, Multi-Pipe, Slider, Slider 2D, Save Image, Save Video, Save Audio, Save HDR Image, Save HDR Video, Combo Selector, and Show Any nodes.
+A collection of custom nodes and UI extensions for ComfyUI, featuring Multi-Switch, Multi-Pipe, Slider, Slider 2D, Save Image, Save Video, Save Audio, Save HDR Image, Save HDR Video, Combo Selector, Show Any nodes, and Node Execution Time helper.
 
 ## Features
 
@@ -95,6 +95,15 @@ A visual debug node that displays any input value as text directly on the node.
 
 - **Any Input**: Accepts any data type and converts it to a readable string representation (JSON for complex objects).
 - **Composite ID Support**: Fully compatible with Nodes 2.0 Group Nodes, ensuring progress is saved correctly even when nested.
+
+### Node Execution Time (UI Extension)
+
+Measures and displays the execution time for each node in your workflow directly on the node itself.
+
+- **Subtle Badges**: Renders non-intrusive gray badges displaying execution times in milliseconds (`ms`) or seconds (`s`).
+- **Subgraph Support**: Recursively calculates and sums up the execution times for ComfyUI GroupNodes and standard LiteGraph subgraphs.
+- **Double Counting Prevention**: Automatically detects if other extensions (e.g. `comfyui-easy-use`) have already measured the time, avoiding double counting.
+- **Toggleable**: Easily enable or disable the display via the ComfyUI Settings panel under `XENodes -> Node Execution Time`.
 
 ## License
 
