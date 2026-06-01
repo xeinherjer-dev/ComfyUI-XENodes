@@ -699,6 +699,9 @@ app.registerExtension({
                 updateOutputTypes();
             };
 
+            let lastKnownContainerW = 0;
+            let lastKnownContainerH = 0;
+
             const originalOnDrawForeground = this.onDrawForeground;
             this.onDrawForeground = function(ctx) {
                 const response = originalOnDrawForeground ? originalOnDrawForeground.apply(this, arguments) : undefined;
@@ -707,6 +710,19 @@ app.registerExtension({
                 } else {
                     container.style.opacity = "1.0";
                 }
+
+                // Detect layout changes caused by subgraph navigation or
+                // other framework-level resizes and re-apply the layout.
+                const curW = container.clientWidth;
+                const curH = container.clientHeight;
+                if (curW !== lastKnownContainerW || curH !== lastKnownContainerH) {
+                    lastKnownContainerW = curW;
+                    lastKnownContainerH = curH;
+                    cachedRect = null;
+                    applyContainerSize(this.size[1]);
+                    requestAnimationFrame(() => requestDraw());
+                }
+
                 return response;
             };
         };
