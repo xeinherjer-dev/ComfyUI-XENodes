@@ -13,7 +13,6 @@ const debugLog = (node, ...args) => {
     }
 };
 
-
 const getSlotIndex = (name) => {
     if (!name) return -1;
     const match = name.match(/slot(\d+)/);
@@ -77,18 +76,21 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
     let currentGraph = graph;
     let currentLinkId = linkId;
     const seen = new Set(); 
-    
 
     while (currentLinkId != null) {
-        if (seen.has(currentLinkId)) {
+        const seenKey = `${currentGraph.id || 'root'}_${currentLinkId}`;
+        if (seen.has(seenKey)) {
             break;
         }
-        seen.add(currentLinkId);
+        seen.add(seenKey);
 
         const findLinkGlobal = (g, lId) => {
             if (!g) return null;
-            if (g.links?.[lId]) return g.links[lId];
-            for (const n of (g._nodes || [])) {
+            // Support both bracket access (legacy) and Map.get (Nodes 2.0)
+            const directLink = g.links?.[lId] ?? g.links?.get?.(lId);
+            if (directLink) return directLink;
+            const nodes = g._nodes || g.nodes || [];
+            for (const n of nodes) {
                 const inner = n.inner_graph || n.subgraph || n.getInnerGraph?.();
                 if (inner) {
                     const found = findLinkGlobal(inner, lId);
@@ -98,7 +100,7 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
             return null;
         };
 
-        const link = currentGraph.links?.[currentLinkId] || app.graph.links?.[currentLinkId] || findLinkGlobal(app.graph, currentLinkId);
+        const link = (currentGraph.links?.[currentLinkId] ?? currentGraph.links?.get?.(currentLinkId)) || (app.graph.links?.[currentLinkId] ?? app.graph.links?.get?.(currentLinkId)) || findLinkGlobal(app.graph, currentLinkId);
         if (!link) {
             break;
         }
@@ -111,7 +113,8 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
                 if (!g) return null;
                 const n = g.getNodeById(nId);
                 if (n) return n;
-                for (const nn of (g._nodes || [])) {
+                const nodes = g._nodes || g.nodes || [];
+                for (const nn of nodes) {
                     const inner = nn.inner_graph || nn.subgraph || nn.getInnerGraph?.();
                     if (inner) {
                         const found = findNodeGlobal(inner, nId);
@@ -125,15 +128,18 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
         
         // Fallback reverse lookup
         if (!originNode) {
-            originNode = currentGraph._nodes.find(n => n.outputs?.some(out => out.links?.includes(currentLinkId)));
+            const nodesArray = currentGraph._nodes || currentGraph.nodes || [];
+            originNode = nodesArray.find(n => n.outputs?.some(out => out.links?.includes(currentLinkId)));
         }
 
         // Subgraph Penetration (Upward)
         if (!originNode) {
             if (link.origin_id != null && link.origin_id < 0) {
                 const findParentNode = (rootG, innerG) => {
-                    if (!rootG || !rootG._nodes) return null;
-                    for (const n of rootG._nodes) {
+                    if (!rootG) return null;
+                    const nodes = rootG._nodes || rootG.nodes || [];
+                    if (!nodes.length) return null;
+                    for (const n of nodes) {
                         const inner = n.inner_graph || n.subgraph || n.getInnerGraph?.();
                         if (inner === innerG) return n;
                         if (inner) {
@@ -177,7 +183,8 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
         if (innerGraph) {
             const outSlotDef = originNode.outputs[originSlot];
             if (outSlotDef) {
-                const outNode = innerGraph._nodes.find(n => 
+                const innerNodes = innerGraph._nodes || innerGraph.nodes || [];
+                const outNode = innerNodes.find(n => 
                     (n.type === "GraphOutput" || n.type === "SubgraphOutput" || n.type === "Builtin: GraphOutput" || n.type === "Primitive") && 
                     (n.properties?.name === outSlotDef.name || n.title === outSlotDef.name || n.name === outSlotDef.name)
                 );
@@ -192,9 +199,15 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
                     // The target_slot corresponds to the index of the subgraph's output pin.
                     let virtualOutputLink = null;
                     if (innerGraph.links) {
-                        const linkKeys = Object.keys(innerGraph.links);
-                        for (let key of linkKeys) {
-                            let l = innerGraph.links[key];
+                        // Support both Object.keys (legacy) and Map iteration (Nodes 2.0)
+                        const iterateLinks = (links) => {
+                            if (links instanceof Map || typeof links.entries === 'function') {
+                                return [...links.values()];
+                            }
+                            return Object.keys(links).map(k => links[k]).filter(Boolean);
+                        };
+                        const allLinks = iterateLinks(innerGraph.links);
+                        for (let l of allLinks) {
                             if (l && l.target_slot === originSlot && l.target_id < 0) {
                                 virtualOutputLink = l;
                                 break;
@@ -204,6 +217,37 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
 
                     if (virtualOutputLink) {
                         currentGraph = innerGraph;
+                        // Use origin link instead of re-using the same link ID to avoid seen-set collision
+                        // We need to find what feeds into the origin_id node at origin_slot
+                        const internalOriginNode = innerGraph.getNodeById(virtualOutputLink.origin_id);
+                        if (internalOriginNode) {
+                            originNode = internalOriginNode;
+                            originSlot = virtualOutputLink.origin_slot;
+                            
+                            // Check if this is a target node
+                            if (originNode.type === PIPE_IN_NODE) {
+                                return { node: originNode, slot: originSlot, graph: currentGraph };
+                            }
+                            
+                            // Check penetration handlers
+                            if (PENETRATION_HANDLERS[originNode.type]) {
+                                const nextLinkId = PENETRATION_HANDLERS[originNode.type](originNode);
+                                if (nextLinkId != null) {
+                                    currentLinkId = nextLinkId;
+                                    continue;
+                                }
+                            }
+                            
+                            // Check if this node itself is a subgraph
+                            let deepInner = originNode.subgraph || originNode.inner_graph || originNode.getInnerGraph?.();
+                            if (deepInner) {
+                                currentLinkId = virtualOutputLink.id;
+                                continue;
+                            }
+                            
+                            return { node: originNode, slot: originSlot, graph: currentGraph };
+                        }
+                        // Fallback: use link ID as before
                         currentLinkId = virtualOutputLink.id;
                         continue;
                     }
@@ -211,10 +255,11 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
                 
                 // Deep recursive find
                 const findPipeInRecursive = (g) => {
-                    if (!g || !g._nodes) return null;
-                    const direct = g._nodes.find(n => n.type === PIPE_IN_NODE);
+                    const gNodes = g?._nodes || g?.nodes || [];
+                    if (!gNodes.length) return null;
+                    const direct = gNodes.find(n => n.type === PIPE_IN_NODE);
                     if (direct) return { node: direct, graph: g };
-                    for (const n of g._nodes) {
+                    for (const n of gNodes) {
                         const inner = n.inner_graph || n.subgraph || n.getInnerGraph?.();
                         if (inner) {
                             const found = findPipeInRecursive(inner);
@@ -263,7 +308,6 @@ const buildPipeState = (contextNode, includeTitle) => {
     const traceAndMerge = (node) => {
         if (!node) return;
         
-        
         // 1. Trace parent pipe to inherit state first
         const pipeInput = (node.inputs || []).find(inp => inp.name === "pipe");
         if (pipeInput && pipeInput.link != null) {
@@ -279,7 +323,9 @@ const buildPipeState = (contextNode, includeTitle) => {
         for (const inp of managed) {
             if (inp.link != null) {
                 const info = getConnectedInfo(node, inp, includeTitle);
-                if (info) state.set(getSlotIndex(inp.name), info);
+                if (info) {
+                    state.set(getSlotIndex(inp.name), info);
+                }
             }
         }
     };
@@ -350,12 +396,10 @@ app.registerExtension({
                         const newLabel = stateInfo?.label || formatOutputLabel(idx);
                         
                         if (inp.label !== newLabel) {
-                            inp.label = newLabel;
                             changed = true;
-                            
-                            // 🚀 Optimized Splice Hack: Only re-mount the specific slot that changed!
-                            const temp = this.inputs.splice(i, 1)[0];
-                            this.inputs.splice(i, 0, temp);
+                            // 🚀 Re-create object to force Vue reactivity
+                            const updated = Object.assign({}, inp, { label: newLabel });
+                            this.inputs.splice(i, 1, updated);
                         }
                     }
                 }
@@ -501,7 +545,7 @@ app.registerExtension({
                     this.outputs.splice(targetOutputs.length); // Bulk remove excess
                 }
 
-                // Handle output growth and updates (with Optimized Splice Hack)
+                // Handle output growth and updates (with Reactivity Fix)
                 for (let i = 0; i < targetOutputs.length; i++) {
                     const target = targetOutputs[i];
                     let current = this.outputs[i];
@@ -512,13 +556,15 @@ app.registerExtension({
                         this.outputs.push(current);
                     } else if (current.label !== target.label || current.type !== target.type) {
                         changed = true;
-                        current.label = target.label;
-                        current.type = target.type;
-                        if (target.baseEntry) current.name = target.baseEntry.name;
                         
-                        // 🚀 Optimized Splice Hack: Only re-mount the specific slot that changed!
-                        const temp = this.outputs.splice(i, 1)[0];
-                        this.outputs.splice(i, 0, temp);
+                        // 🚀 Re-create object to force Vue reactivity
+                        const updated = Object.assign({}, current, {
+                            label: target.label,
+                            type: target.type
+                        });
+                        if (target.baseEntry) updated.name = target.baseEntry.name;
+                        
+                        this.outputs.splice(i, 1, updated);
                     }
                 }
 
