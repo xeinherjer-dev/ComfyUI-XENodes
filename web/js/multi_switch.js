@@ -478,6 +478,10 @@ app.registerExtension({
                     clearInterval(this.title_check_interval);
                     this.title_check_interval = null;
                 }
+                if (this.sync_interval) {
+                    clearInterval(this.sync_interval);
+                    this.sync_interval = null;
+                }
                 const styleId = `multi-switch-style-${this.id}`;
                 const styleEl = document.getElementById(styleId);
                 if (styleEl) {
@@ -488,10 +492,6 @@ app.registerExtension({
 
             const originalOnDrawForeground = this.onDrawForeground;
             this.onDrawForeground = function (ctx) {
-                if (this.updateUnselectedNodesModes) {
-                    this.updateUnselectedNodesModes();
-                }
-
                 const response = originalOnDrawForeground
                     ? originalOnDrawForeground.apply(this, arguments)
                     : undefined;
@@ -505,6 +505,12 @@ app.registerExtension({
 
                 return response;
             };
+
+            this.sync_interval = setInterval(() => {
+                if (this.flags.collapsed || app.configuringGraph) return;
+                if (this.mode === 2 || this.mode === 4) return;
+                this.updateUnselectedNodesModes?.();
+            }, 250);
 
             rebuildButtons();
             return result;
