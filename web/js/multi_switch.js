@@ -488,6 +488,10 @@ app.registerExtension({
 
             const originalOnDrawForeground = this.onDrawForeground;
             this.onDrawForeground = function (ctx) {
+                if (this.updateUnselectedNodesModes) {
+                    this.updateUnselectedNodesModes();
+                }
+
                 const response = originalOnDrawForeground
                     ? originalOnDrawForeground.apply(this, arguments)
                     : undefined;
