@@ -239,6 +239,34 @@ app.registerExtension({
         addTimeBadgeToNode(node);
     },
     setup() {
+        // Patch LiteGraph's drawBadges on Legacy UI to ensure the execution time badge is rendered
+        // to the left of the node number badge without shifting the node number's rightmost position.
+        // We keep the original `node.badges` array order intact to prevent breaking Nodes 2.0 (Vue nodes) badge rendering.
+        const LGraphNode = globalThis.LGraphNode || (globalThis.LiteGraph && globalThis.LiteGraph.LGraphNode);
+        if (LGraphNode && LGraphNode.prototype && !LGraphNode.prototype.__xenodes_drawBadges_patched) {
+            LGraphNode.prototype.__xenodes_drawBadges_patched = true;
+            const originalDrawBadges = LGraphNode.prototype.drawBadges;
+            LGraphNode.prototype.drawBadges = function(ctx, options) {
+                const originalBadges = this.badges;
+                if (Array.isArray(originalBadges) && originalBadges.length > 1) {
+                    const timeBadgeIndex = originalBadges.findIndex(b => b && b.isXENodesTimeBadge);
+                    if (timeBadgeIndex > 0) {
+                        const newBadges = [...originalBadges];
+                        const [timeBadge] = newBadges.splice(timeBadgeIndex, 1);
+                        newBadges.unshift(timeBadge);
+                        this.badges = newBadges;
+                        try {
+                            originalDrawBadges.call(this, ctx, options);
+                        } finally {
+                            this.badges = originalBadges;
+                        }
+                        return;
+                    }
+                }
+                originalDrawBadges.call(this, ctx, options);
+            };
+        }
+
         // Register the setting in ComfyUI Settings menu
         app.ui.settings.addSetting({
             id: "XENodes.NodeExecutionTime.Enabled",
