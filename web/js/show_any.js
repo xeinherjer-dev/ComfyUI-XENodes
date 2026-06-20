@@ -26,11 +26,12 @@ app.registerExtension({
                 if (!v) v = [];
                 if (!Array.isArray(v)) v = [v];
 
+                let idx = 0;
                 for (let list of v) {
                     if (!Array.isArray(list)) list = [list];
                     for (const l of list) {
                         try {
-                            const w = ComfyWidgets["STRING"](this, "", ["STRING", { multiline: true }], app).widget;
+                            const w = ComfyWidgets["STRING"](this, `text_preview_${idx++}`, ["STRING", { multiline: true }], app).widget;
                             w.element.readOnly = true;
                             w.element.style.opacity = 0.8;
                             w.value = l;
