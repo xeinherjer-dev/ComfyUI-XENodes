@@ -37,6 +37,9 @@ class SaveImage(io.ComfyNode):
 
     @classmethod
     def execute(cls, images: Input.Image, filename_prefix: str, format: str, lossless: bool, quality: int) -> io.NodeOutput:
+        from ..utils.text import apply_text_replacements
+        filename_prefix = apply_text_replacements(filename_prefix, cls.hidden.prompt, cls.hidden.extra_pnginfo)
+
         if images is None or len(images) == 0:
             return io.NodeOutput(images, ui=SavedImages([]))
 

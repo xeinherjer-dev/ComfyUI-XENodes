@@ -1,5 +1,4 @@
 import { app } from "../../../scripts/app.js";
-import { applyTextReplacements } from "../../../scripts/utils.js";
 
 app.registerExtension({
 	name: "XENodes.SaveImage",
@@ -14,12 +13,6 @@ app.registerExtension({
 				const losslessWidget = this.widgets.find((w) => w.name === "lossless");
 				const qualityWidget = this.widgets.find((w) => w.name === "quality");
 
-				// Apply text replacements for filename_prefix (same as Save Video)
-				if (prefixWidget) {
-					prefixWidget.serializeValue = () => {
-						return applyTextReplacements(app, prefixWidget.value);
-					};
-				}
 
 				const updateWebpWidgets = (format, isInitial = false) => {
 					if (!qualityWidget || !losslessWidget) return;

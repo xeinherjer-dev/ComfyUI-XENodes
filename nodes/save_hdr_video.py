@@ -51,6 +51,9 @@ class SaveHDRVideo(io.ComfyNode):
 
     @classmethod
     def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float, loop_count: int, pingpong: bool, audio_codec: str, audio_bitrate: str, peak_nits: float, itm_knee: float, itm_exponent: float) -> io.NodeOutput:
+        from ..utils.text import apply_text_replacements
+        filename_prefix = apply_text_replacements(filename_prefix, cls.hidden.prompt, cls.hidden.extra_pnginfo)
+
         width, height = video.get_dimensions()
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix,

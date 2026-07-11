@@ -1,5 +1,4 @@
 import { app } from "../../../scripts/app.js";
-import { applyTextReplacements } from "../../../scripts/utils.js";
 
 app.registerExtension({
 	name: "XENodes.SaveAudio",
@@ -22,11 +21,6 @@ app.registerExtension({
 
 				const syncTasks = [];
 
-				if (prefixWidget) {
-					prefixWidget.serializeValue = () => {
-						return applyTextReplacements(app, prefixWidget.value);
-					};
-				}
 
 				if (codecWidget && bitrateWidget) {
 					const CODEC_CONFIG = {

@@ -59,6 +59,9 @@ class SaveAudio(io.ComfyNode):
 
     @classmethod
     def execute(cls, audio: Input.Audio, filename_prefix: str, audio_codec: str, audio_bitrate: str) -> io.NodeOutput:
+        from ..utils.text import apply_text_replacements
+        filename_prefix = apply_text_replacements(filename_prefix, cls.hidden.prompt, cls.hidden.extra_pnginfo)
+
         config = AUDIO_CODEC_CONFIG.get(audio_codec, AUDIO_CODEC_CONFIG["mp3"])
         format_ext = config["ext"]
 

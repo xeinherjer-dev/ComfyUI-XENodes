@@ -1,5 +1,4 @@
 import { app } from "../../../scripts/app.js";
-import { applyTextReplacements } from "../../../scripts/utils.js";
 
 app.registerExtension({
 	name: "XENodes.SaveVideo",
@@ -18,11 +17,6 @@ app.registerExtension({
 
 				const syncTasks = [];
 
-				if (prefixWidget) {
-					prefixWidget.serializeValue = () => {
-						return applyTextReplacements(app, prefixWidget.value);
-					};
-				}
 
 				const CODEC_CRF_MAP = {
 					'h264': 23,

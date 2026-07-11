@@ -1,5 +1,4 @@
 import { app } from "../../../scripts/app.js";
-import { applyTextReplacements } from "../../../scripts/utils.js";
 
 app.registerExtension({
 	name: "XENodes.SaveHDRImage",
@@ -13,11 +12,6 @@ app.registerExtension({
 				const crfWidget = this.widgets.find((w) => w.name === "crf");
 				const prefixWidget = this.widgets.find((w) => w.name === "filename_prefix");
 
-				if (prefixWidget) {
-					prefixWidget.serializeValue = () => {
-						return applyTextReplacements(app, prefixWidget.value);
-					};
-				}
 
 				const CODEC_CRF_MAP = {
 					'av1': 2,
