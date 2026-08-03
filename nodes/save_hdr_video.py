@@ -155,7 +155,7 @@ class SaveHDRVideo(io.ComfyNode):
         cmd += ["-pix_fmt", "yuv420p10le"]
 
         if format == "mp4":
-            cmd += ["-movflags", "use_metadata_tags"]
+            cmd += ["-movflags", "use_metadata_tags+faststart"]
 
         trc = "smpte2084"
         cmd += ["-color_primaries", "bt2020", "-color_trc", trc, "-colorspace", "bt2020nc"]

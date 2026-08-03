@@ -96,7 +96,7 @@ class SaveVideo(io.ComfyNode):
 
         container_options = {}
         if format == 'mp4':
-            container_options['movflags'] = 'use_metadata_tags'
+            container_options['movflags'] = 'use_metadata_tags+faststart'
 
         with av.open(file_path, mode='w', options=container_options) as output:
             if saved_metadata:
