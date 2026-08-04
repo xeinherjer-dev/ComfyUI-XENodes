@@ -26,13 +26,70 @@ class SaveVideo(io.ComfyNode):
             inputs=[
                 io.Video.Input("video", tooltip="The video to save."),
                 io.String.Input("filename_prefix", default="video/ComfyUI", tooltip="The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."),
-                io.Combo.Input("format", options=["mp4", "webm"], default="mp4", tooltip="The format to save the video as."),
-                io.Combo.Input("codec", options=["h264", "h265", "av1", "h264_nvenc", "hevc_nvenc", "av1_nvenc"], default="h264", tooltip="The codec to use for the video."),
-                io.Float.Input("crf", default=0.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used for encoding (maps to CQ for NVENC). Set to 0 to use encoder defaults."),
+                io.DynamicCombo.Input(
+                    "format",
+                    options=[
+                        io.DynamicCombo.Option(
+                            "mp4",
+                            [
+                                io.DynamicCombo.Input(
+                                    "codec",
+                                    options=[
+                                        io.DynamicCombo.Option("h264", [io.Float.Input("crf", default=23.0, min=0.0, max=51.0, step=1.0, tooltip="CRF for H.264 (lower = higher quality).")]),
+                                        io.DynamicCombo.Option("h265", [io.Float.Input("crf", default=28.0, min=0.0, max=51.0, step=1.0, tooltip="CRF for H.265 (lower = higher quality).")]),
+                                        io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=42.0, min=0.0, max=63.0, step=1.0, tooltip="CRF for AV1 (lower = higher quality).")]),
+                                        io.DynamicCombo.Option("h264_nvenc", [io.Float.Input("crf", default=30.0, min=0.0, max=51.0, step=1.0, tooltip="CQ for NVENC H.264.")]),
+                                        io.DynamicCombo.Option("hevc_nvenc", [io.Float.Input("crf", default=35.0, min=0.0, max=51.0, step=1.0, tooltip="CQ for NVENC HEVC.")]),
+                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=42.0, min=0.0, max=51.0, step=1.0, tooltip="CQ for NVENC AV1.")]),
+                                    ],
+                                    tooltip="The video codec.",
+                                ),
+                                io.DynamicCombo.Input(
+                                    "audio_codec",
+                                    options=[
+                                        io.DynamicCombo.Option(
+                                            "aac",
+                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", tooltip="Bitrate for AAC audio.")],
+                                        ),
+                                        io.DynamicCombo.Option(
+                                            "opus",
+                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", tooltip="Bitrate for Opus audio.")],
+                                        ),
+                                        io.DynamicCombo.Option("flac", []),
+                                    ],
+                                    tooltip="The audio codec.",
+                                ),
+                            ],
+                        ),
+                        io.DynamicCombo.Option(
+                            "webm",
+                            [
+                                io.DynamicCombo.Input(
+                                    "codec",
+                                    options=[
+                                        io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=42.0, min=0.0, max=63.0, step=1.0, tooltip="CRF for AV1 (lower = higher quality).")]),
+                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=42.0, min=0.0, max=51.0, step=1.0, tooltip="CQ for NVENC AV1.")]),
+                                    ],
+                                    tooltip="The video codec.",
+                                ),
+                                io.DynamicCombo.Input(
+                                    "audio_codec",
+                                    options=[
+                                        io.DynamicCombo.Option(
+                                            "opus",
+                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", tooltip="Bitrate for Opus audio.")],
+                                        ),
+                                        io.DynamicCombo.Option("flac", []),
+                                    ],
+                                    tooltip="The audio codec.",
+                                ),
+                            ],
+                        ),
+                    ],
+                    tooltip="The format to save the video as.",
+                ),
                 io.Int.Input("loop_count", default=0, min=0, max=100, step=1, tooltip="Loop count. 0 = play once. For mp4/webm, this physically repeats the frames."),
                 io.Boolean.Input("pingpong", default=False, tooltip="Pingpong animation (images only). Plays frames forward then backward."),
-                io.Combo.Input("audio_codec", options=["aac", "opus", "flac"], default="aac", tooltip="The codec to use for the audio."),
-                io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", tooltip="The bitrate to use for the audio codec (ignored if flac)."),
             ],
             outputs=[io.Video.Output("video")],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
@@ -40,7 +97,57 @@ class SaveVideo(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, video: Input.Video, filename_prefix: str, format: str, codec: str, crf: float, loop_count: int, pingpong: bool, audio_codec: str, audio_bitrate: str) -> io.NodeOutput:
+    def execute(
+        cls,
+        video: Input.Video,
+        filename_prefix: str,
+        format: dict | str = "mp4",
+        crf: float = 23.0,
+        loop_count: int = 0,
+        pingpong: bool = False,
+        codec: dict | str = "h264",
+        audio_codec: dict | str = "aac",
+        audio_bitrate: str = "128k",
+    ) -> io.NodeOutput:
+        format_str = "mp4"
+        codec_str = "h264"
+        audio_codec_str = "aac"
+
+        if isinstance(format, dict):
+            format_str = format.get("format", "mp4")
+            codec_obj = format.get("codec")
+            if isinstance(codec_obj, dict):
+                codec_str = codec_obj.get("codec", "h264")
+                crf = codec_obj.get("crf", crf)
+            elif isinstance(codec_obj, str):
+                codec_str = codec_obj
+
+            ac_obj = format.get("audio_codec")
+            if isinstance(ac_obj, dict):
+                audio_codec_str = ac_obj.get("audio_codec", "aac")
+                audio_bitrate = ac_obj.get("audio_bitrate", audio_bitrate)
+            elif isinstance(ac_obj, str):
+                audio_codec_str = ac_obj
+        elif isinstance(format, str):
+            format_str = format
+
+        if isinstance(codec, dict):
+            codec_str = codec.get("codec", codec_str)
+            crf = codec.get("crf", crf)
+        elif isinstance(codec, str):
+            codec_str = codec
+
+        if isinstance(audio_codec, dict):
+            audio_codec_str = audio_codec.get("audio_codec", audio_codec_str)
+            audio_bitrate = audio_codec.get("audio_bitrate", audio_bitrate)
+        elif isinstance(audio_codec, str):
+            audio_codec_str = audio_codec
+
+        # Align variables for rest of execute method
+        format = format_str
+        codec = codec_str
+        audio_codec = audio_codec_str
+
         from ..utils.text import apply_text_replacements
         filename_prefix = apply_text_replacements(filename_prefix, cls.hidden.prompt, cls.hidden.extra_pnginfo)
 

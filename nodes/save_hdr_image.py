@@ -30,8 +30,14 @@ class SaveHDRImage(io.ComfyNode):
                 io.Image.Input("images", tooltip="The images to save."),
                 io.String.Input("filename_prefix", default="image/ComfyUI", tooltip="The prefix for the file to save."),
                 io.Combo.Input("format", options=["avif"], default="avif", tooltip="The image format to save."),
-                io.Combo.Input("codec", options=["av1", "av1_nvenc"], default="av1", tooltip="The codec to use for AVIF encoding."),
-                io.Float.Input("crf", default=10.0, min=0.0, max=63.0, step=1.0, tooltip="Specific CRF value used for encoding (maps to CQ for NVENC). Set to 0 to use encoder defaults."),
+                io.DynamicCombo.Input(
+                    "codec",
+                    options=[
+                        io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=2.0, min=0.0, max=63.0, step=1.0, tooltip="CRF for AVIF AV1 (lower = higher quality, default 2).")]),
+                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=2.0, min=0.0, max=63.0, step=1.0, tooltip="CQ for AVIF NVENC AV1.")]),
+                    ],
+                    tooltip="The codec to use for AVIF encoding.",
+                ),
                 io.Float.Input("peak_nits", default=400.0, min=100.0, max=10000.0, step=1.0, tooltip="Peak brightness in nits. SDR white (100 nits) will be mapped to this target luminance in HDR."),
                 io.Float.Input("itm_knee", default=0.0, min=0.0, max=1.0, step=0.01, tooltip="Inverse Tone Mapping (Soft-Knee) threshold. 0.0 starts expansion from black. 0.8 preserves SDR midtones and applies expansion to highlights."),
                 io.Float.Input("itm_exponent", default=1.0, min=1.0, max=10.0, step=0.01, tooltip="Expansion curve exponent. 1.0 = Linear (punchy/bright), 2.0 = Quadratic (soft/natural), >2.0 = even softer transition."),
@@ -42,7 +48,16 @@ class SaveHDRImage(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, images: Input.Image, filename_prefix: str, format: str, codec: str, crf: float, peak_nits: float, itm_knee: float, itm_exponent: float) -> io.NodeOutput:
+    def execute(cls, images: Input.Image, filename_prefix: str, format: str, codec: dict | str = "av1", crf: float = 2.0, peak_nits: float = 400.0, itm_knee: float = 0.0, itm_exponent: float = 1.0) -> io.NodeOutput:
+        codec_str = "av1"
+        if isinstance(codec, dict):
+            codec_str = codec.get("codec", "av1")
+            crf = codec.get("crf", crf)
+        elif isinstance(codec, str):
+            codec_str = codec
+
+        codec = codec_str
+
         from ..utils.text import apply_text_replacements
         filename_prefix = apply_text_replacements(filename_prefix, cls.hidden.prompt, cls.hidden.extra_pnginfo)
 

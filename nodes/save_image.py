@@ -26,9 +26,25 @@ class SaveImage(io.ComfyNode):
                     default="image/ComfyUI",
                     tooltip="The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes.",
                 ),
-                io.Combo.Input("format", options=["png", "webp"], default="webp", tooltip="The image format to save as."),
-                io.Boolean.Input("lossless", default=False, tooltip="For WebP, enables lossless encoding. For PNG, this is ignored (always lossless)."),
-                io.Int.Input("quality", default=90, min=0, max=100, tooltip="For WebP, this is 0-100 quality. For PNG, this is compression level 0-9 (default 6)."),
+                io.DynamicCombo.Input(
+                    "format",
+                    options=[
+                        io.DynamicCombo.Option(
+                            "png",
+                            [
+                                io.Int.Input("compression", default=6, min=0, max=9, tooltip="PNG compression level (0-9)."),
+                            ]
+                        ),
+                        io.DynamicCombo.Option(
+                            "webp",
+                            [
+                                io.Boolean.Input("lossless", default=False, tooltip="Enables WebP lossless encoding."),
+                                io.Int.Input("quality", default=90, min=0, max=100, tooltip="WebP quality (0-100)."),
+                            ]
+                        ),
+                    ],
+                    tooltip="The image format to save as.",
+                ),
             ],
             outputs=[io.Image.Output("images")],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
@@ -36,7 +52,16 @@ class SaveImage(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, images: Input.Image, filename_prefix: str, format: str, lossless: bool, quality: int) -> io.NodeOutput:
+    def execute(cls, images: Input.Image, filename_prefix: str, format: dict | str = "webp", lossless: bool = False, quality: int = 90, compression: int = 6) -> io.NodeOutput:
+        format_str = "webp"
+        if isinstance(format, dict):
+            format_str = format.get("format", "webp")
+            lossless = format.get("lossless", lossless)
+            quality = format.get("quality", quality)
+            compression = format.get("compression", compression)
+        elif isinstance(format, str):
+            format_str = format
+
         from ..utils.text import apply_text_replacements
         filename_prefix = apply_text_replacements(filename_prefix, cls.hidden.prompt, cls.hidden.extra_pnginfo)
 
@@ -60,7 +85,7 @@ class SaveImage(io.ComfyNode):
 
             filename_with_batch_num = filename.replace("%batch_num%", str(batch_number))
 
-            if format == "webp":
+            if format_str == "webp":
                 file = f"{filename_with_batch_num}_{counter:05}_.webp"
                 file_path = os.path.join(full_output_folder, file)
 
@@ -76,8 +101,7 @@ class SaveImage(io.ComfyNode):
                 file = f"{filename_with_batch_num}_{counter:05}_.png"
                 file_path = os.path.join(full_output_folder, file)
 
-                # For PNG, quality input (0-9 via JS) is used as compress_level directly
-                compress_level = max(0, min(9, quality))
+                compress_level = max(0, min(9, compression))
 
                 metadata = ImageSaveHelper._create_png_metadata(cls)
                 img.save(

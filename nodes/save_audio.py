@@ -49,8 +49,25 @@ class SaveAudio(io.ComfyNode):
             inputs=[
                 io.Audio.Input("audio", tooltip="The audio to save."),
                 io.String.Input("filename_prefix", default="audio/ComfyUI", tooltip="The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."),
-                io.Combo.Input("audio_codec", options=list(AUDIO_CODEC_CONFIG.keys()), default="mp3", tooltip="The codec to use for the audio. Recommended: mp3 (for workflow support)."),
-                io.Combo.Input("audio_bitrate", options=["V0", "64k", "128k", "192k", "256k", "320k"], default="192k", tooltip="The bitrate to use for the audio codec."),
+                io.DynamicCombo.Input(
+                    "audio_codec",
+                    options=[
+                        io.DynamicCombo.Option(
+                            "mp3",
+                            [
+                                io.Combo.Input("audio_bitrate", options=["V0", "64k", "128k", "192k", "256k", "320k"], default="V0", tooltip="The bitrate to use for MP3."),
+                            ]
+                        ),
+                        io.DynamicCombo.Option(
+                            "opus",
+                            [
+                                io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", tooltip="The bitrate to use for Opus."),
+                            ]
+                        ),
+                        io.DynamicCombo.Option("flac", []),
+                    ],
+                    tooltip="The codec to use for the audio. Recommended: mp3 (for workflow support).",
+                ),
             ],
             outputs=[io.Audio.Output("audio")],
             hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
@@ -58,11 +75,18 @@ class SaveAudio(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, audio: Input.Audio, filename_prefix: str, audio_codec: str, audio_bitrate: str) -> io.NodeOutput:
+    def execute(cls, audio: Input.Audio, filename_prefix: str, audio_codec: dict | str = "mp3", audio_bitrate: str = "128k") -> io.NodeOutput:
+        audio_codec_str = "mp3"
+        if isinstance(audio_codec, dict):
+            audio_codec_str = audio_codec.get("audio_codec", "mp3")
+            audio_bitrate = audio_codec.get("audio_bitrate", audio_bitrate)
+        elif isinstance(audio_codec, str):
+            audio_codec_str = audio_codec
+
         from ..utils.text import apply_text_replacements
         filename_prefix = apply_text_replacements(filename_prefix, cls.hidden.prompt, cls.hidden.extra_pnginfo)
 
-        config = AUDIO_CODEC_CONFIG.get(audio_codec, AUDIO_CODEC_CONFIG["mp3"])
+        config = AUDIO_CODEC_CONFIG.get(audio_codec_str, AUDIO_CODEC_CONFIG["mp3"])
         format_ext = config["ext"]
 
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
