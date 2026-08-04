@@ -75,11 +75,12 @@ class SaveAudio(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, audio: Input.Audio, filename_prefix: str, audio_codec: dict | str = "mp3", audio_bitrate: str = "128k") -> io.NodeOutput:
+    def execute(cls, audio: Input.Audio, filename_prefix: str, audio_codec: dict | str = "mp3") -> io.NodeOutput:
         audio_codec_str = "mp3"
+        audio_bitrate = None
         if isinstance(audio_codec, dict):
             audio_codec_str = audio_codec.get("audio_codec", "mp3")
-            audio_bitrate = audio_codec.get("audio_bitrate", audio_bitrate)
+            audio_bitrate = audio_codec.get("audio_bitrate")
         elif isinstance(audio_codec, str):
             audio_codec_str = audio_codec
 
@@ -133,14 +134,14 @@ class SaveAudio(io.ComfyNode):
                 try:
                     audio_stream = output.add_stream(av_audio_codec, rate=output_sample_rate, layout=layout)
 
-                    if config["supports_bitrate"]:
+                    if config["supports_bitrate"] and audio_bitrate is not None:
                         target_bitrate = audio_bitrate
                         if target_bitrate not in config["supported_bitrates"]:
                             target_bitrate = config["default_bitrate"]
                             
                         if target_bitrate == "V0":
                             audio_stream.codec_context.qscale = 1
-                        else:
+                        elif target_bitrate is not None:
                             audio_stream.bit_rate = int(target_bitrate.replace("k", "000"))
                 except Exception as e:
                     print(f"[XENodes] Warning: Failed to add audio stream: {e}")

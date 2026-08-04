@@ -116,8 +116,8 @@ class SaveHDRVideo(io.ComfyNode):
         pingpong: bool = False,
         codec: dict | str = "av1",
         audio_codec: dict | str = "aac",
-        audio_bitrate: str = "128k",
     ) -> io.NodeOutput:
+        audio_bitrate = None
         format_str = "mp4"
         codec_str = "av1"
         audio_codec_str = "aac"
@@ -134,7 +134,7 @@ class SaveHDRVideo(io.ComfyNode):
             ac_obj = format.get("audio_codec")
             if isinstance(ac_obj, dict):
                 audio_codec_str = ac_obj.get("audio_codec", "aac")
-                audio_bitrate = ac_obj.get("audio_bitrate", audio_bitrate)
+                audio_bitrate = ac_obj.get("audio_bitrate")
             elif isinstance(ac_obj, str):
                 audio_codec_str = ac_obj
         elif isinstance(format, str):
@@ -148,7 +148,7 @@ class SaveHDRVideo(io.ComfyNode):
 
         if isinstance(audio_codec, dict):
             audio_codec_str = audio_codec.get("audio_codec", audio_codec_str)
-            audio_bitrate = audio_codec.get("audio_bitrate", audio_bitrate)
+            audio_bitrate = audio_codec.get("audio_bitrate")
         elif isinstance(audio_codec, str):
             audio_codec_str = audio_codec
 
@@ -287,7 +287,7 @@ class SaveHDRVideo(io.ComfyNode):
             cmd += ["-c:a", acodec]
             if audio_codec == "opus":
                 cmd += ["-ar", "48000"] # Opus requires 48kHz
-            if audio_codec != "flac":
+            if audio_codec != "flac" and audio_bitrate is not None:
                 cmd += ["-b:a", audio_bitrate]
 
         # Map workflow metadata if it exists

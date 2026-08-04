@@ -107,8 +107,8 @@ class SaveVideo(io.ComfyNode):
         pingpong: bool = False,
         codec: dict | str = "h264",
         audio_codec: dict | str = "aac",
-        audio_bitrate: str = "128k",
     ) -> io.NodeOutput:
+        audio_bitrate = None
         format_str = "mp4"
         codec_str = "h264"
         audio_codec_str = "aac"
@@ -125,7 +125,7 @@ class SaveVideo(io.ComfyNode):
             ac_obj = format.get("audio_codec")
             if isinstance(ac_obj, dict):
                 audio_codec_str = ac_obj.get("audio_codec", "aac")
-                audio_bitrate = ac_obj.get("audio_bitrate", audio_bitrate)
+                audio_bitrate = ac_obj.get("audio_bitrate")
             elif isinstance(ac_obj, str):
                 audio_codec_str = ac_obj
         elif isinstance(format, str):
@@ -139,7 +139,7 @@ class SaveVideo(io.ComfyNode):
 
         if isinstance(audio_codec, dict):
             audio_codec_str = audio_codec.get("audio_codec", audio_codec_str)
-            audio_bitrate = audio_codec.get("audio_bitrate", audio_bitrate)
+            audio_bitrate = audio_codec.get("audio_bitrate")
         elif isinstance(audio_codec, str):
             audio_codec_str = audio_codec
 
@@ -244,7 +244,7 @@ class SaveVideo(io.ComfyNode):
                     av_audio_codec = audio_codec_map.get(audio_codec, "aac")
                     audio_stream = output.add_stream(av_audio_codec, rate=output_sample_rate, layout=layout)
                     
-                    if audio_codec != "flac":
+                    if audio_codec != "flac" and audio_bitrate is not None:
                         audio_stream.bit_rate = int(audio_bitrate.replace("k", "000"))
                 except Exception as e:
                     print(f"[XENodes] Warning: Failed to add audio stream: {e}")
