@@ -32,14 +32,14 @@ class SaveImage(io.ComfyNode):
                         io.DynamicCombo.Option(
                             "png",
                             [
-                                io.Int.Input("compression", default=6, min=0, max=9, tooltip="PNG compression level (0-9)."),
+                                io.Int.Input("compression", default=6, min=0, max=9, optional=True, tooltip="PNG compression level (0-9)."),
                             ]
                         ),
                         io.DynamicCombo.Option(
                             "webp",
                             [
-                                io.Boolean.Input("lossless", default=False, tooltip="Enables WebP lossless encoding."),
-                                io.Int.Input("quality", default=90, min=0, max=100, tooltip="WebP quality (0-100)."),
+                                io.Boolean.Input("lossless", default=False, optional=True, tooltip="Enables WebP lossless encoding."),
+                                io.Int.Input("quality", default=90, min=0, max=100, optional=True, tooltip="WebP quality (0-100)."),
                             ]
                         ),
                     ],
@@ -52,10 +52,13 @@ class SaveImage(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, images: Input.Image, filename_prefix: str, format: dict | str = "webp", lossless: bool = False, quality: int = 90, compression: int = 6) -> io.NodeOutput:
-        format_str = "webp"
+    def execute(cls, images: Input.Image, filename_prefix: str, format: dict | str = "png") -> io.NodeOutput:
+        format_str = "png"
+        lossless = False
+        quality = 90
+        compression = 6
         if isinstance(format, dict):
-            format_str = format.get("format", "webp")
+            format_str = format.get("format", "png")
             lossless = format.get("lossless", lossless)
             quality = format.get("quality", quality)
             compression = format.get("compression", compression)

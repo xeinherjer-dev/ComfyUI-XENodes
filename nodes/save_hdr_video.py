@@ -40,8 +40,8 @@ class SaveHDRVideo(io.ComfyNode):
                                 io.DynamicCombo.Input(
                                     "codec",
                                     options=[
-                                        io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=30.0, min=0.0, max=63.0, step=1.0, tooltip="CRF for HDR AV1 (lower = higher quality, default 30).")]),
-                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=30.0, min=0.0, max=51.0, step=1.0, tooltip="CQ for HDR NVENC AV1 (0-51, default 30).")]),
+                                        io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=30.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CRF for HDR AV1 (lower = higher quality, default 30).")]),
+                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=30.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for HDR NVENC AV1 (0-51, default 30).")]),
                                     ],
                                     tooltip="The video codec.",
                                 ),
@@ -50,11 +50,11 @@ class SaveHDRVideo(io.ComfyNode):
                                     options=[
                                         io.DynamicCombo.Option(
                                             "aac",
-                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", tooltip="Bitrate for AAC audio.")],
+                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", optional=True, tooltip="Bitrate for AAC audio.")],
                                         ),
                                         io.DynamicCombo.Option(
                                             "opus",
-                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", tooltip="Bitrate for Opus audio.")],
+                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", optional=True, tooltip="Bitrate for Opus audio.")],
                                         ),
                                         io.DynamicCombo.Option("flac", []),
                                     ],
@@ -68,8 +68,8 @@ class SaveHDRVideo(io.ComfyNode):
                                 io.DynamicCombo.Input(
                                     "codec",
                                     options=[
-                                        io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=30.0, min=0.0, max=63.0, step=1.0, tooltip="CRF for HDR AV1 (lower = higher quality, default 30).")]),
-                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=30.0, min=0.0, max=51.0, step=1.0, tooltip="CQ for HDR NVENC AV1 (0-51, default 30).")]),
+                                        io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=30.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CRF for HDR AV1 (lower = higher quality, default 30).")]),
+                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=30.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for HDR NVENC AV1 (0-51, default 30).")]),
                                     ],
                                     tooltip="The video codec.",
                                 ),
@@ -78,7 +78,7 @@ class SaveHDRVideo(io.ComfyNode):
                                     options=[
                                         io.DynamicCombo.Option(
                                             "opus",
-                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", tooltip="Bitrate for Opus audio.")],
+                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", optional=True, tooltip="Bitrate for Opus audio.")],
                                         ),
                                         io.DynamicCombo.Option("flac", []),
                                     ],

@@ -55,13 +55,13 @@ class SaveAudio(io.ComfyNode):
                         io.DynamicCombo.Option(
                             "mp3",
                             [
-                                io.Combo.Input("audio_bitrate", options=["V0", "64k", "128k", "192k", "256k", "320k"], default="V0", tooltip="The bitrate to use for MP3."),
+                                io.Combo.Input("audio_bitrate", options=["V0", "64k", "128k", "192k", "256k", "320k"], default="V0", optional=True, tooltip="The bitrate to use for MP3."),
                             ]
                         ),
                         io.DynamicCombo.Option(
                             "opus",
                             [
-                                io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", tooltip="The bitrate to use for Opus."),
+                                io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", optional=True, tooltip="The bitrate to use for Opus."),
                             ]
                         ),
                         io.DynamicCombo.Option("flac", []),

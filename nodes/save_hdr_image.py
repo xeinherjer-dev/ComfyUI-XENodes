@@ -33,8 +33,8 @@ class SaveHDRImage(io.ComfyNode):
                 io.DynamicCombo.Input(
                     "codec",
                     options=[
-                        io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=2.0, min=0.0, max=63.0, step=1.0, tooltip="CRF for AVIF AV1 (lower = higher quality, default 2).")]),
-                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=2.0, min=0.0, max=63.0, step=1.0, tooltip="CQ for AVIF NVENC AV1.")]),
+                        io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=2.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CRF for AVIF AV1 (lower = higher quality, default 2).")]),
+                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=2.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CQ for AVIF NVENC AV1.")]),
                     ],
                     tooltip="The codec to use for AVIF encoding.",
                 ),
