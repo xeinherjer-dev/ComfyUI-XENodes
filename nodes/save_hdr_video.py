@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import os
-import math
+import shutil
 import subprocess
-import json
 import tempfile
+import json
 from fractions import Fraction
 from typing_extensions import override
 
@@ -18,6 +18,80 @@ from ..utils.audio import expand_audio_waveform
 from ..utils.video import generate_frame_indices
 from ..utils.color import apply_inverse_tone_mapping
 from ..utils.metadata import get_saved_metadata
+
+_MAX_RAW_FRAME_CHUNK_BYTES = 64 * 1024 * 1024
+
+def find_ffmpeg() -> str | None:
+    path_ffmpeg = shutil.which("ffmpeg")
+    if path_ffmpeg:
+        return path_ffmpeg
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        return None
+
+def _create_ffmetadata_file(saved_metadata: dict | None) -> str | None:
+    if not saved_metadata:
+        return None
+    handle = tempfile.NamedTemporaryFile(mode="w", suffix=".ffmeta", delete=False, encoding="utf-8")
+    try:
+        handle.write(";FFMETADATA1\n")
+        for key, value in saved_metadata.items():
+            if isinstance(value, str):
+                val_str = value
+            else:
+                val_str = json.dumps(value)
+            escaped = (
+                val_str.replace("\\", "\\\\")
+                .replace(";", "\\;")
+                .replace("#", "\\#")
+                .replace("=", "\\=")
+                .replace("\n", "\\\n")
+            )
+            handle.write(f"{key}={escaped}\n")
+    finally:
+        handle.close()
+    return handle.name
+
+def _prepare_audio_file(waveform: torch.Tensor | None, sample_rate: int) -> tuple[str | None, int, int]:
+    if waveform is None:
+        return None, sample_rate, 2
+    
+    channels = waveform.shape[0]
+    interleaved = waveform.t().contiguous().clamp(-1.0, 1.0).cpu().numpy().astype("float32")
+    
+    handle = tempfile.NamedTemporaryFile(suffix=".f32le", delete=False)
+    try:
+        handle.write(interleaved.tobytes())
+    finally:
+        handle.close()
+    return handle.name, sample_rate, channels
+
+def _iter_hdr_frame_byte_chunks(
+    images: torch.Tensor,
+    frame_indices: list[int],
+    total_plays: int,
+    peak_nits: float,
+    itm_knee: float,
+    itm_exponent: float,
+    max_chunk_bytes: int = _MAX_RAW_FRAME_CHUNK_BYTES,
+):
+    bytes_per_frame = images.shape[1] * images.shape[2] * 3 * 4  # float32
+    frames_per_chunk = max(1, min(16, max_chunk_bytes // bytes_per_frame))
+    
+    full_indices = []
+    for _ in range(total_plays):
+        full_indices.extend(frame_indices)
+        
+    for start in range(0, len(full_indices), frames_per_chunk):
+        chunk_indices = full_indices[start : start + frames_per_chunk]
+        chunk_tensors = images[chunk_indices]  # (K, H, W, 3)
+        
+        linear_hdr, _, _ = apply_inverse_tone_mapping(chunk_tensors, peak_nits, itm_knee, itm_exponent)
+        gbr_planar = linear_hdr[..., [1, 2, 0]].permute(0, 3, 1, 2).contiguous()
+        chunk_bytes = gbr_planar.cpu().numpy().astype(np.float32).tobytes()
+        yield chunk_bytes
 
 class SaveHDRVideo(io.ComfyNode):
     @classmethod
@@ -108,26 +182,25 @@ class SaveHDRVideo(io.ComfyNode):
         video: Input.Video,
         filename_prefix: str,
         format: dict | str = "mp4",
-        crf: float = 30.0,
         peak_nits: float = 400.0,
         itm_knee: float = 0.0,
         itm_exponent: float = 1.0,
         loop_count: int = 0,
         pingpong: bool = False,
-        codec: dict | str = "av1",
-        audio_codec: dict | str = "aac",
+        **kwargs,
     ) -> io.NodeOutput:
-        audio_bitrate = None
         format_str = "mp4"
         codec_str = "av1"
         audio_codec_str = "aac"
+        crf = None
+        audio_bitrate = None
 
         if isinstance(format, dict):
             format_str = format.get("format", "mp4")
             codec_obj = format.get("codec")
             if isinstance(codec_obj, dict):
                 codec_str = codec_obj.get("codec", "av1")
-                crf = codec_obj.get("crf", crf)
+                crf = codec_obj.get("crf")
             elif isinstance(codec_obj, str):
                 codec_str = codec_obj
 
@@ -139,20 +212,28 @@ class SaveHDRVideo(io.ComfyNode):
                 audio_codec_str = ac_obj
         elif isinstance(format, str):
             format_str = format
+            if "codec" in kwargs:
+                codec_val = kwargs["codec"]
+                if isinstance(codec_val, dict):
+                    codec_str = codec_val.get("codec", "av1")
+                    crf = codec_val.get("crf")
+                elif isinstance(codec_val, str):
+                    codec_str = codec_val
+            if "crf" in kwargs and crf is None:
+                try:
+                    crf = float(kwargs["crf"])
+                except (ValueError, TypeError):
+                    pass
+            if "audio_codec" in kwargs:
+                ac_val = kwargs["audio_codec"]
+                if isinstance(ac_val, dict):
+                    audio_codec_str = ac_val.get("audio_codec", "aac")
+                    audio_bitrate = ac_val.get("audio_bitrate")
+                elif isinstance(ac_val, str):
+                    audio_codec_str = ac_val
+            if "audio_bitrate" in kwargs and audio_bitrate is None:
+                audio_bitrate = kwargs["audio_bitrate"]
 
-        if isinstance(codec, dict):
-            codec_str = codec.get("codec", codec_str)
-            crf = codec.get("crf", crf)
-        elif isinstance(codec, str):
-            codec_str = codec
-
-        if isinstance(audio_codec, dict):
-            audio_codec_str = audio_codec.get("audio_codec", audio_codec_str)
-            audio_bitrate = audio_codec.get("audio_bitrate")
-        elif isinstance(audio_codec, str):
-            audio_codec_str = audio_codec
-
-        # Align variables for rest of execute method
         format = format_str
         codec = codec_str
         audio_codec = audio_codec_str
@@ -177,180 +258,141 @@ class SaveHDRVideo(io.ComfyNode):
         frame_rate = Fraction(round(components.frame_rate * 1000), 1000)
         fps = float(frame_rate)
 
-        # === Frame sequence generation ===
         images = components.images  # shape: (N, H, W, 3)
         num_images = images.shape[0]
 
-        if pingpong and num_images > 2:
-            frame_indices = list(range(num_images)) + list(range(num_images - 2, 0, -1))
-        else:
-            frame_indices = list(range(num_images))
-            
+        frame_indices = generate_frame_indices(num_images, pingpong)
         n_orig = len(frame_indices)
         total_plays = loop_count + 1
 
-        # === Audio transformation ===
-        waveform, audio_sample_rate, _ = expand_audio_waveform(components, fps, n_orig, total_plays)
-        if waveform is None:
-            audio_sample_rate = 44100
-
-        temp_audio_path = None
+        waveform, audio_sample_rate, layout = expand_audio_waveform(components, fps, n_orig, total_plays)
+        output_sample_rate = audio_sample_rate
         if waveform is not None:
-            fd, temp_audio_path = tempfile.mkstemp(suffix=".wav")
-            os.close(fd)
-            try:
-                import scipy.io.wavfile
-                # waveform: [channels, samples] -> [samples, channels]
-                audio_data = waveform.t().cpu().numpy()
-                scipy.io.wavfile.write(temp_audio_path, audio_sample_rate, audio_data)
-            except Exception as e:
-                print(f"[XENodes] Warning: Failed to save temp audio: {e}")
-                if os.path.exists(temp_audio_path):
-                    os.remove(temp_audio_path)
-                temp_audio_path = None
-
-        # Build ffmpeg command with 32-bit float input for maximum precision during SDR->HDR conversion
-        cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "gbrpf32le", "-s", f"{width}x{height}", "-r", f"{fps:.06f}", "-i", "-"]
-        input_count = 1
-        
-        if temp_audio_path:
-            cmd += ["-i", temp_audio_path]
-            input_count += 1
-
-        # Add workflow metadata using a temp file to avoid Windows command line length limits (WinError 206)
-        temp_meta_path = None
-        if saved_metadata:
-            try:
-                fd, temp_meta_path = tempfile.mkstemp(suffix=".txt")
-                with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                    f.write(";FFMETADATA1\n")
-                    for key, value in saved_metadata.items():
-                        # ComfyUI frontend often looks for 'Workflow' and 'Prompt' (case-insensitive or specific)
-                        # We write them as separate entries in the FFMETADATA format.
-                        tag_name = key.capitalize() if key in ["workflow", "prompt"] else key
-                        json_str = json.dumps(value)
-                        # Escape special characters for FFMETADATA format
-                        safe_json = json_str.replace('\\', '\\\\').replace('=', '\\=').replace(';', '\\;').replace('\n', ' ')
-                        f.write(f"{tag_name}={safe_json}\n")
-                
-                # Insert metadata file as an additional input
-                cmd += ["-i", temp_meta_path]
-                metadata_input_index = input_count
-                input_count += 1
-            except Exception as e:
-                print(f"[XENodes] Warning: Failed to prepare metadata file: {e}")
-                if temp_meta_path and os.path.exists(temp_meta_path):
-                    os.remove(temp_meta_path)
-                temp_meta_path = None
+            if audio_codec == "opus":
+                output_sample_rate = 48000
         else:
-            metadata_input_index = -1
+            output_sample_rate = 44100
 
-        # Codec setup
+        ffmpeg_exe = find_ffmpeg()
+        if not ffmpeg_exe:
+            raise RuntimeError("FFmpeg executable not found. Please install ffmpeg or imageio-ffmpeg.")
+
+        if crf is None:
+            crf = 30.0
+
         codec_config = {
-            "av1": {"codec": "libsvtav1", "options": {"preset": "6"}},
-            "av1_nvenc": {"codec": "av1_nvenc", "options": {"preset": "p7"}}
+            "av1": {"codec": "libsvtav1", "options": ["-preset", "6"]},
+            "av1_nvenc": {"codec": "av1_nvenc", "options": ["-preset", "p7"]}
         }
         config = codec_config.get(codec, codec_config["av1"])
         av_codec = config["codec"]
-        cmd += ["-c:v", av_codec]
+        base_options = config["options"]
 
-        for key, value in config.get("options", {}).items():
-            cmd += [f"-{key}", str(value)]
+        metadata_file = _create_ffmetadata_file(saved_metadata)
+        audio_file, audio_sr, audio_ch = _prepare_audio_file(waveform, output_sample_rate)
 
-        # HDR/10-bit setup
-        cmd += ["-pix_fmt", "yuv420p10le"]
+        cmd = [ffmpeg_exe, "-y", "-v", "error"]
+
+        cmd.extend([
+            "-f", "rawvideo",
+            "-pix_fmt", "gbrpf32le",
+            "-s", f"{width}x{height}",
+            "-r", f"{fps:.06f}",
+            "-i", "-",
+        ])
+
+        input_idx = 1
+        video_map = "0:v:0"
+        audio_map = None
+        meta_map = None
+
+        if audio_file is not None:
+            cmd.extend([
+                "-f", "f32le",
+                "-ar", str(audio_sr),
+                "-ac", str(audio_ch),
+                "-i", audio_file,
+            ])
+            audio_map = f"{input_idx}:a:0"
+            input_idx += 1
+
+        if metadata_file is not None:
+            cmd.extend([
+                "-f", "ffmetadata",
+                "-i", metadata_file,
+            ])
+            meta_map = f"{input_idx}"
+            input_idx += 1
+
+        cmd.extend(["-map", video_map])
+        if audio_map:
+            cmd.extend(["-map", audio_map])
+        if meta_map:
+            cmd.extend(["-map_metadata", meta_map])
+
+        cmd.extend(["-c:v", av_codec, "-pix_fmt", "yuv420p10le"])
+        cmd.extend(base_options)
+
+        if "nvenc" in av_codec:
+            cmd.extend(["-rc", "vbr", "-cq", str(int(crf)), "-b:v", "0"])
+        else:
+            cmd.extend(["-crf", str(int(crf))])
 
         if format == "mp4":
-            cmd += ["-movflags", "use_metadata_tags+faststart"]
+            cmd.extend(["-movflags", "+use_metadata_tags+faststart"])
 
         trc = "smpte2084"
-        cmd += ["-color_primaries", "bt2020", "-color_trc", trc, "-colorspace", "bt2020nc"]
-        
-        # Proper SDR to HDR conversion using zscale.
-        # Since input is already linear float32 (where 1.0 = 100 nits), we just convert to PQ or HLG
+        cmd.extend(["-color_primaries", "bt2020", "-color_trc", trc, "-colorspace", "bt2020nc"])
+
         zscale_trc = "smpte2084"
         zscale_params = f"p=bt2020:t={zscale_trc}:m=bt2020nc:npl=100:dither=error_diffusion"
-            
-        cmd += ["-vf", f"setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709,zscale={zscale_params}"]
+        cmd.extend(["-vf", f"setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709,zscale={zscale_params}"])
 
-        if "av1" in av_codec or "svtav1" in av_codec:
-            if "nvenc" in av_codec and crf > 0:
-                cmd += ["-rc", "vbr", "-cq", str(int(crf)), "-b:v", "0"]
-            elif crf > 0:
-                cmd += ["-crf", str(int(crf))]
+        if audio_map:
+            audio_codec_map = {
+                "aac": "aac",
+                "opus": "libopus",
+                "flac": "flac"
+            }
+            av_audio_codec = audio_codec_map.get(audio_codec, "aac")
+            cmd.extend(["-c:a", av_audio_codec])
+            if av_audio_codec == "libopus":
+                cmd.extend(["-ar", "48000"])
+            if audio_bitrate is not None and av_audio_codec != "flac":
+                cmd.extend(["-b:a", audio_bitrate])
 
-        # Audio setup
-        if temp_audio_path:
-            acodec = audio_codec
-            if acodec == "opus":
-                acodec = "libopus"
-            cmd += ["-c:a", acodec]
-            if audio_codec == "opus":
-                cmd += ["-ar", "48000"] # Opus requires 48kHz
-            if audio_codec != "flac" and audio_bitrate is not None:
-                cmd += ["-b:a", audio_bitrate]
+        cmd.append(file_path)
 
-        # Map workflow metadata if it exists
-        if metadata_input_index >= 0:
-            cmd += ["-map_metadata", str(metadata_input_index)]
+        print(f"[XENodes] SaveHDRVideo (FFmpeg): running command: {' '.join(cmd)}")
 
-        cmd += [file_path]
-
-        # Run ffmpeg
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
 
         try:
-            for _ in range(total_plays):
-                for idx in frame_indices:
-                    frame_tensor = images[idx]
-                    
-                    linear_hdr, _, _ = apply_inverse_tone_mapping(frame_tensor, peak_nits, itm_knee, itm_exponent)
-
-                    # Convert to GBR planar format (gbrpf32le)
-                    gbr_planar = linear_hdr[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
-                    img_bytes = gbr_planar.cpu().numpy().astype(np.float32).tobytes()
-                    
-                    proc.stdin.write(img_bytes)
-            
-            # Close stdin and check for any immediate errors
-            proc.stdin.close()
-            return_code = proc.wait()
-            if return_code != 0:
-                stderr_output = proc.stderr.read().decode('utf-8')
-                print(f"[XENodes] FFmpeg failed with return code {return_code}")
-                if stderr_output:
-                    print(f"[XENodes] FFmpeg error output:\n{stderr_output}")
-
+            for chunk in _iter_hdr_frame_byte_chunks(
+                images, frame_indices, total_plays, peak_nits, itm_knee, itm_exponent
+            ):
+                process.stdin.write(chunk)
+            process.stdin.close()
+            retcode = process.wait()
         except Exception as e:
-            # Capture stderr if available when a pipe error or other exception occurs
-            stderr_output = ""
-            try:
-                if proc.stderr:
-                    stderr_output = proc.stderr.read().decode('utf-8')
-            except:
-                pass
-            
-            print(f"[XENodes] Error encoding HDR video: {e}")
-            if stderr_output:
-                print(f"[XENodes] FFmpeg error output:\n{stderr_output}")
+            process.kill()
+            process.wait()
+            raise e
         finally:
-            if proc.stdin and not proc.stdin.closed:
-                proc.stdin.close()
-            proc.wait()
+            if metadata_file and os.path.exists(metadata_file):
+                os.unlink(metadata_file)
+            if audio_file and os.path.exists(audio_file):
+                os.unlink(audio_file)
 
-        if temp_audio_path and os.path.exists(temp_audio_path):
-            try:
-                os.remove(temp_audio_path)
-            except:
-                pass
-        
-        if temp_meta_path and os.path.exists(temp_meta_path):
-            try:
-                os.remove(temp_meta_path)
-            except:
-                pass
+        if retcode != 0:
+            stderr_out = process.stderr.read().decode(errors="replace")
+            raise RuntimeError(f"FFmpeg HDR encoding failed (exit code {retcode}): {stderr_out}")
 
-        # Return the input video and UI (preview)
         return io.NodeOutput(video, ui=ui.PreviewVideo([ui.SavedResult(file_name, subfolder, io.FolderType.output)]))
 
 class SaveHDRVideoExtension(ComfyExtension):
