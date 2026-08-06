@@ -52,18 +52,43 @@ class SaveImage(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, images: Input.Image, filename_prefix: str, format: dict | str = "png") -> io.NodeOutput:
+    def execute(cls, images: Input.Image, filename_prefix: str, format: dict | str = "png", **kwargs) -> io.NodeOutput:
         format_str = "png"
         lossless = False
         quality = 90
         compression = 6
+
         if isinstance(format, dict):
-            format_str = format.get("format", "png")
-            lossless = format.get("lossless", lossless)
-            quality = format.get("quality", quality)
-            compression = format.get("compression", compression)
+            format_str = format.get("format", "png") or "png"
+            q_val = format.get("quality")
+            if q_val is not None:
+                try:
+                    quality = int(q_val)
+                except (ValueError, TypeError):
+                    pass
+            c_val = format.get("compression")
+            if c_val is not None:
+                try:
+                    compression = int(c_val)
+                except (ValueError, TypeError):
+                    pass
+            l_val = format.get("lossless")
+            if l_val is not None:
+                lossless = bool(l_val)
         elif isinstance(format, str):
             format_str = format
+            if "quality" in kwargs and kwargs["quality"] is not None:
+                try:
+                    quality = int(kwargs["quality"])
+                except (ValueError, TypeError):
+                    pass
+            if "compression" in kwargs and kwargs["compression"] is not None:
+                try:
+                    compression = int(kwargs["compression"])
+                except (ValueError, TypeError):
+                    pass
+            if "lossless" in kwargs and kwargs["lossless"] is not None:
+                lossless = bool(kwargs["lossless"])
 
         from ..utils.text import apply_text_replacements
         filename_prefix = apply_text_replacements(filename_prefix, cls.hidden.prompt, cls.hidden.extra_pnginfo)
