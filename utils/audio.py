@@ -20,16 +20,31 @@ def expand_audio_waveform(components, fps: float, n_orig: int, total_plays: int)
             n_orig_samples = math.ceil(samples_per_frame * n_orig)
             total_samples_needed = math.ceil(samples_per_frame * (n_orig * total_plays))
 
+            raw_samples = raw_waveform.shape[-1]
+            raw_dur = raw_samples / audio_sample_rate if audio_sample_rate else 0
+            video_dur = n_orig / fps if fps else 0
+
+            print(f"[XENodes Debug Audio] fps={fps:.2f}, n_orig={n_orig}, video_dur={video_dur:.3f}s")
+            print(f"[XENodes Debug Audio] raw_sample_rate={audio_sample_rate}, raw_samples={raw_samples}, raw_audio_dur={raw_dur:.3f}s")
+            print(f"[XENodes Debug Audio] samples_per_frame={samples_per_frame:.2f}, n_orig_samples={n_orig_samples}, total_samples_needed={total_samples_needed}")
+
             if raw_waveform.shape[-1] > n_orig_samples:
                 if raw_waveform.shape[-1] >= total_samples_needed:
                     waveform = raw_waveform[:, :total_samples_needed]
+                    print(f"[XENodes Debug Audio] Branch A1: raw_samples > n_orig_samples -> Truncated to total_samples_needed ({total_samples_needed})")
                 else:
                     repeats = math.ceil(total_samples_needed / raw_waveform.shape[-1])
                     waveform = torch.cat([raw_waveform] * repeats, dim=-1)[:, :total_samples_needed]
+                    print(f"[XENodes Debug Audio] Branch A2: raw_samples > n_orig_samples -> Repeated ({repeats}x) & truncated to total_samples_needed ({total_samples_needed})")
             else:
                 waveform = raw_waveform[:, :n_orig_samples]
                 if total_plays > 1:
                     waveform = torch.cat([waveform] * total_plays, dim=-1)
+                print(f"[XENodes Debug Audio] Branch B: raw_samples <= n_orig_samples -> Padded to n_orig_samples ({n_orig_samples})")
+
+            out_samples = waveform.shape[-1] if waveform is not None else 0
+            out_dur = out_samples / audio_sample_rate if audio_sample_rate else 0
+            print(f"[XENodes Debug Audio] Final output waveform samples={out_samples}, duration={out_dur:.3f}s")
 
             layout = {1: 'mono', 2: 'stereo', 6: '5.1'}.get(waveform.shape[0], 'stereo')
         except Exception as e:

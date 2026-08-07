@@ -191,7 +191,7 @@ class SaveVideo(io.ComfyNode):
                                     "codec",
                                     options=[
                                         io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=42.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CRF for AV1 (lower = higher quality).")]),
-                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=42.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for NVENC AV1.")]),
+                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=42.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CQ for NVENC AV1.")]),
                                     ],
                                     tooltip="The video codec.",
                                 ),
@@ -271,13 +271,6 @@ class SaveVideo(io.ComfyNode):
         waveform, audio_sample_rate, layout = expand_audio_waveform(components, float(frame_rate), n_orig, total_plays)
         t_expand_audio = time.perf_counter()
 
-        output_sample_rate = audio_sample_rate
-        if waveform is not None:
-            if audio_codec == "opus":
-                output_sample_rate = 48000
-        else:
-            output_sample_rate = 44100
-
         ffmpeg_exe = find_ffmpeg()
         if not ffmpeg_exe:
             raise RuntimeError("FFmpeg executable not found. Please install ffmpeg or imageio-ffmpeg.")
@@ -304,7 +297,8 @@ class SaveVideo(io.ComfyNode):
         base_options = config['options']
 
         metadata_file = _create_ffmetadata_file(saved_metadata)
-        audio_file, audio_sr, audio_ch = _prepare_audio_file(waveform, output_sample_rate)
+        # Pass the dynamic input audio_sample_rate to _prepare_audio_file (same pattern as DaSiWa)
+        audio_file, audio_sr, audio_ch = _prepare_audio_file(waveform, audio_sample_rate)
         t_files_prep = time.perf_counter()
 
         cmd = [ffmpeg_exe, "-y", "-v", "error"]

@@ -276,12 +276,6 @@ class SaveHDRVideo(io.ComfyNode):
         total_plays = loop_count + 1
 
         waveform, audio_sample_rate, layout = expand_audio_waveform(components, fps, n_orig, total_plays)
-        output_sample_rate = audio_sample_rate
-        if waveform is not None:
-            if audio_codec == "opus":
-                output_sample_rate = 48000
-        else:
-            output_sample_rate = 44100
 
         ffmpeg_exe = find_ffmpeg()
         if not ffmpeg_exe:
@@ -299,7 +293,8 @@ class SaveHDRVideo(io.ComfyNode):
         base_options = config["options"]
 
         metadata_file = _create_ffmetadata_file(saved_metadata)
-        audio_file, audio_sr, audio_ch = _prepare_audio_file(waveform, output_sample_rate)
+        # Pass the dynamic input audio_sample_rate to _prepare_audio_file (same pattern as DaSiWa)
+        audio_file, audio_sr, audio_ch = _prepare_audio_file(waveform, audio_sample_rate)
 
         cmd = [ffmpeg_exe, "-y", "-v", "error"]
 
