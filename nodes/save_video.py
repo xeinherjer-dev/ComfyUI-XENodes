@@ -85,6 +85,59 @@ def _iter_frame_byte_chunks(
         chunk = images[chunk_indices, ..., :3].detach().to(device="cpu", dtype=torch.float32).clamp_(0, 1)
         yield (chunk * 255.0).round_().to(torch.uint8).numpy().tobytes()
 
+def _parse_options(format_input: dict | str, kwargs: dict) -> tuple[str, str, float | None, str, str | None]:
+    sources = []
+    if isinstance(format_input, dict):
+        sources.append(format_input)
+    elif isinstance(format_input, str):
+        sources.append({"format": format_input})
+    if kwargs:
+        sources.append(kwargs)
+
+    format_str = "mp4"
+    codec_str = "h264"
+    crf = None
+    audio_codec_str = "aac"
+    audio_bitrate = None
+
+    for src in sources:
+        if "format" in src and isinstance(src["format"], str):
+            format_str = src["format"]
+        
+        if "codec" in src:
+            c_val = src["codec"]
+            if isinstance(c_val, dict):
+                if "codec" in c_val and isinstance(c_val["codec"], str):
+                    codec_str = c_val["codec"]
+                if "crf" in c_val and c_val["crf"] is not None:
+                    try:
+                        crf = float(c_val["crf"])
+                    except (ValueError, TypeError):
+                        pass
+            elif isinstance(c_val, str):
+                codec_str = c_val
+
+        if "crf" in src and src["crf"] is not None:
+            try:
+                crf = float(src["crf"])
+            except (ValueError, TypeError):
+                pass
+
+        if "audio_codec" in src:
+            ac_val = src["audio_codec"]
+            if isinstance(ac_val, dict):
+                if "audio_codec" in ac_val and isinstance(ac_val["audio_codec"], str):
+                    audio_codec_str = ac_val["audio_codec"]
+                if "audio_bitrate" in ac_val and ac_val["audio_bitrate"] is not None:
+                    audio_bitrate = str(ac_val["audio_bitrate"])
+            elif isinstance(ac_val, str):
+                audio_codec_str = ac_val
+
+        if "audio_bitrate" in src and src["audio_bitrate"] is not None:
+            audio_bitrate = str(src["audio_bitrate"])
+
+    return format_str, codec_str, crf, audio_codec_str, audio_bitrate
+
 class SaveVideo(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -110,7 +163,7 @@ class SaveVideo(io.ComfyNode):
                                         io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=42.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CRF for AV1 (lower = higher quality).")]),
                                         io.DynamicCombo.Option("h264_nvenc", [io.Float.Input("crf", default=30.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for NVENC H.264.")]),
                                         io.DynamicCombo.Option("hevc_nvenc", [io.Float.Input("crf", default=35.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for NVENC HEVC.")]),
-                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=42.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CQ for NVENC AV1.")]),
+                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=42.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for NVENC AV1.")]),
                                     ],
                                     tooltip="The video codec.",
                                 ),
@@ -138,7 +191,7 @@ class SaveVideo(io.ComfyNode):
                                     "codec",
                                     options=[
                                         io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=42.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CRF for AV1 (lower = higher quality).")]),
-                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=42.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CQ for NVENC AV1.")]),
+                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=42.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for NVENC AV1.")]),
                                     ],
                                     tooltip="The video codec.",
                                 ),
@@ -176,50 +229,9 @@ class SaveVideo(io.ComfyNode):
         pingpong: bool = False,
         **kwargs,
     ) -> io.NodeOutput:
-        format_str = "mp4"
-        codec_str = "h264"
-        audio_codec_str = "aac"
-        crf = None
-        audio_bitrate = None
-
-        if isinstance(format, dict):
-            format_str = format.get("format", "mp4")
-            codec_obj = format.get("codec")
-            if isinstance(codec_obj, dict):
-                codec_str = codec_obj.get("codec", "h264")
-                crf = codec_obj.get("crf")
-            elif isinstance(codec_obj, str):
-                codec_str = codec_obj
-
-            ac_obj = format.get("audio_codec")
-            if isinstance(ac_obj, dict):
-                audio_codec_str = ac_obj.get("audio_codec", "aac")
-                audio_bitrate = ac_obj.get("audio_bitrate")
-            elif isinstance(ac_obj, str):
-                audio_codec_str = ac_obj
-        elif isinstance(format, str):
-            format_str = format
-            if "codec" in kwargs:
-                codec_val = kwargs["codec"]
-                if isinstance(codec_val, dict):
-                    codec_str = codec_val.get("codec", "h264")
-                    crf = codec_val.get("crf")
-                elif isinstance(codec_val, str):
-                    codec_str = codec_val
-            if "crf" in kwargs and crf is None:
-                try:
-                    crf = float(kwargs["crf"])
-                except (ValueError, TypeError):
-                    pass
-            if "audio_codec" in kwargs:
-                ac_val = kwargs["audio_codec"]
-                if isinstance(ac_val, dict):
-                    audio_codec_str = ac_val.get("audio_codec", "aac")
-                    audio_bitrate = ac_val.get("audio_bitrate")
-                elif isinstance(ac_val, str):
-                    audio_codec_str = ac_val
-            if "audio_bitrate" in kwargs and audio_bitrate is None:
-                audio_bitrate = kwargs["audio_bitrate"]
+        t0 = time.perf_counter()
+        
+        format_str, codec_str, crf, audio_codec_str, audio_bitrate = _parse_options(format, kwargs)
 
         format = format_str
         codec = codec_str
@@ -243,9 +255,12 @@ class SaveVideo(io.ComfyNode):
         file_name = f"{filename}_{counter:05}_.{format}"
         file_path = os.path.join(full_output_folder, file_name)
 
+        t_prep_start = time.perf_counter()
+        
         components = video.get_components()
-        frame_rate = Fraction(round(components.frame_rate * 1000), 1000)
+        t_get_comp = time.perf_counter()
 
+        frame_rate = Fraction(round(components.frame_rate * 1000), 1000)
         images = components.images  # shape: (N, H, W, 3)
         num_images = images.shape[0]
 
@@ -254,6 +269,8 @@ class SaveVideo(io.ComfyNode):
         total_plays = loop_count + 1
 
         waveform, audio_sample_rate, layout = expand_audio_waveform(components, float(frame_rate), n_orig, total_plays)
+        t_expand_audio = time.perf_counter()
+
         output_sample_rate = audio_sample_rate
         if waveform is not None:
             if audio_codec == "opus":
@@ -288,6 +305,7 @@ class SaveVideo(io.ComfyNode):
 
         metadata_file = _create_ffmetadata_file(saved_metadata)
         audio_file, audio_sr, audio_ch = _prepare_audio_file(waveform, output_sample_rate)
+        t_files_prep = time.perf_counter()
 
         cmd = [ffmpeg_exe, "-y", "-v", "error"]
 
@@ -356,6 +374,8 @@ class SaveVideo(io.ComfyNode):
 
         print(f"[XENodes] SaveVideo (FFmpeg): running command: {' '.join(cmd)}")
 
+        t_encode_start = time.perf_counter()
+
         process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -378,9 +398,20 @@ class SaveVideo(io.ComfyNode):
             if audio_file and os.path.exists(audio_file):
                 os.unlink(audio_file)
 
+        t_encode_end = time.perf_counter()
+
         if retcode != 0:
             stderr_out = process.stderr.read().decode(errors="replace")
             raise RuntimeError(f"FFmpeg encoding failed (exit code {retcode}): {stderr_out}")
+
+        print(
+            f"[XENodes] SaveVideo breakdown:\n"
+            f"  - get_components: {t_get_comp - t_prep_start:.3f}s\n"
+            f"  - expand_audio:  {t_expand_audio - t_get_comp:.3f}s\n"
+            f"  - prepare_files: {t_files_prep - t_expand_audio:.3f}s\n"
+            f"  - ffmpeg encode: {t_encode_end - t_encode_start:.3f}s\n"
+            f"  - TOTAL:         {t_encode_end - t0:.3f}s"
+        )
 
         return io.NodeOutput(video, ui=ui.PreviewVideo([ui.SavedResult(file_name, subfolder, io.FolderType.output)]))
 

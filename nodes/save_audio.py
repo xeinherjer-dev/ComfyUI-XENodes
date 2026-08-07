@@ -38,6 +38,34 @@ AUDIO_CODEC_CONFIG = {
     }
 }
 
+def _parse_audio_options(codec_input: dict | str, kwargs: dict) -> tuple[str, str | None]:
+    sources = []
+    if isinstance(codec_input, dict):
+        sources.append(codec_input)
+    elif isinstance(codec_input, str):
+        sources.append({"audio_codec": codec_input})
+    if kwargs:
+        sources.append(kwargs)
+
+    audio_codec_str = "mp3"
+    audio_bitrate = None
+
+    for src in sources:
+        if "audio_codec" in src:
+            ac_val = src["audio_codec"]
+            if isinstance(ac_val, dict):
+                if "audio_codec" in ac_val and isinstance(ac_val["audio_codec"], str):
+                    audio_codec_str = ac_val["audio_codec"]
+                if "audio_bitrate" in ac_val and ac_val["audio_bitrate"] is not None:
+                    audio_bitrate = str(ac_val["audio_bitrate"])
+            elif isinstance(ac_val, str):
+                audio_codec_str = ac_val
+
+        if "audio_bitrate" in src and src["audio_bitrate"] is not None:
+            audio_bitrate = str(src["audio_bitrate"])
+
+    return audio_codec_str, audio_bitrate
+
 class SaveAudio(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -75,14 +103,8 @@ class SaveAudio(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, audio: Input.Audio, filename_prefix: str, audio_codec: dict | str = "mp3") -> io.NodeOutput:
-        audio_codec_str = "mp3"
-        audio_bitrate = None
-        if isinstance(audio_codec, dict):
-            audio_codec_str = audio_codec.get("audio_codec", "mp3")
-            audio_bitrate = audio_codec.get("audio_bitrate")
-        elif isinstance(audio_codec, str):
-            audio_codec_str = audio_codec
+    def execute(cls, audio: Input.Audio, filename_prefix: str, audio_codec: dict | str = "mp3", **kwargs) -> io.NodeOutput:
+        audio_codec_str, audio_bitrate = _parse_audio_options(audio_codec, kwargs)
 
         from ..utils.text import apply_text_replacements
         filename_prefix = apply_text_replacements(filename_prefix, cls.hidden.prompt, cls.hidden.extra_pnginfo)
@@ -100,12 +122,10 @@ class SaveAudio(io.ComfyNode):
         file_name = f"{filename}_{counter:05}_.{format_ext}"
         file_path = os.path.join(full_output_folder, file_name)
 
-        # Get audio variables
         audio_dict = audio if audio is not None else {}
         waveform = audio_dict.get('waveform')
         audio_sample_rate = int(audio_dict.get('sample_rate', 44100))
         
-        # Make sure waveform has expected dims: (channels, samples)
         if waveform is not None:
             if waveform.dim() == 3:
                 waveform = waveform[0]
@@ -114,7 +134,6 @@ class SaveAudio(io.ComfyNode):
         else:
             layout = 'stereo'
 
-        # Determine output sample rate
         output_sample_rate = audio_sample_rate
         if config.get("sample_rate_override") is not None:
             output_sample_rate = config["sample_rate_override"]

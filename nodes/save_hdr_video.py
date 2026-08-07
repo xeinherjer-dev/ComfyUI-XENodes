@@ -93,6 +93,59 @@ def _iter_hdr_frame_byte_chunks(
         chunk_bytes = gbr_planar.cpu().numpy().astype(np.float32).tobytes()
         yield chunk_bytes
 
+def _parse_options(format_input: dict | str, kwargs: dict) -> tuple[str, str, float | None, str, str | None]:
+    sources = []
+    if isinstance(format_input, dict):
+        sources.append(format_input)
+    elif isinstance(format_input, str):
+        sources.append({"format": format_input})
+    if kwargs:
+        sources.append(kwargs)
+
+    format_str = "mp4"
+    codec_str = "av1"
+    crf = None
+    audio_codec_str = "aac"
+    audio_bitrate = None
+
+    for src in sources:
+        if "format" in src and isinstance(src["format"], str):
+            format_str = src["format"]
+        
+        if "codec" in src:
+            c_val = src["codec"]
+            if isinstance(c_val, dict):
+                if "codec" in c_val and isinstance(c_val["codec"], str):
+                    codec_str = c_val["codec"]
+                if "crf" in c_val and c_val["crf"] is not None:
+                    try:
+                        crf = float(c_val["crf"])
+                    except (ValueError, TypeError):
+                        pass
+            elif isinstance(c_val, str):
+                codec_str = c_val
+
+        if "crf" in src and src["crf"] is not None:
+            try:
+                crf = float(src["crf"])
+            except (ValueError, TypeError):
+                pass
+
+        if "audio_codec" in src:
+            ac_val = src["audio_codec"]
+            if isinstance(ac_val, dict):
+                if "audio_codec" in ac_val and isinstance(ac_val["audio_codec"], str):
+                    audio_codec_str = ac_val["audio_codec"]
+                if "audio_bitrate" in ac_val and ac_val["audio_bitrate"] is not None:
+                    audio_bitrate = str(ac_val["audio_bitrate"])
+            elif isinstance(ac_val, str):
+                audio_codec_str = ac_val
+
+        if "audio_bitrate" in src and src["audio_bitrate"] is not None:
+            audio_bitrate = str(src["audio_bitrate"])
+
+    return format_str, codec_str, crf, audio_codec_str, audio_bitrate
+
 class SaveHDRVideo(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -189,50 +242,7 @@ class SaveHDRVideo(io.ComfyNode):
         pingpong: bool = False,
         **kwargs,
     ) -> io.NodeOutput:
-        format_str = "mp4"
-        codec_str = "av1"
-        audio_codec_str = "aac"
-        crf = None
-        audio_bitrate = None
-
-        if isinstance(format, dict):
-            format_str = format.get("format", "mp4")
-            codec_obj = format.get("codec")
-            if isinstance(codec_obj, dict):
-                codec_str = codec_obj.get("codec", "av1")
-                crf = codec_obj.get("crf")
-            elif isinstance(codec_obj, str):
-                codec_str = codec_obj
-
-            ac_obj = format.get("audio_codec")
-            if isinstance(ac_obj, dict):
-                audio_codec_str = ac_obj.get("audio_codec", "aac")
-                audio_bitrate = ac_obj.get("audio_bitrate")
-            elif isinstance(ac_obj, str):
-                audio_codec_str = ac_obj
-        elif isinstance(format, str):
-            format_str = format
-            if "codec" in kwargs:
-                codec_val = kwargs["codec"]
-                if isinstance(codec_val, dict):
-                    codec_str = codec_val.get("codec", "av1")
-                    crf = codec_val.get("crf")
-                elif isinstance(codec_val, str):
-                    codec_str = codec_val
-            if "crf" in kwargs and crf is None:
-                try:
-                    crf = float(kwargs["crf"])
-                except (ValueError, TypeError):
-                    pass
-            if "audio_codec" in kwargs:
-                ac_val = kwargs["audio_codec"]
-                if isinstance(ac_val, dict):
-                    audio_codec_str = ac_val.get("audio_codec", "aac")
-                    audio_bitrate = ac_val.get("audio_bitrate")
-                elif isinstance(ac_val, str):
-                    audio_codec_str = ac_val
-            if "audio_bitrate" in kwargs and audio_bitrate is None:
-                audio_bitrate = kwargs["audio_bitrate"]
+        format_str, codec_str, crf, audio_codec_str, audio_bitrate = _parse_options(format, kwargs)
 
         format = format_str
         codec = codec_str

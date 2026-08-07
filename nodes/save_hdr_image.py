@@ -17,6 +17,42 @@ import folder_paths
 from ..utils.color import apply_inverse_tone_mapping
 from ..utils.metadata import get_saved_metadata
 
+
+def _parse_hdr_image_options(codec_input: dict | str, crf_input: float, kwargs: dict) -> tuple[str, float]:
+    sources = []
+    if isinstance(codec_input, dict):
+        sources.append(codec_input)
+    elif isinstance(codec_input, str):
+        sources.append({"codec": codec_input})
+    if kwargs:
+        sources.append(kwargs)
+
+    codec_str = "av1"
+    crf = crf_input
+
+    for src in sources:
+        if "codec" in src:
+            c_val = src["codec"]
+            if isinstance(c_val, dict):
+                if "codec" in c_val and isinstance(c_val["codec"], str):
+                    codec_str = c_val["codec"]
+                if "crf" in c_val and c_val["crf"] is not None:
+                    try:
+                        crf = float(c_val["crf"])
+                    except (ValueError, TypeError):
+                        pass
+            elif isinstance(c_val, str):
+                codec_str = c_val
+
+        if "crf" in src and src["crf"] is not None:
+            try:
+                crf = float(src["crf"])
+            except (ValueError, TypeError):
+                pass
+
+    return codec_str, crf
+
+
 class SaveHDRImage(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -48,14 +84,8 @@ class SaveHDRImage(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, images: Input.Image, filename_prefix: str, format: str, codec: dict | str = "av1", crf: float = 2.0, peak_nits: float = 400.0, itm_knee: float = 0.0, itm_exponent: float = 1.0) -> io.NodeOutput:
-        codec_str = "av1"
-        if isinstance(codec, dict):
-            codec_str = codec.get("codec", "av1")
-            crf = codec.get("crf", crf)
-        elif isinstance(codec, str):
-            codec_str = codec
-
+    def execute(cls, images: Input.Image, filename_prefix: str, format: str, codec: dict | str = "av1", crf: float = 2.0, peak_nits: float = 400.0, itm_knee: float = 0.0, itm_exponent: float = 1.0, **kwargs) -> io.NodeOutput:
+        codec_str, crf = _parse_hdr_image_options(codec, crf, kwargs)
         codec = codec_str
 
         from ..utils.text import apply_text_replacements
@@ -92,7 +122,6 @@ class SaveHDRImage(io.ComfyNode):
             cmd += ["-pix_fmt", "yuv420p10le"]
             cmd += ["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"]
             
-            # Since input is already linear float32 (where 1.0 = 100 nits), we just convert to PQ
             cmd += ["-vf", "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709,zscale=p=bt2020:t=smpte2084:m=bt2020nc:npl=100:dither=error_diffusion"]
 
             if "av1" in av_codec or "svtav1" in av_codec:
@@ -106,13 +135,8 @@ class SaveHDRImage(io.ComfyNode):
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
             try:
-                # Convert sRGB to Linear and Apply Inverse Tone Mapping
                 linear_hdr, ratio, scale = apply_inverse_tone_mapping(frame_tensor, peak_nits, itm_knee, itm_exponent)
 
-                # Normalize Gainmap to [0, 1] for visualization and standard usage.
-                # We use log-scale normalization which is standard for HDR gainmaps (e.g. Ultra HDR).
-                # ratio 1.0 (no gain) -> 0.0
-                # ratio 'scale' (max gain) -> 1.0
                 if scale > 1.0:
                     gainmap_luma = torch.log2(ratio) / math.log2(scale)
                 else:
@@ -120,11 +144,9 @@ class SaveHDRImage(io.ComfyNode):
                 
                 gainmap_luma = torch.clamp(gainmap_luma, 0.0, 1.0)
                 
-                # Convert to 3-channel grayscale for ComfyUI Image compatibility (N, H, W, 3)
                 gainmap_rgb = gainmap_luma.repeat(1, 1, 3)
                 gainmaps.append(gainmap_rgb.clone())
 
-                # Convert to GBR planar format (gbrpf32le) for ffmpeg (using linear_hdr)
                 gbr_planar = linear_hdr[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
                 img_bytes = gbr_planar.cpu().numpy().astype(np.float32).tobytes()
                 
@@ -145,13 +167,6 @@ class SaveHDRImage(io.ComfyNode):
 
             if saved_metadata:
                 try:
-                    # FFmpeg's default metadata mapping (-map_metadata) is incompatible with ComfyUI's AVIF parser, 
-                    # as it doesn't write to the specific Exif boxes the frontend expects.
-                    # We use exiftool to write metadata to ASCII tags that ComfyUI's avif.ts can actually parse.
-                    # avif.ts looks for tags with type 2 (ASCII) and checks for "workflow:" or "prompt:" prefix.
-                    # Note: UserComment is type 7 and the current frontend parser fails to read it.
-                    # Use the most robust method for Windows: write values to temp files and use -TAG<=FILE
-                    # This avoids command line length limits AND issues with newlines in JSON.
                     exif_cmd = ["exiftool", "-overwrite_original"]
                     temp_files = []
                     

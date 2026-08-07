@@ -11,6 +11,42 @@ from comfy.cli_args import args
 import folder_paths
 
 
+def _parse_image_options(format_input: dict | str, kwargs: dict) -> tuple[str, bool, int, int]:
+    sources = []
+    if isinstance(format_input, dict):
+        sources.append(format_input)
+    elif isinstance(format_input, str):
+        sources.append({"format": format_input})
+    if kwargs:
+        sources.append(kwargs)
+
+    format_str = "png"
+    lossless = False
+    quality = 90
+    compression = 6
+
+    for src in sources:
+        if "format" in src and isinstance(src["format"], str):
+            format_str = src["format"]
+        
+        if "lossless" in src and src["lossless"] is not None:
+            lossless = bool(src["lossless"])
+            
+        if "quality" in src and src["quality"] is not None:
+            try:
+                quality = int(src["quality"])
+            except (ValueError, TypeError):
+                pass
+                
+        if "compression" in src and src["compression"] is not None:
+            try:
+                compression = int(src["compression"])
+            except (ValueError, TypeError):
+                pass
+
+    return format_str, lossless, quality, compression
+
+
 class SaveImage(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -53,42 +89,7 @@ class SaveImage(io.ComfyNode):
 
     @classmethod
     def execute(cls, images: Input.Image, filename_prefix: str, format: dict | str = "png", **kwargs) -> io.NodeOutput:
-        format_str = "png"
-        lossless = False
-        quality = 90
-        compression = 6
-
-        if isinstance(format, dict):
-            format_str = format.get("format", "png") or "png"
-            q_val = format.get("quality")
-            if q_val is not None:
-                try:
-                    quality = int(q_val)
-                except (ValueError, TypeError):
-                    pass
-            c_val = format.get("compression")
-            if c_val is not None:
-                try:
-                    compression = int(c_val)
-                except (ValueError, TypeError):
-                    pass
-            l_val = format.get("lossless")
-            if l_val is not None:
-                lossless = bool(l_val)
-        elif isinstance(format, str):
-            format_str = format
-            if "quality" in kwargs and kwargs["quality"] is not None:
-                try:
-                    quality = int(kwargs["quality"])
-                except (ValueError, TypeError):
-                    pass
-            if "compression" in kwargs and kwargs["compression"] is not None:
-                try:
-                    compression = int(kwargs["compression"])
-                except (ValueError, TypeError):
-                    pass
-            if "lossless" in kwargs and kwargs["lossless"] is not None:
-                lossless = bool(kwargs["lossless"])
+        format_str, lossless, quality, compression = _parse_image_options(format, kwargs)
 
         from ..utils.text import apply_text_replacements
         filename_prefix = apply_text_replacements(filename_prefix, cls.hidden.prompt, cls.hidden.extra_pnginfo)
