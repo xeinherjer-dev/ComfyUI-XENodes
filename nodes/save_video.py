@@ -191,7 +191,7 @@ class SaveVideo(io.ComfyNode):
                                     "codec",
                                     options=[
                                         io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=42.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CRF for AV1 (lower = higher quality).")]),
-                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=42.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CQ for NVENC AV1.")]),
+                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=42.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for NVENC AV1.")]),
                                     ],
                                     tooltip="The video codec.",
                                 ),
@@ -370,11 +370,12 @@ class SaveVideo(io.ComfyNode):
 
         t_encode_start = time.perf_counter()
 
+        stderr_tmp = tempfile.TemporaryFile()
         process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=stderr_tmp,
         )
 
         try:
@@ -395,7 +396,8 @@ class SaveVideo(io.ComfyNode):
         t_encode_end = time.perf_counter()
 
         if retcode != 0:
-            stderr_out = process.stderr.read().decode(errors="replace")
+            stderr_tmp.seek(0)
+            stderr_out = stderr_tmp.read().decode(errors="replace")
             raise RuntimeError(f"FFmpeg encoding failed (exit code {retcode}): {stderr_out}")
 
         print(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import json
 import tempfile
@@ -16,6 +17,17 @@ import folder_paths
 
 from ..utils.color import apply_inverse_tone_mapping
 from ..utils.metadata import get_saved_metadata
+
+
+def find_ffmpeg() -> str | None:
+    path_ffmpeg = shutil.which("ffmpeg")
+    if path_ffmpeg:
+        return path_ffmpeg
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        return None
 
 
 def _parse_hdr_image_options(codec_input: dict | str, crf_input: float, kwargs: dict) -> tuple[str, float]:
@@ -108,31 +120,32 @@ class SaveHDRImage(io.ComfyNode):
             current_file_name = f"{filename}_{counter + i:05}_.{format}"
             current_file_path = os.path.join(full_output_folder, current_file_name)
 
-            cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "gbrpf32le", "-s", f"{width}x{height}", "-r", "25", "-i", "-"]
+            ffmpeg_exe = find_ffmpeg()
+            if not ffmpeg_exe:
+                raise RuntimeError("FFmpeg executable not found. Please install ffmpeg or imageio-ffmpeg.")
+
+            cmd = [ffmpeg_exe, "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "gbrpf32le", "-s", f"{width}x{height}", "-r", "25", "-i", "-"]
             codec_config = {
-                "av1": {"codec": "libsvtav1", "options": {"preset": "6"}},
-                "av1_nvenc": {"codec": "av1_nvenc", "options": {"preset": "p7"}}
+                "av1": {"codec": "libsvtav1", "options": ["-preset", "6"]},
+                "av1_nvenc": {"codec": "av1_nvenc", "options": ["-preset", "p7"]}
             }
             config = codec_config.get(codec, codec_config["av1"])
             av_codec = config["codec"]
             cmd += ["-c:v", av_codec]
-
-            for key, value in config.get("options", {}).items():
-                cmd += [f"-{key}", str(value)]
+            cmd.extend(config.get("options", []))
             cmd += ["-pix_fmt", "yuv420p10le"]
             cmd += ["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"]
-            
             cmd += ["-vf", "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709,zscale=p=bt2020:t=smpte2084:m=bt2020nc:npl=100:dither=error_diffusion"]
 
-            if "av1" in av_codec or "svtav1" in av_codec:
-                if "nvenc" in av_codec and crf > 0:
-                    cmd += ["-rc", "vbr", "-cq", str(int(crf)), "-b:v", "0"]
-                elif crf > 0:
-                    cmd += ["-crf", str(int(crf))]
+            if "nvenc" in av_codec:
+                cmd += ["-rc", "vbr", "-cq", str(int(crf)), "-b:v", "0"]
+            else:
+                cmd += ["-crf", str(int(crf))]
 
             cmd += ["-frames:v", "1", current_file_path]
 
-            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+            stderr_tmp = tempfile.TemporaryFile()
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=stderr_tmp)
 
             try:
                 linear_hdr, ratio, scale = apply_inverse_tone_mapping(frame_tensor, peak_nits, itm_knee, itm_exponent)
@@ -154,16 +167,15 @@ class SaveHDRImage(io.ComfyNode):
                 proc.stdin.close()
                 return_code = proc.wait()
                 if return_code != 0:
-                    stderr_output = proc.stderr.read().decode('utf-8')
+                    stderr_tmp.seek(0)
+                    stderr_output = stderr_tmp.read().decode('utf-8', errors='replace')
                     print(f"[XENodes] FFmpeg failed with return code {return_code}")
                     if stderr_output:
                         print(f"[XENodes] FFmpeg error output:\n{stderr_output}")
             except Exception as e:
-                print(f"[XENodes] Error encoding HDR AVIF for frame {i}: {e}")
-            finally:
-                if proc.stdin and not proc.stdin.closed:
-                    proc.stdin.close()
+                proc.kill()
                 proc.wait()
+                print(f"[XENodes] Error encoding HDR AVIF for frame {i}: {e}")
 
             if saved_metadata:
                 try:

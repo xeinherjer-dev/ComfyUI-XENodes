@@ -370,11 +370,12 @@ class SaveHDRVideo(io.ComfyNode):
 
         print(f"[XENodes] SaveHDRVideo (FFmpeg): running command: {' '.join(cmd)}")
 
+        stderr_tmp = tempfile.TemporaryFile()
         process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=stderr_tmp,
         )
 
         try:
@@ -395,7 +396,8 @@ class SaveHDRVideo(io.ComfyNode):
                 os.unlink(audio_file)
 
         if retcode != 0:
-            stderr_out = process.stderr.read().decode(errors="replace")
+            stderr_tmp.seek(0)
+            stderr_out = stderr_tmp.read().decode(errors="replace")
             raise RuntimeError(f"FFmpeg HDR encoding failed (exit code {retcode}): {stderr_out}")
 
         return io.NodeOutput(video, ui=ui.PreviewVideo([ui.SavedResult(file_name, subfolder, io.FolderType.output)]))
