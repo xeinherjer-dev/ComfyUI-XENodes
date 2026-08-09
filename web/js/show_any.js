@@ -36,7 +36,6 @@ app.registerExtension({
                             w.element.style.opacity = 0.8;
                             w.value = l;
                             w.is_xenode_preview = true;
-                            w.serialize_ignore = true;
                         } catch (e) {
                             console.error("[XENodes] Widget creation failed:", e);
                         }
