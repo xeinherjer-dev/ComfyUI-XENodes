@@ -43,7 +43,7 @@ class ShowAnyNode(io.ComfyNode):
 
         # If input is None (Muted, etc.), read the saved value from the workflow
         if value is None and unique_id:
-            cached_val = cls.get_workflow_widget_value(nodes, str(unique_id), definitions)
+            cached_val = ShowAnyNode.get_workflow_widget_value(nodes, str(unique_id), definitions)
             # Overwrite output only if value exists and is a String
             if isinstance(cached_val, str):
                 value = cached_val
@@ -62,16 +62,17 @@ class ShowAnyNode(io.ComfyNode):
                 text_str = str(value)
 
         # Write back to workflow data (always overwrite for the next run)
-        if hasattr(cls, "hidden") and cls.hidden and unique_id:
-            if not cls.mutate_workflow_data(nodes, str(unique_id), text_str, definitions):
+        if unique_id:
+            if not ShowAnyNode.mutate_workflow_data(nodes, str(unique_id), text_str, definitions):
                 logging.warning(f"[XENodes.ShowAny] Failed to update workflow data for node {unique_id}")
 
         return io.NodeOutput(value, ui={"text": [text_str]})
 
     @staticmethod
-    def get_workflow_widget_value(nodes: list, target_id: str, definitions: dict = None):
+    def find_target_node(nodes: list, target_id: str, definitions: dict = None) -> dict | None:
         """
-        Retrieves the saved widget value from the workflow data.
+        Recursively searches the workflow graph for a node by hierarchical ID (e.g., "7:1").
+        Supports legacy subgraphs, properties, and ComfyUI Group Node (V2) definitions["subgraphs"].
         """
         id_parts = target_id.split(':', 1)
         current_id = id_parts[0]
@@ -81,62 +82,52 @@ class ShowAnyNode(io.ComfyNode):
             if str(node.get("id")) != current_id:
                 continue
 
-            # Once the target node is reached, get the first value of widgets_values
             if remaining_id is None:
-                wv = node.get("widgets_values", [])
-                if wv and len(wv) > 0:
-                    return wv[0]
-                return None
+                return node
 
-            # Recursively search within Subgraph
             node_type = node.get("type")
             for sub_list in ShowAnyNode._get_sub_nodes(node, node_type, definitions):
                 if sub_list:
-                    ret = ShowAnyNode.get_workflow_widget_value(sub_list, remaining_id, definitions)
-                    if ret is not None:
-                        return ret
+                    found = ShowAnyNode.find_target_node(sub_list, remaining_id, definitions)
+                    if found is not None:
+                        return found
         return None
 
     @staticmethod
-    def mutate_workflow_data(nodes: list, target_id: str, new_text: str, definitions: dict = None) -> bool:
+    def get_workflow_widget_value(nodes: list, target_id: str, definitions: dict | None = None) -> str | None:
         """
-        Splits hierarchical node IDs (e.g., "7:1") to recursively search and overwrite widgets_values.
-        Supports ComfyUI Group Node (V2) definitions["subgraphs"] structure.
+        Retrieves the saved widget value from the workflow data.
         """
-        id_parts = target_id.split(':', 1)
-        current_id = id_parts[0]
-        remaining_id = id_parts[1] if len(id_parts) > 1 else None
+        target_node = ShowAnyNode.find_target_node(nodes, target_id, definitions)
+        if target_node:
+            wv = target_node.get("widgets_values", [])
+            if wv and len(wv) > 0:
+                return wv[0]
+        return None
 
-        for node in nodes:
-            if str(node.get("id")) != current_id:
-                continue
-
-            # Final target node reached: overwrite its widgets_values
-            if remaining_id is None:
-                wv = node.setdefault("widgets_values", [])
-                if wv:
-                    wv[0] = new_text
-                else:
-                    wv.append(new_text)
-                return True
-
-            # Intermediate node: dive deeper into the subgraph
-            node_type = node.get("type")
-            for sub_list in ShowAnyNode._get_sub_nodes(node, node_type, definitions):
-                if sub_list and ShowAnyNode.mutate_workflow_data(sub_list, remaining_id, new_text, definitions):
-                    return True
-
+    @staticmethod
+    def mutate_workflow_data(nodes: list, target_id: str, new_text: str, definitions: dict | None = None) -> bool:
+        """
+        Overwrites widgets_values of the target node in the workflow data.
+        """
+        target_node = ShowAnyNode.find_target_node(nodes, target_id, definitions)
+        if target_node:
+            wv = target_node.setdefault("widgets_values", [])
+            if wv:
+                wv[0] = new_text
+            else:
+                wv.append(new_text)
+            return True
         return False
 
     @staticmethod
-    def _get_sub_nodes(node: dict, node_type: str, definitions: dict) -> list[list]:
+    def _get_sub_nodes(node: dict, node_type: str, definitions: dict | None) -> list[list[dict]]:
         """
         Collects child node lists from a given node.
-        Supports various storage formats: direct nesting, properties, and definitions["subgraphs"].
         """
         candidates = []
 
-        # 1. Direct nesting (legacy subgraphs)
+        # 1. Direct nesting / properties
         for key in ("nodes", "inner_nodes", "subgraph"):
             val = node.get(key)
             if isinstance(val, list):
@@ -144,7 +135,6 @@ class ShowAnyNode(io.ComfyNode):
             elif isinstance(val, dict):
                 candidates.append(val.get("nodes", []))
 
-        # 2. Inside properties
         props = node.get("properties")
         if isinstance(props, dict):
             sg = props.get("subgraph")
@@ -153,7 +143,7 @@ class ShowAnyNode(io.ComfyNode):
             elif isinstance(props.get("nodes"), list):
                 candidates.append(props["nodes"])
 
-        # 3. Inside workflow.definitions (Group Node V2 architecture)
+        # 2. Inside workflow.definitions (Group Node V2 architecture)
         if definitions and node_type:
             if node_type in definitions:
                 group_def = definitions[node_type]
