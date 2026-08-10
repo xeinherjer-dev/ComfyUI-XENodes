@@ -76,19 +76,41 @@
                     console.log(`[XENodes/QuotaFix] Deleted ${keysToRemove.length} orphaned/legacy draft key(s) to free up space.`);
                 }
 
-                // 4. Retry the save
+                // 4. Retry the save after first pass
                 if (freedSpace) {
                     try {
                         return originalSetItem.apply(this, arguments);
                     } catch (retryError) {
-                        // If it STILL fails after cleanup, fall through to the warning below
+                        // Failed again, fall through to extreme GC
                     }
                 }
 
-                // 5. If we couldn't free space or retry failed, suppress error to prevent crash
-                if (!reportedErrors.has(key)) {
-                    console.warn(`[XENodes/QuotaFix] Storage full for key: ${key}. Write skipped to prevent crash. (Subsequent warnings suppressed)`);
-                    reportedErrors.add(key);
+                // 5. EXTREME GC: Sacrifice valid V2 drafts one by one to make space for the CURRENT draft
+                const allDraftKeys = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const k = localStorage.key(i);
+                    if (k && k.startsWith('Comfy.Workflow.Draft.v2:') && k !== key) {
+                        allDraftKeys.push(k);
+                    }
+                }
+
+                // Delete one by one and retry until it fits
+                for (const k of allDraftKeys) {
+                    localStorage.removeItem(k);
+                    console.log(`[XENodes/QuotaFix] Extreme GC: Deleted valid draft ${k} to force space for new save.`);
+                    try {
+                        return originalSetItem.apply(this, arguments);
+                    } catch (retryError2) {
+                        // Still fails, continue loop to delete another one
+                    }
+                }
+
+                // 6. If we deleted EVERYTHING and it STILL fails (e.g. the single draft is > 5MB)
+                // Use a generic prefix for reporting so we don't spam the console when the UUID changes
+                const prefix = key.substring(0, key.lastIndexOf(':')) || key; 
+                if (!reportedErrors.has(prefix)) {
+                    console.warn(`[XENodes/QuotaFix] Storage full for key: ${key}. Write skipped to prevent crash. (Subsequent warnings for ${prefix} suppressed)`);
+                    reportedErrors.add(prefix);
                 }
                 return;
             }
