@@ -105,7 +105,7 @@ Measures and displays the execution time for each node in your workflow directly
 - **Double Counting Prevention**: Automatically detects if other extensions (e.g. `comfyui-easy-use`) have already measured the time, avoiding double counting.
 - **Toggleable**: Easily enable or disable the display via the ComfyUI Settings panel under `XENodes -> Node Execution Time`.
 
-### Smart Progress Bar (UI Extension)
+### Progress Bar (UI Extension)
 
 A powerful, subgraph-aware progress bar and node navigator for ComfyUI.
 
@@ -113,7 +113,7 @@ A powerful, subgraph-aware progress bar and node navigator for ComfyUI.
 - **Hierarchy Breadcrumb Path**: Displays the full subgraph hierarchy path directly in the progress text (e.g., `(1) 54% - [Music Generation > Step 2] MiniMax Text Encode (40%)`).
 - **Pulse Glow Effect**: Highlights the focused node with a vibrant pulsing glow to make active execution instantly visible.
 - **Quick Navigation**: Right-click on the progress bar to quickly jump back to the root graph.
-- **Customizable**: Configure position (`Top` / `Bottom`), pulse effect, and breadcrumb display via the ComfyUI Settings panel under `XENodes -> Smart Progress Bar`.
+- **Toggleable**: Easily enable or disable the progress bar via the ComfyUI Settings panel under `XENodes -> Progress Bar`.
 
 ## License
 

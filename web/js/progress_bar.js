@@ -1,16 +1,17 @@
 /**
- * [XENodes.SmartProgressBar]
- * - Subgraph-aware Smart Progress Bar & Node Navigator for ComfyUI.
- * - Accurately tracks executing nodes across deep subgraph hierarchies (Nodes 2.0 Subgraph & GroupNodes).
+ * [XENodes.ProgressBar]
+ * - Subgraph-aware Progress Bar & Node Navigator for ComfyUI.
+ * - Accurately tracks executing nodes across deep subgraph hierarchies (Nodes 2.0 Subgraphs & GroupNodes).
  * - Click anywhere on the progress bar to instantly drill down into nested subgraphs and smoothly center on the active node.
  * - Provides visual pulse/glow highlighting on focused nodes for effortless tracking.
- * - Right-click to quickly return to the root graph or navigate parents.
+ * - Right-click to quickly return to the root graph.
+ * - Cleanly enabled or disabled via Settings -> XENodes -> Progress Bar.
  */
 
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 
-console.log("[XENodes.SmartProgressBar] Initializing Smart Progress Bar extension...");
+console.log("[XENodes.ProgressBar] Initializing Progress Bar extension...");
 
 // ============================================================================
 // 1. Subgraph Hierarchy Search & Safe Traversal Utilities
@@ -196,9 +197,6 @@ let activeHighlightEnd = 0;
  */
 function pulseHighlightNode(node) {
     if (!node) return;
-    const isPulseEnabled = app.ui?.settings?.getSettingValue("XENodes.SmartProgressBar.PulseEffect") !== false;
-    if (!isPulseEnabled) return;
-
     activeHighlightNode = node;
     activeHighlightEnd = performance.now() + 2000; // 2 seconds pulse
 
@@ -311,7 +309,6 @@ class XENodesProgressBarElement extends HTMLElement {
         this.currentNodeId = null;
         this.currentQueue = 0;
         this.totalNodes = 0;
-        this.executedNodes = new Set();
         this.currentStep = 0;
         this.maxSteps = 0;
         this.nodeTitle = "";
@@ -428,13 +425,7 @@ class XENodesProgressBarElement extends HTMLElement {
             barStep.style.width = "0%";
         }
 
-        // Compose progress text
-        const showPath = app.ui?.settings?.getSettingValue("XENodes.SmartProgressBar.ShowPath") !== false;
-        let pathPrefix = "";
-        if (showPath && this.hierarchyPathStr) {
-            pathPrefix = `[${this.hierarchyPathStr}] `;
-        }
-
+        const pathPrefix = this.hierarchyPathStr ? `[${this.hierarchyPathStr}] ` : "";
         const queuePart = `(${this.currentQueue || 1}) `;
         const percentPart = `${overallPercent}%`;
         const nodePart = this.nodeTitle ? ` - ${pathPrefix}${this.nodeTitle}${stepText}` : "";
@@ -452,10 +443,13 @@ class XENodesProgressBarElement extends HTMLElement {
                     z-index: 1000;
                     font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                 }
+                :host([hidden]) {
+                    display: none !important;
+                }
                 .progress-container {
                     position: relative;
                     width: 100%;
-                    height: 18px;
+                    height: 14px;
                     background: rgba(15, 23, 42, 0.92);
                     backdrop-filter: blur(8px);
                     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -498,22 +492,19 @@ class XENodesProgressBarElement extends HTMLElement {
                     align-items: center;
                     justify-content: flex-start;
                     height: 100%;
-                    padding: 0 12px;
-                    font-size: 11px;
-                    font-weight: 600;
+                    padding: 0 6px;
+                    font-size: 10px;
+                    font-weight: 700;
+                    line-height: 14px;
                     color: #ffffff;
-                    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+                    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
                     letter-spacing: 0.2px;
                     white-space: nowrap;
                     overflow: hidden;
                     text-overflow: ellipsis;
                 }
-                .pos-bottom .progress-container {
-                    border-bottom: none;
-                    border-top: 1px solid rgba(255, 255, 255, 0.08);
-                }
             </style>
-            <div class="progress-container" title="XENodes Smart Progress Bar&#013;Left-Click: Jump into subgraph and focus active node&#013;Right-Click: Return to root graph">
+            <div class="progress-container" title="XENodes Progress Bar&#013;Left-Click: Jump into subgraph and focus active node&#013;Right-Click: Return to root graph">
                 <div class="bar-overall"></div>
                 <div class="bar-step"></div>
                 <div class="progress-text">Idle</div>
@@ -536,6 +527,22 @@ let totalNodesInPrompt = 0;
 let executedNodeIds = new Set();
 let currentExecutingNodeId = null;
 let promptApiData = null;
+
+/**
+ * Checks whether the Progress Bar is enabled by the user.
+ * @param {boolean} [explicitVal]
+ * @returns {boolean}
+ */
+function isProgressBarEnabled(explicitVal) {
+    if (explicitVal !== undefined) {
+        return explicitVal !== false && explicitVal !== "false" && explicitVal !== 0;
+    }
+    const val = app.ui?.settings?.getSettingValue("XENodes.ProgressBar.Enabled");
+    if (val === false || val === "false" || val === 0) {
+        return false;
+    }
+    return true;
+}
 
 /**
  * Resolves node label and its subgraph hierarchy path string.
@@ -567,16 +574,26 @@ function resolveNodeDisplayInfo(nodeId) {
 }
 
 /**
- * Mounts or moves the progress bar DOM element according to user configuration.
+ * Mounts, updates, or completely removes the progress bar DOM element.
+ * @param {boolean} [explicitEnabled] Optional explicit boolean value from onChange
  */
-function syncProgressBarDOM() {
-    const isEnabled = app.ui?.settings?.getSettingValue("XENodes.SmartProgressBar.Enabled") !== false;
-    const position = app.ui?.settings?.getSettingValue("XENodes.SmartProgressBar.Position") || "top";
+function syncProgressBarDOM(explicitEnabled) {
+    const isEnabled = isProgressBarEnabled(explicitEnabled);
 
     if (!isEnabled) {
-        if (progressBarInstance && progressBarInstance.parentNode) {
-            progressBarInstance.parentNode.removeChild(progressBarInstance);
+        // Completely hide and remove all instances from DOM
+        if (progressBarInstance) {
+            progressBarInstance.style.display = "none";
+            progressBarInstance.hidden = true;
+            if (progressBarInstance.parentNode) {
+                progressBarInstance.parentNode.removeChild(progressBarInstance);
+            }
         }
+        document.querySelectorAll(XENodesProgressBarElement.TAG).forEach(el => {
+            el.style.display = "none";
+            el.hidden = true;
+            if (el.parentNode) el.parentNode.removeChild(el);
+        });
         return;
     }
 
@@ -584,30 +601,22 @@ function syncProgressBarDOM() {
         progressBarInstance = document.createElement(XENodesProgressBarElement.TAG);
     }
 
-    progressBarInstance.classList.toggle("pos-bottom", position === "bottom");
+    progressBarInstance.style.display = "block";
+    progressBarInstance.hidden = false;
 
     // Mount to ComfyUI body slot if available, otherwise document.body
     const topSlot = document.querySelector(".comfyui-body-top");
-    const bottomSlot = document.querySelector(".comfyui-body-bottom");
 
-    if (position === "bottom") {
-        if (bottomSlot) {
-            bottomSlot.appendChild(progressBarInstance);
-        } else {
-            progressBarInstance.style.position = "fixed";
-            progressBarInstance.style.bottom = "0";
-            progressBarInstance.style.left = "0";
-            progressBarInstance.style.width = "100%";
-            document.body.appendChild(progressBarInstance);
+    if (topSlot) {
+        if (progressBarInstance.parentNode !== topSlot) {
+            topSlot.prepend(progressBarInstance);
         }
     } else {
-        if (topSlot) {
-            topSlot.prepend(progressBarInstance);
-        } else {
-            progressBarInstance.style.position = "fixed";
-            progressBarInstance.style.top = "0";
-            progressBarInstance.style.left = "0";
-            progressBarInstance.style.width = "100%";
+        progressBarInstance.style.position = "fixed";
+        progressBarInstance.style.top = "0";
+        progressBarInstance.style.left = "0";
+        progressBarInstance.style.width = "100%";
+        if (progressBarInstance.parentNode !== document.body) {
             document.body.prepend(progressBarInstance);
         }
     }
@@ -618,63 +627,44 @@ function syncProgressBarDOM() {
 // ============================================================================
 
 app.registerExtension({
-    name: "XENodes.SmartProgressBar",
+    name: "XENodes.ProgressBar",
+
+    // Expose extension settings array for standard ComfyUI registration
+    settings: [
+        {
+            id: "XENodes.ProgressBar.Enabled",
+            category: ["XENodes", "Progress Bar"],
+            name: "Display Progress Bar",
+            type: "boolean",
+            defaultValue: true,
+            onChange: (newValue) => {
+                syncProgressBarDOM(newValue);
+            }
+        }
+    ],
 
     async setup() {
-        console.log("[XENodes.SmartProgressBar] Registering settings and API event hooks...");
+        console.log("[XENodes.ProgressBar] Setting up Progress Bar hooks...");
 
-        // 1. Settings registration
+        // Ensure setting is also registered via addSetting for fallback compatibility
         app.ui?.settings?.addSetting({
-            id: "XENodes.SmartProgressBar.Enabled",
-            category: ["XENodes", "Smart Progress Bar"],
-            name: "Enable Smart Progress Bar",
+            id: "XENodes.ProgressBar.Enabled",
+            category: ["XENodes", "Progress Bar"],
+            name: "Display Progress Bar",
             type: "boolean",
             defaultValue: true,
-            onChange: () => syncProgressBarDOM()
-        });
-
-        app.ui?.settings?.addSetting({
-            id: "XENodes.SmartProgressBar.Position",
-            category: ["XENodes", "Smart Progress Bar"],
-            name: "Position",
-            type: "combo",
-            options: ["top", "bottom"],
-            defaultValue: "top",
-            onChange: () => syncProgressBarDOM()
-        });
-
-        app.ui?.settings?.addSetting({
-            id: "XENodes.SmartProgressBar.ShowPath",
-            category: ["XENodes", "Smart Progress Bar"],
-            name: "Show Subgraph Hierarchy Breadcrumbs",
-            type: "boolean",
-            defaultValue: true,
-            onChange: () => {
-                if (progressBarInstance && currentExecutingNodeId) {
-                    const info = resolveNodeDisplayInfo(currentExecutingNodeId);
-                    progressBarInstance.updateState({
-                        nodeTitle: info.title,
-                        hierarchyPath: info.pathStr
-                    });
-                }
+            onChange: (newValue) => {
+                syncProgressBarDOM(newValue);
             }
         });
 
-        app.ui?.settings?.addSetting({
-            id: "XENodes.SmartProgressBar.PulseEffect",
-            category: ["XENodes", "Smart Progress Bar"],
-            name: "Highlight Focused Node with Pulse Effect",
-            type: "boolean",
-            defaultValue: true
-        });
-
-        // 2. Setup pulse glow rendering hook on LiteGraphCanvas
+        // Setup pulse glow rendering hook on LiteGraphCanvas
         setupPulseDrawHook();
 
-        // 3. Mount Progress Bar
+        // Initial sync of Progress Bar DOM based on user settings
         syncProgressBarDOM();
 
-        // 4. Hook API queuePrompt to capture totalNodes & prompt structure
+        // Hook API queuePrompt to capture totalNodes & prompt structure
         const originalQueuePrompt = api.queuePrompt;
         if (typeof originalQueuePrompt === "function") {
             api.queuePrompt = async function (num, prompt, ...args) {
@@ -687,8 +677,12 @@ app.registerExtension({
             };
         }
 
-        // 5. Connect API Listeners
+        // Connect API Listeners
         api.addEventListener("status", (e) => {
+            if (!isProgressBarEnabled()) {
+                syncProgressBarDOM(false);
+                return;
+            }
             const queueRemaining = e.detail?.exec_info?.queue_remaining || 0;
             if (progressBarInstance) {
                 progressBarInstance.updateState({
@@ -699,6 +693,10 @@ app.registerExtension({
         });
 
         api.addEventListener("execution_start", (e) => {
+            if (!isProgressBarEnabled()) {
+                syncProgressBarDOM(false);
+                return;
+            }
             currentPromptId = e.detail?.prompt_id;
             executedNodeIds.clear();
             currentExecutingNodeId = null;
@@ -719,6 +717,11 @@ app.registerExtension({
         });
 
         api.addEventListener("executing", (e) => {
+            if (!isProgressBarEnabled()) {
+                syncProgressBarDOM(false);
+                return;
+            }
+
             let nodeId = null;
             if (e.detail !== null && e.detail !== undefined) {
                 if (typeof e.detail === "object") {
@@ -729,7 +732,6 @@ app.registerExtension({
             }
 
             if (nodeId == null) {
-                // Execution finished or paused
                 currentExecutingNodeId = null;
                 if (progressBarInstance) {
                     progressBarInstance.updateState({
@@ -766,6 +768,10 @@ app.registerExtension({
         });
 
         api.addEventListener("progress", (e) => {
+            if (!isProgressBarEnabled()) {
+                syncProgressBarDOM(false);
+                return;
+            }
             if (!progressBarInstance || !e.detail) return;
 
             const nodeId = e.detail.node || currentExecutingNodeId;
@@ -791,6 +797,7 @@ app.registerExtension({
         });
 
         api.addEventListener("execution_cached", (e) => {
+            if (!isProgressBarEnabled()) return;
             if (e.detail?.nodes && Array.isArray(e.detail.nodes)) {
                 for (const c of e.detail.nodes) {
                     executedNodeIds.add(String(c));
@@ -804,6 +811,7 @@ app.registerExtension({
         });
 
         api.addEventListener("execution_error", (e) => {
+            if (!isProgressBarEnabled()) return;
             if (progressBarInstance && e.detail) {
                 const errDetail = e.detail;
                 const errNodeId = errDetail.node_id;
@@ -819,6 +827,6 @@ app.registerExtension({
             }
         });
 
-        console.log("[XENodes.SmartProgressBar] Extension setup completed successfully.");
+        console.log("[XENodes.ProgressBar] Extension setup completed successfully.");
     }
 });
