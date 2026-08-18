@@ -420,7 +420,7 @@ class XENodesProgressBarElement extends HTMLElement {
         if (this.maxSteps > 0 && this.currentStep != null) {
             stepPercent = Math.min(100, Math.round((this.currentStep / this.maxSteps) * 100));
             barStep.style.width = `${stepPercent}%`;
-            stepText = ` (${stepPercent}%)`;
+            stepText = ` (${this.currentStep}/${this.maxSteps} - ${stepPercent}%)`;
         } else {
             barStep.style.width = "0%";
         }
@@ -449,7 +449,7 @@ class XENodesProgressBarElement extends HTMLElement {
                 .progress-container {
                     position: relative;
                     width: 100%;
-                    height: 14px;
+                    height: 16px;
                     background: rgba(15, 23, 42, 0.92);
                     backdrop-filter: blur(8px);
                     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -460,52 +460,71 @@ class XENodesProgressBarElement extends HTMLElement {
                 .progress-container:hover {
                     background: rgba(30, 41, 59, 0.96);
                 }
+                /* Track Divider Line */
+                .bar-divider {
+                    position: absolute;
+                    top: 50%;
+                    left: 0;
+                    width: 100%;
+                    height: 1px;
+                    background: rgba(0, 0, 0, 0.4);
+                    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
+                    z-index: 2;
+                    pointer-events: none;
+                }
+                /* Top Bar: Overall Workflow Progress */
                 .bar-overall {
                     position: absolute;
                     top: 0;
                     left: 0;
-                    height: 100%;
+                    height: 50%;
                     width: 0%;
                     background: linear-gradient(90deg, #059669 0%, #10b981 100%);
-                    opacity: 0.75;
+                    box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.2);
                     transition: width 0.15s ease-out;
                     pointer-events: none;
+                    z-index: 1;
                 }
+                /* Bottom Bar: Current Node Step Progress */
                 .bar-step {
                     position: absolute;
-                    top: 0;
+                    top: 50%;
                     left: 0;
-                    height: 100%;
+                    height: 50%;
                     width: 0%;
-                    background: linear-gradient(90deg, rgba(6, 182, 212, 0.6) 0%, rgba(59, 130, 246, 0.85) 100%);
+                    background: linear-gradient(90deg, #0284c7 0%, #06b6d4 100%);
+                    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
                     transition: width 0.1s ease-out;
                     pointer-events: none;
+                    z-index: 1;
                 }
-                .progress-container.-error .bar-overall {
+                .progress-container.-error .bar-overall,
+                .progress-container.-error .bar-step {
                     background: linear-gradient(90deg, #dc2626 0%, #ef4444 100%) !important;
-                    opacity: 0.9;
+                    opacity: 0.95;
                 }
                 .progress-text {
                     position: relative;
-                    z-index: 2;
+                    z-index: 3;
                     display: flex;
                     align-items: center;
                     justify-content: flex-start;
                     height: 100%;
-                    padding: 0 6px;
-                    font-size: 10px;
+                    padding: 0 8px;
+                    font-size: 10.5px;
                     font-weight: 700;
-                    line-height: 14px;
+                    line-height: 16px;
                     color: #ffffff;
-                    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+                    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 4px rgba(0, 0, 0, 0.6);
                     letter-spacing: 0.2px;
                     white-space: nowrap;
                     overflow: hidden;
                     text-overflow: ellipsis;
                 }
             </style>
-            <div class="progress-container" title="XENodes Progress Bar&#013;Left-Click: Jump into subgraph and focus active node&#013;Right-Click: Return to root graph">
+            <div class="progress-container" title="XENodes Progress Bar&#013;• Top Bar (Green): Overall Workflow Progress&#013;• Bottom Bar (Cyan): Active Node Step Progress&#013;• Left-Click: Jump into subgraph and focus active node&#013;• Right-Click: Return to root graph">
                 <div class="bar-overall"></div>
+                <div class="bar-divider"></div>
                 <div class="bar-step"></div>
                 <div class="progress-text">Idle</div>
             </div>
