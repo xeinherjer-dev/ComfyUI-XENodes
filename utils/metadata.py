@@ -5,9 +5,10 @@ def get_saved_metadata(node_cls) -> dict:
     Extracts metadata (prompt, extra_pnginfo) from a ComfyUI node class.
     """
     saved_metadata = {}
-    if not args.disable_metadata:
-        if node_cls.hidden.extra_pnginfo is not None:
-            saved_metadata.update(node_cls.hidden.extra_pnginfo)
-        if node_cls.hidden.prompt is not None:
-            saved_metadata["prompt"] = node_cls.hidden.prompt
+    hidden = getattr(node_cls, "hidden", None)
+    if not args.disable_metadata and hidden is not None:
+        if getattr(hidden, "extra_pnginfo", None) is not None:
+            saved_metadata.update(hidden.extra_pnginfo)
+        if getattr(hidden, "prompt", None) is not None:
+            saved_metadata["prompt"] = hidden.prompt
     return saved_metadata

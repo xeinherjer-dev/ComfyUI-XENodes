@@ -46,14 +46,29 @@ def encode_audio_to_stream(output, audio_stream, waveform, audio_sample_rate: in
     """
     import av
     # 1. Create the original audio frame
-    orig_frame = av.AudioFrame.from_ndarray(waveform.float().cpu().contiguous().numpy(), format='fltp', layout=layout)
+    if hasattr(waveform, 'cpu'):
+        waveform_np = waveform.float().cpu().contiguous().numpy()
+    else:
+        waveform_np = waveform
+    orig_frame = av.AudioFrame.from_ndarray(waveform_np, format='fltp', layout=layout)
     orig_frame.sample_rate = audio_sample_rate
     orig_frame.pts = 0
 
-    # 2. Get the encoder's required frame size (fallback to None if 0 for variable frame size)
+    # 2. Determine a safe frame size for the encoder
     encoder_frame_size = audio_stream.codec_context.frame_size
-    if encoder_frame_size == 0:
-        encoder_frame_size = None
+    if not encoder_frame_size:
+        codec_name = str(getattr(audio_stream.codec_context, 'name', audio_stream.name)).lower()
+        if "opus" in codec_name:
+            # 20ms standard Opus frame (e.g. 960 samples @ 48kHz)
+            encoder_frame_size = int(output_sample_rate * 0.02)
+        elif "mp3" in codec_name or "lame" in codec_name:
+            encoder_frame_size = 1152
+        elif "flac" in codec_name:
+            encoder_frame_size = 4096
+        elif "aac" in codec_name:
+            encoder_frame_size = 1024
+        else:
+            encoder_frame_size = 1024
 
     # 3. Always use AudioResampler to handle resampling and splitting into required frame sizes
     resampler = av.AudioResampler(
@@ -63,17 +78,20 @@ def encode_audio_to_stream(output, audio_stream, waveform, audio_sample_rate: in
         frame_size=encoder_frame_size
     )
 
-    # 4. Process and encode the main data
+    # 4. Process and encode the main data with accurate timestamps (PTS)
+    current_pts = 0
     resampled_frames = resampler.resample(orig_frame)
     for f in resampled_frames:
-        f.pts = None
+        f.pts = current_pts
+        current_pts += f.samples
         for packet in audio_stream.encode(f):
             output.mux(packet)
 
     # 5. Flush and collect the remaining data in the resampler buffer
     flush_frames = resampler.resample(None)
     for f in flush_frames:
-        f.pts = None
+        f.pts = current_pts
+        current_pts += f.samples
         for packet in audio_stream.encode(f):
             output.mux(packet)
 

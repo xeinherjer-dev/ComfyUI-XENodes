@@ -107,7 +107,9 @@ class SaveAudio(io.ComfyNode):
         audio_codec_str, audio_bitrate = _parse_audio_options(audio_codec, kwargs)
 
         from ..utils.text import apply_text_replacements
-        filename_prefix = apply_text_replacements(filename_prefix, cls.hidden.prompt, cls.hidden.extra_pnginfo)
+        prompt = getattr(cls.hidden, "prompt", None) if getattr(cls, "hidden", None) is not None else None
+        extra_pnginfo = getattr(cls.hidden, "extra_pnginfo", None) if getattr(cls, "hidden", None) is not None else None
+        filename_prefix = apply_text_replacements(filename_prefix, prompt, extra_pnginfo)
 
         config = AUDIO_CODEC_CONFIG.get(audio_codec_str, AUDIO_CODEC_CONFIG["mp3"])
         format_ext = config["ext"]
@@ -125,14 +127,6 @@ class SaveAudio(io.ComfyNode):
         audio_dict = audio if audio is not None else {}
         waveform = audio_dict.get('waveform')
         audio_sample_rate = int(audio_dict.get('sample_rate', 44100))
-        
-        if waveform is not None:
-            if waveform.dim() == 3:
-                waveform = waveform[0]
-            
-            layout = {1: 'mono', 2: 'stereo', 6: '5.1'}.get(waveform.shape[0], 'stereo')
-        else:
-            layout = 'stereo'
 
         output_sample_rate = audio_sample_rate
         if config.get("sample_rate_override") is not None:
@@ -140,16 +134,34 @@ class SaveAudio(io.ComfyNode):
 
         av_audio_codec = config["av_codec"]
 
-        with av.open(file_path, mode='w') as output:
-            if saved_metadata:
-                for key, value in saved_metadata.items():
-                    if isinstance(value, str):
-                        output.metadata[key] = value
-                    else:
-                        output.metadata[key] = json.dumps(value)
+        results = []
 
-            audio_stream = None
-            if waveform is not None:
+        if waveform is not None:
+            if waveform.dim() == 2:
+                waveforms = [waveform]
+            elif waveform.dim() == 3:
+                waveforms = [waveform[i] for i in range(waveform.shape[0])]
+            else:
+                waveforms = [waveform]
+        else:
+            waveforms = []
+
+        for batch_number, w in enumerate(waveforms):
+            filename_with_batch_num = filename.replace("%batch_num%", str(batch_number))
+            file_name = f"{filename_with_batch_num}_{counter:05}_.{format_ext}"
+            file_path = os.path.join(full_output_folder, file_name)
+
+            layout = {1: 'mono', 2: 'stereo', 6: '5.1'}.get(w.shape[0], 'stereo')
+
+            with av.open(file_path, mode='w') as output:
+                if saved_metadata:
+                    for key, value in saved_metadata.items():
+                        if isinstance(value, str):
+                            output.metadata[key] = value
+                        else:
+                            output.metadata[key] = json.dumps(value)
+
+                audio_stream = None
                 try:
                     audio_stream = output.add_stream(av_audio_codec, rate=output_sample_rate, layout=layout)
 
@@ -157,7 +169,7 @@ class SaveAudio(io.ComfyNode):
                         target_bitrate = audio_bitrate
                         if target_bitrate not in config["supported_bitrates"]:
                             target_bitrate = config["default_bitrate"]
-                            
+
                         if target_bitrate == "V0":
                             audio_stream.codec_context.qscale = 1
                         elif target_bitrate is not None:
@@ -166,15 +178,22 @@ class SaveAudio(io.ComfyNode):
                     print(f"[XENodes] Warning: Failed to add audio stream: {e}")
                     audio_stream = None
 
-            if audio_stream is not None and waveform is not None:
-                try:
-                    encode_audio_to_stream(output, audio_stream, waveform, audio_sample_rate, output_sample_rate, layout)
-                except Exception as e:
-                    print(f"[XENodes] Error during audio encoding: {e}")
+                if audio_stream is not None:
+                    try:
+                        encode_audio_to_stream(output, audio_stream, w, audio_sample_rate, output_sample_rate, layout)
+                    except Exception as e:
+                        print(f"[XENodes] Error during audio encoding: {e}")
+
+            results.append(ui.SavedResult(file_name, subfolder, io.FolderType.output))
+            counter += 1
+
+        if not results:
+            file_name = f"{filename}_{counter:05}_.{format_ext}"
+            results.append(ui.SavedResult(file_name, subfolder, io.FolderType.output))
 
         return io.NodeOutput(
             audio,
-            ui=ui.SavedAudios([ui.SavedResult(file_name, subfolder, io.FolderType.output)])
+            ui=ui.SavedAudios(results)
         )
 
 class SaveAudioExtension(ComfyExtension):
