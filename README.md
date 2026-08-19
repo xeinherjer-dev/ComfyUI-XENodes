@@ -121,6 +121,7 @@ Measures and displays the execution time for each node in your workflow directly
 A powerful, subgraph-aware progress bar and node navigator for ComfyUI.
 
 - **Subgraph Deep Drill-down**: Click anywhere on the progress bar to instantly open nested subgraphs (Nodes 2.0 Subgraphs & GroupNodes) and smoothly center on the currently executing node.
+- **Multi-Workflow Tab Aware**: Clicking the progress bar automatically switches to the executing workflow tab if a different tab is currently active.
 - **Hierarchy Breadcrumb Path**: Displays the full subgraph hierarchy path directly in the progress text (e.g., `(1) 54% - [Music Generation > Step 2] MiniMax Text Encode (40%)`).
 - **Pulse Glow Effect**: Highlights the focused node with a vibrant pulsing glow to make active execution instantly visible.
 - **Quick Navigation**: Right-click on the progress bar to quickly jump back to the root graph.

@@ -2,6 +2,7 @@
  * [XENodes.ProgressBar]
  * - Subgraph-aware Progress Bar & Node Navigator for ComfyUI.
  * - Accurately tracks executing nodes across deep subgraph hierarchies (Nodes 2.0 Subgraphs & GroupNodes).
+ * - Multi-Workflow Tab Aware: Automatically switches to the executing workflow tab if a different tab is currently focused.
  * - Click anywhere on the progress bar to instantly drill down into nested subgraphs and smoothly center on the active node.
  * - Provides visual pulse/glow highlighting on focused nodes for effortless tracking.
  * - Right-click to quickly return to the root graph.
@@ -190,6 +191,67 @@ function findNodeAndHierarchy(rootGraph, nodeId, currentPath = []) {
 
 let activeHighlightNode = null;
 let activeHighlightEnd = 0;
+let executingWorkflowTabName = null;
+
+/**
+ * Captures the currently active workflow tab name from ComfyUI DOM.
+ * @returns {string|null}
+ */
+function getActiveWorkflowTabName() {
+    const activeLabel = document.querySelector(".workflow-tabs .p-togglebutton-checked .workflow-label")
+        || document.querySelector(".workflow-tab.active .workflow-label")
+        || document.querySelector(".p-togglebutton-checked .workflow-label");
+    if (activeLabel && activeLabel.textContent) {
+        return activeLabel.textContent.trim();
+    }
+    return null;
+}
+
+/**
+ * Attempts to automatically switch to the workflow tab where execution is occurring.
+ * @returns {Promise<boolean>} Whether a tab switch was performed
+ */
+async function switchTabToExecutingWorkflow() {
+    const tabElements = Array.from(document.querySelectorAll(".workflow-tabs .workflow-tab, .workflow-tab"));
+    if (tabElements.length === 0) return false;
+
+    // 1. Look for a tab with an active execution spinner or indicator (not currently selected)
+    for (const tab of tabElements) {
+        const toggleParent = tab.closest(".p-togglebutton") || tab;
+        const isChecked = toggleParent.classList.contains("p-togglebutton-checked") || tab.classList.contains("active");
+        if (isChecked) continue; // Already on this tab
+
+        // Check if there's a spinner icon or status indicating active run
+        const hasSpinner = tab.querySelector(".pi-spin, [class*='spin'], [class*='loader'], [role='img']") != null;
+        const labelEl = tab.querySelector(".workflow-label");
+        const tabTitle = labelEl ? labelEl.textContent.trim() : "";
+
+        if (hasSpinner || (executingWorkflowTabName && tabTitle && tabTitle === executingWorkflowTabName)) {
+            const clickTarget = toggleParent || tab;
+            clickTarget.click();
+            await new Promise(resolve => setTimeout(resolve, 150));
+            return true;
+        }
+    }
+
+    // 2. Fallback: match by saved tab name
+    if (executingWorkflowTabName) {
+        for (const tab of tabElements) {
+            const labelEl = tab.querySelector(".workflow-label");
+            if (labelEl && labelEl.textContent.trim() === executingWorkflowTabName) {
+                const toggleParent = tab.closest(".p-togglebutton") || tab;
+                if (!toggleParent.classList.contains("p-togglebutton-checked")) {
+                    const clickTarget = toggleParent || tab;
+                    clickTarget.click();
+                    await new Promise(resolve => setTimeout(resolve, 150));
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
 
 /**
  * Triggers a vibrant glowing pulse highlight around the focused node.
@@ -325,7 +387,7 @@ class XENodesProgressBarElement extends HTMLElement {
     }
 
     setupInteractions() {
-        // Left-Click: Drill-down and navigate to executing node inside subgraph
+        // Left-Click: Drill-down and navigate to executing node (switching tab if necessary)
         this.addEventListener("pointerdown", async (e) => {
             if (e.button === 0) { // Left click
                 e.stopPropagation();
@@ -333,8 +395,20 @@ class XENodesProgressBarElement extends HTMLElement {
 
                 if (!this.currentNodeId) return;
 
-                const rootGraph = app.rootGraph || app.graph;
-                const result = findNodeAndHierarchy(rootGraph, this.currentNodeId);
+                let rootGraph = app.rootGraph || app.graph;
+                let result = findNodeAndHierarchy(rootGraph, this.currentNodeId);
+
+                // If node is not found in currently active canvas, switch to executing workflow tab
+                if (!result || !result.node) {
+                    const switched = await switchTabToExecutingWorkflow();
+                    if (switched) {
+                        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                        await new Promise(resolve => setTimeout(resolve, 80));
+                        rootGraph = app.rootGraph || app.graph;
+                        result = findNodeAndHierarchy(rootGraph, this.currentNodeId);
+                    }
+                }
+
                 if (result && result.node) {
                     await navigateAndFocusNode(result.graph, result.node);
                 }
@@ -420,7 +494,7 @@ class XENodesProgressBarElement extends HTMLElement {
         if (this.maxSteps > 0 && this.currentStep != null) {
             stepPercent = Math.min(100, Math.round((this.currentStep / this.maxSteps) * 100));
             barStep.style.width = `${stepPercent}%`;
-            stepText = ` (${this.currentStep}/${this.maxSteps} - ${stepPercent}%)`;
+            stepText = ` (${stepPercent}%)`;
         } else {
             barStep.style.width = "0%";
         }
@@ -449,7 +523,7 @@ class XENodesProgressBarElement extends HTMLElement {
                 .progress-container {
                     position: relative;
                     width: 100%;
-                    height: 16px;
+                    height: 14px;
                     background: rgba(15, 23, 42, 0.92);
                     backdrop-filter: blur(8px);
                     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -460,71 +534,52 @@ class XENodesProgressBarElement extends HTMLElement {
                 .progress-container:hover {
                     background: rgba(30, 41, 59, 0.96);
                 }
-                /* Track Divider Line */
-                .bar-divider {
-                    position: absolute;
-                    top: 50%;
-                    left: 0;
-                    width: 100%;
-                    height: 1px;
-                    background: rgba(0, 0, 0, 0.4);
-                    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
-                    z-index: 2;
-                    pointer-events: none;
-                }
-                /* Top Bar: Overall Workflow Progress */
                 .bar-overall {
                     position: absolute;
                     top: 0;
                     left: 0;
-                    height: 50%;
+                    height: 100%;
                     width: 0%;
                     background: linear-gradient(90deg, #059669 0%, #10b981 100%);
-                    box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+                    opacity: 0.75;
                     transition: width 0.15s ease-out;
                     pointer-events: none;
-                    z-index: 1;
                 }
-                /* Bottom Bar: Current Node Step Progress */
                 .bar-step {
                     position: absolute;
-                    top: 50%;
+                    top: 0;
                     left: 0;
-                    height: 50%;
+                    height: 100%;
                     width: 0%;
-                    background: linear-gradient(90deg, #0284c7 0%, #06b6d4 100%);
-                    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+                    background: linear-gradient(90deg, rgba(6, 182, 212, 0.6) 0%, rgba(59, 130, 246, 0.85) 100%);
                     transition: width 0.1s ease-out;
                     pointer-events: none;
-                    z-index: 1;
                 }
-                .progress-container.-error .bar-overall,
-                .progress-container.-error .bar-step {
+                .progress-container.-error .bar-overall {
                     background: linear-gradient(90deg, #dc2626 0%, #ef4444 100%) !important;
-                    opacity: 0.95;
+                    opacity: 0.9;
                 }
                 .progress-text {
                     position: relative;
-                    z-index: 3;
+                    z-index: 2;
                     display: flex;
                     align-items: center;
                     justify-content: flex-start;
                     height: 100%;
-                    padding: 0 8px;
-                    font-size: 10.5px;
+                    padding: 0 6px;
+                    font-size: 10px;
                     font-weight: 700;
-                    line-height: 16px;
+                    line-height: 14px;
                     color: #ffffff;
-                    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 4px rgba(0, 0, 0, 0.6);
+                    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
                     letter-spacing: 0.2px;
                     white-space: nowrap;
                     overflow: hidden;
                     text-overflow: ellipsis;
                 }
             </style>
-            <div class="progress-container" title="XENodes Progress Bar&#013;• Top Bar (Green): Overall Workflow Progress&#013;• Bottom Bar (Cyan): Active Node Step Progress&#013;• Left-Click: Jump into subgraph and focus active node&#013;• Right-Click: Return to root graph">
+            <div class="progress-container" title="XENodes Progress Bar&#013;Left-Click: Jump into subgraph and focus active node&#013;Right-Click: Return to root graph">
                 <div class="bar-overall"></div>
-                <div class="bar-divider"></div>
                 <div class="bar-step"></div>
                 <div class="progress-text">Idle</div>
             </div>
@@ -683,10 +738,15 @@ app.registerExtension({
         // Initial sync of Progress Bar DOM based on user settings
         syncProgressBarDOM();
 
-        // Hook API queuePrompt to capture totalNodes & prompt structure
+        // Hook API queuePrompt to capture totalNodes & executing workflow tab
         const originalQueuePrompt = api.queuePrompt;
         if (typeof originalQueuePrompt === "function") {
             api.queuePrompt = async function (num, prompt, ...args) {
+                const currentTab = getActiveWorkflowTabName();
+                if (currentTab) {
+                    executingWorkflowTabName = currentTab;
+                }
+
                 const response = await originalQueuePrompt.apply(api, [num, prompt, ...args]);
                 if (response && response.prompt_id && prompt && prompt.output) {
                     promptApiData = prompt.output;
@@ -720,6 +780,11 @@ app.registerExtension({
             executedNodeIds.clear();
             currentExecutingNodeId = null;
 
+            const currentTab = getActiveWorkflowTabName();
+            if (currentTab && !executingWorkflowTabName) {
+                executingWorkflowTabName = currentTab;
+            }
+
             if (progressBarInstance) {
                 progressBarInstance.updateState({
                     currentNodeId: null,
@@ -752,6 +817,7 @@ app.registerExtension({
 
             if (nodeId == null) {
                 currentExecutingNodeId = null;
+                executingWorkflowTabName = null;
                 if (progressBarInstance) {
                     progressBarInstance.updateState({
                         currentNodeId: null,
