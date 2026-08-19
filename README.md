@@ -1,6 +1,6 @@
 # ComfyUI-XENodes
 
-A collection of custom nodes and UI extensions for ComfyUI, featuring Multi-Switch, Multi-Pipe, Slider, Slider 2D, Save Image, Save Video, Save Audio, Save HDR Image, Save HDR Video, Combo Selector, Show Any nodes, and Node Execution Time helper.
+A collection of custom nodes and UI extensions for ComfyUI, featuring Multi-Switch, Multi-Pipe, Slider, Slider 2D, Save Image, Save Video, Save Audio, Save HDR Image, Save HDR Video, Combo Selector, Show Any, Load Image From Folder nodes, and Node Execution Time helper.
 
 ## Features
 
@@ -95,6 +95,15 @@ A visual debug node that displays any input value as text directly on the node.
 
 - **Any Input**: Accepts any data type and converts it to a readable string representation (JSON for complex objects).
 - **Composite ID Support**: Fully compatible with Nodes 2.0 Group Nodes, ensuring progress is saved correctly even when nested.
+
+### Load Image From Folder
+
+Loads a single image from a directory or direct file path without resizing, designed specifically for batch queue workflows and Vision LLMs (e.g., Ollama).
+
+- **No Resizing / Quality Loss**: Retains the exact original resolution and aspect ratio as a single image tensor (`[1, H, W, 3]`).
+- **Auto-Increment & Loop**: The `index` input supports `control_after_generate` (`increment`, `randomize`, etc.) for seamless sequential processing, automatically looping back to the first image when exceeding the total count.
+- **Multiple Sort Modes**: Sort by filename (`name`), `date_modified`, `date_created`, or `random`, with options for `reverse` and recursive `subfolders` search.
+- **Rich Metadata Outputs**: Outputs `IMAGE`, `MASK`, `filename` (STRING), `filepath` (STRING), `index` (INT), and `total_images` (INT).
 
 ### Node Execution Time (UI Extension)
 

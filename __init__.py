@@ -11,6 +11,7 @@ from .nodes.multi_pipe import comfy_entrypoint as multi_pipe_entrypoint
 from .nodes.save_hdr_video import comfy_entrypoint as save_hdr_video_entrypoint
 from .nodes.save_hdr_image import comfy_entrypoint as save_hdr_image_entrypoint
 from .nodes.fast_groups_muter_bypasser import comfy_entrypoint as fast_groups_muter_bypasser_entrypoint
+from .nodes.load_image import comfy_entrypoint as load_image_entrypoint
 
 WEB_DIRECTORY = "./web"
 
@@ -38,6 +39,7 @@ async def comfy_entrypoint() -> XENodesExtension:
         await save_hdr_video_entrypoint(),
         await save_hdr_image_entrypoint(),
         await fast_groups_muter_bypasser_entrypoint(),
+        await load_image_entrypoint(),
     ]
     return XENodesExtension(exts)
 
