@@ -1,14 +1,41 @@
 from __future__ import annotations
 
 import os
+import re
 import torch
 import numpy as np
 from PIL import Image as PILImage, ImageOps as PILImageOps
 from typing_extensions import override
 
 from comfy_api.latest import ComfyExtension, io
+from comfy_api.latest._ui import SavedImages, SavedResult, FolderType
 import comfy.model_management
+import folder_paths
 import node_helpers
+
+
+def _resolve_path(raw_path: str) -> str:
+    path = raw_path.strip().strip('"').strip("'")
+    if not path:
+        return ""
+
+    # If the path exists as-is, return it
+    if os.path.exists(path):
+        return path
+
+    # Auto-convert Windows path to WSL path (e.g., C:\Users\... -> /mnt/c/Users/...)
+    if re.match(r"^[a-zA-Z]:[\\/]", path):
+        drive = path[0].lower()
+        wsl_path = f"/mnt/{drive}/" + path[2:].replace("\\", "/").lstrip("/")
+        if os.path.exists(wsl_path):
+            return wsl_path
+
+    # Standardize backslashes for unix environments if applicable
+    norm_path = path.replace("\\", "/")
+    if os.path.exists(norm_path):
+        return norm_path
+
+    return path
 
 
 class LoadImageFromFolder(io.ComfyNode):
@@ -61,6 +88,7 @@ class LoadImageFromFolder(io.ComfyNode):
                 io.Int.Output("current_index", display_name="index", tooltip="Current index within the image list."),
                 io.Int.Output("total_images", display_name="total_images", tooltip="Total count of images found."),
             ],
+            is_output_node=True,
         )
 
     @classmethod
@@ -71,24 +99,24 @@ class LoadImageFromFolder(io.ComfyNode):
 
     @classmethod
     def execute(cls, path: str, index: int = 0, sort_by: str = "name", reverse: bool = False, subfolders: bool = False) -> io.NodeOutput:
-        path = path.strip().strip('"').strip("'")
-        if not path:
+        resolved_path = _resolve_path(path)
+        if not resolved_path:
             raise ValueError("Path is empty. Please provide a valid directory or image file path.")
 
-        if os.path.isfile(path):
-            files = [path]
-        elif os.path.isdir(path):
+        if os.path.isfile(resolved_path):
+            files = [resolved_path]
+        elif os.path.isdir(resolved_path):
             valid_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif", ".tiff", ".tga"}
             files = []
             if subfolders:
-                for root, _, filenames in os.walk(path):
+                for root, _, filenames in os.walk(resolved_path):
                     for f in filenames:
                         if os.path.splitext(f)[1].lower() in valid_exts:
                             files.append(os.path.join(root, f))
             else:
-                for f in os.listdir(path):
+                for f in os.listdir(resolved_path):
                     if os.path.splitext(f)[1].lower() in valid_exts:
-                        files.append(os.path.join(path, f))
+                        files.append(os.path.join(resolved_path, f))
 
             if not files:
                 raise FileNotFoundError(f"No valid images found in: {path}")
@@ -100,7 +128,7 @@ class LoadImageFromFolder(io.ComfyNode):
             elif sort_by == "date_created":
                 files.sort(key=lambda x: os.path.getctime(x))
             elif sort_by == "random":
-                # Deterministic random shuffle based on index if desired or seeded
+                # Deterministic random shuffle based on index
                 rng = np.random.default_rng(index)
                 rng.shuffle(files)
 
@@ -131,6 +159,16 @@ class LoadImageFromFolder(io.ComfyNode):
             img_arr = np.array(rgb_img).astype(np.float32) / 255.0
             image_tensor = torch.from_numpy(img_arr).unsqueeze(0)  # [1, H, W, 3]
 
+            # Save preview to temp directory for UI preview display
+            temp_dir = folder_paths.get_temp_directory()
+            preview_filename = f"preview_{os.urandom(6).hex()}.webp"
+            preview_path = os.path.join(temp_dir, preview_filename)
+            try:
+                rgb_img.save(preview_path, format="webp", quality=90)
+                ui_output = SavedImages([SavedResult(preview_filename, "", FolderType.temp)])
+            except Exception:
+                ui_output = SavedImages([])
+
         device = comfy.model_management.intermediate_device()
         dtype = comfy.model_management.intermediate_dtype()
         image_tensor = image_tensor.to(device=device, dtype=dtype)
@@ -143,6 +181,7 @@ class LoadImageFromFolder(io.ComfyNode):
             target_file,
             actual_index,
             total_images,
+            ui=ui_output,
         )
 
 

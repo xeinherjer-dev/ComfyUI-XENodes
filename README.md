@@ -101,8 +101,10 @@ A visual debug node that displays any input value as text directly on the node.
 Loads a single image from a directory or direct file path without resizing, designed specifically for batch queue workflows and Vision LLMs (e.g., Ollama).
 
 - **No Resizing / Quality Loss**: Retains the exact original resolution and aspect ratio as a single image tensor (`[1, H, W, 3]`).
+- **Built-in Image Preview**: Automatically displays a preview of the loaded image directly on the node upon execution.
 - **Auto-Increment & Loop**: The `index` input supports `control_after_generate` (`increment`, `randomize`, etc.) for seamless sequential processing, automatically looping back to the first image when exceeding the total count.
 - **Multiple Sort Modes**: Sort by filename (`name`), `date_modified`, `date_created`, or `random`, with options for `reverse` and recursive `subfolders` search.
+- **Windows / WSL Path Compatibility**: Automatically resolves Windows path formats (e.g. `C:\Users\...`) to WSL paths (`/mnt/c/Users/...`) when running in WSL environments.
 - **Rich Metadata Outputs**: Outputs `IMAGE`, `MASK`, `filename` (STRING), `filepath` (STRING), `index` (INT), and `total_images` (INT).
 
 ### Node Execution Time (UI Extension)
