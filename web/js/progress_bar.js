@@ -186,12 +186,29 @@ function findNodeAndHierarchy(rootGraph, nodeId, currentPath = []) {
 }
 
 // ============================================================================
-// 2. Pulse Highlight & Navigation Logic
+// 2. Pulse Highlight & Multi-Tab Navigation Logic
 // ============================================================================
 
 let activeHighlightNode = null;
 let activeHighlightEnd = 0;
 let executingWorkflowTabName = null;
+
+/**
+ * Dispatches a complete simulated click event sequence on an element.
+ * @param {HTMLElement} el
+ */
+function simulateFullClick(el) {
+    if (!el) return;
+    const opts = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new PointerEvent("pointerdown", opts));
+    el.dispatchEvent(new MouseEvent("mousedown", opts));
+    el.dispatchEvent(new PointerEvent("pointerup", opts));
+    el.dispatchEvent(new MouseEvent("mouseup", opts));
+    el.dispatchEvent(new MouseEvent("click", opts));
+    if (typeof el.click === "function") {
+        el.click();
+    }
+}
 
 /**
  * Captures the currently active workflow tab name from ComfyUI DOM.
@@ -209,45 +226,60 @@ function getActiveWorkflowTabName() {
 
 /**
  * Attempts to automatically switch to the workflow tab where execution is occurring.
- * @returns {Promise<boolean>} Whether a tab switch was performed
+ * @returns {boolean} Whether a tab switch trigger was dispatched
  */
-async function switchTabToExecutingWorkflow() {
-    const tabElements = Array.from(document.querySelectorAll(".workflow-tabs .workflow-tab, .workflow-tab"));
-    if (tabElements.length === 0) return false;
+function switchTabToExecutingWorkflow() {
+    // 1. Locate all tab buttons in Topbar
+    const tabButtons = Array.from(document.querySelectorAll(".workflow-tabs .p-togglebutton, .workflow-tabs-container .p-togglebutton, .workflow-tab"));
+    if (tabButtons.length === 0) return false;
 
-    // 1. Look for a tab with an active execution spinner or indicator (not currently selected)
-    for (const tab of tabElements) {
-        const toggleParent = tab.closest(".p-togglebutton") || tab;
-        const isChecked = toggleParent.classList.contains("p-togglebutton-checked") || tab.classList.contains("active");
-        if (isChecked) continue; // Already on this tab
+    let targetTabBtn = null;
 
-        // Check if there's a spinner icon or status indicating active run
-        const hasSpinner = tab.querySelector(".pi-spin, [class*='spin'], [class*='loader'], [role='img']") != null;
-        const labelEl = tab.querySelector(".workflow-label");
-        const tabTitle = labelEl ? labelEl.textContent.trim() : "";
+    // Strategy A: Find inactive tab containing an execution spinner / loader icon
+    for (const el of tabButtons) {
+        const toggleBtn = el.closest(".p-togglebutton") || el;
+        const isActive = toggleBtn.classList.contains("p-togglebutton-checked") || el.classList.contains("active");
+        if (isActive) continue;
 
-        if (hasSpinner || (executingWorkflowTabName && tabTitle && tabTitle === executingWorkflowTabName)) {
-            const clickTarget = toggleParent || tab;
-            clickTarget.click();
-            await new Promise(resolve => setTimeout(resolve, 150));
-            return true;
+        const hasSpinner = el.querySelector(".animate-spin, [class*='animate-spin'], [class*='loader'], [class*='spin'], .pi-spin, [role='img']");
+        if (hasSpinner) {
+            targetTabBtn = toggleBtn;
+            break;
         }
     }
 
-    // 2. Fallback: match by saved tab name
-    if (executingWorkflowTabName) {
-        for (const tab of tabElements) {
-            const labelEl = tab.querySelector(".workflow-label");
-            if (labelEl && labelEl.textContent.trim() === executingWorkflowTabName) {
-                const toggleParent = tab.closest(".p-togglebutton") || tab;
-                if (!toggleParent.classList.contains("p-togglebutton-checked")) {
-                    const clickTarget = toggleParent || tab;
-                    clickTarget.click();
-                    await new Promise(resolve => setTimeout(resolve, 150));
-                    return true;
-                }
+    // Strategy B: Match by saved executing tab name
+    if (!targetTabBtn && executingWorkflowTabName) {
+        for (const el of tabButtons) {
+            const toggleBtn = el.closest(".p-togglebutton") || el;
+            const isActive = toggleBtn.classList.contains("p-togglebutton-checked") || el.classList.contains("active");
+            if (isActive) continue;
+
+            const label = el.querySelector(".workflow-label") || el;
+            if (label && label.textContent && label.textContent.trim() === executingWorkflowTabName) {
+                targetTabBtn = toggleBtn;
+                break;
             }
         }
+    }
+
+    // Strategy C: Any inactive tab if there are only 2 tabs and an execution is active
+    if (!targetTabBtn) {
+        const inactiveTabs = tabButtons.filter(el => {
+            const toggleBtn = el.closest(".p-togglebutton") || el;
+            return !toggleBtn.classList.contains("p-togglebutton-checked") && !el.classList.contains("active");
+        });
+        if (inactiveTabs.length === 1) {
+            targetTabBtn = inactiveTabs[0].closest(".p-togglebutton") || inactiveTabs[0];
+        }
+    }
+
+    if (targetTabBtn) {
+        console.log("[XENodes.ProgressBar] Switching to executing workflow tab...");
+        simulateFullClick(targetTabBtn);
+        const innerTab = targetTabBtn.querySelector(".workflow-tab") || targetTabBtn;
+        simulateFullClick(innerTab);
+        return true;
     }
 
     return false;
@@ -398,19 +430,27 @@ class XENodesProgressBarElement extends HTMLElement {
                 let rootGraph = app.rootGraph || app.graph;
                 let result = findNodeAndHierarchy(rootGraph, this.currentNodeId);
 
-                // If node is not found in currently active canvas, switch to executing workflow tab
+                // If node is not found in currently active canvas, switch tab and poll for graph load
                 if (!result || !result.node) {
-                    const switched = await switchTabToExecutingWorkflow();
-                    if (switched) {
-                        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-                        await new Promise(resolve => setTimeout(resolve, 80));
-                        rootGraph = app.rootGraph || app.graph;
-                        result = findNodeAndHierarchy(rootGraph, this.currentNodeId);
+                    const switchAttempted = switchTabToExecutingWorkflow();
+                    if (switchAttempted) {
+                        // Poll up to 1000ms (every 50ms) for the new graph to load and node to become available
+                        const startTime = performance.now();
+                        while (performance.now() - startTime < 1000) {
+                            await new Promise(resolve => setTimeout(resolve, 50));
+                            rootGraph = app.rootGraph || app.graph;
+                            result = findNodeAndHierarchy(rootGraph, this.currentNodeId);
+                            if (result && result.node) {
+                                break;
+                            }
+                        }
                     }
                 }
 
                 if (result && result.node) {
                     await navigateAndFocusNode(result.graph, result.node);
+                } else {
+                    console.warn("[XENodes.ProgressBar] Could not locate node in graph:", this.currentNodeId);
                 }
             } else if (e.button === 2) { // Right click: Quick return to root graph
                 e.stopPropagation();
