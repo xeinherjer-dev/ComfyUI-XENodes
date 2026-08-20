@@ -377,6 +377,25 @@ class XENodesProgressBarElement extends HTMLElement {
         this.updateView();
     }
 
+    completeExecution(queueRemaining = 0) {
+        if (!this.shadowRoot) return;
+        const barOverall = this.shadowRoot.querySelector(".bar-overall");
+        const barStep = this.shadowRoot.querySelector(".bar-step");
+        const textMain = this.shadowRoot.querySelector(".progress-text");
+        if (!barOverall || !barStep || !textMain) return;
+
+        barOverall.style.width = "100%";
+        barStep.style.width = "100%";
+        const queuePart = queueRemaining > 0 ? `(${queueRemaining}) ` : "";
+        textMain.textContent = `${queuePart}100% - Done`;
+
+        setTimeout(() => {
+            if (!this.isExecuting) {
+                this.updateView();
+            }
+        }, 500);
+    }
+
     updateView() {
         if (!this.shadowRoot) return;
         const container = this.shadowRoot.querySelector(".progress-container");
@@ -404,13 +423,15 @@ class XENodesProgressBarElement extends HTMLElement {
 
         // Overall progress percentage (including fractional step progress of currently executing node)
         let overallPercent = 0;
-        if (this.totalNodes > 0) {
-            let stepFraction = 0;
-            if (this.maxSteps > 0 && this.currentStep != null) {
-                stepFraction = Math.min(1, this.currentStep / this.maxSteps);
-            }
-            const effectiveCompleted = this.executedNodesCount + stepFraction;
-            overallPercent = Math.min(100, Math.round((effectiveCompleted / this.totalNodes) * 100));
+        let stepFraction = 0;
+        if (this.maxSteps > 0 && this.currentStep != null) {
+            stepFraction = Math.min(1, this.currentStep / this.maxSteps);
+        }
+        const effectiveCompleted = this.executedNodesCount + stepFraction;
+        const total = Math.max(this.totalNodes || 1, Math.ceil(effectiveCompleted));
+
+        if (total > 0) {
+            overallPercent = Math.min(100, Math.round((effectiveCompleted / total) * 100));
             barOverall.style.width = `${Math.max(2, overallPercent)}%`;
         } else {
             barOverall.style.width = "2%";
@@ -529,7 +550,78 @@ if (!customElements.get(XENodesProgressBarElement.TAG)) {
 let progressBarInstance = null;
 let currentPromptId = null;
 let currentExecutingNodeId = null;
+let currentQueueRemaining = 0;
 const promptsMap = new Map();
+
+/**
+ * Calculates the count of actively executable nodes in the workflow prompt
+ * by traversing upstream links backward from all output / preview nodes.
+ * @param {any} promptOutput
+ * @returns {number}
+ */
+function calculateActiveExecutionNodes(promptOutput) {
+    if (!promptOutput || typeof promptOutput !== "object") return 0;
+    const allKeys = Object.keys(promptOutput);
+    if (allKeys.length === 0) return 0;
+
+    // 1. Identify terminal / output candidate nodes
+    const terminalNodeIds = new Set();
+    for (const [nodeId, nodeData] of Object.entries(promptOutput)) {
+        if (!nodeData) continue;
+        const classType = String(nodeData.class_type || "");
+        if (
+            classType.includes("Save") ||
+            classType.includes("Preview") ||
+            classType.includes("Output") ||
+            classType.includes("Display") ||
+            classType.includes("Show") ||
+            classType.includes("Record") ||
+            classType.includes("Send") ||
+            classType.includes("VHS_") ||
+            nodeData._meta?.is_output_node
+        ) {
+            terminalNodeIds.add(String(nodeId));
+        }
+    }
+
+    // Fallback: If no explicit output node is identified, check nodes without outgoing consumers
+    if (terminalNodeIds.size === 0) {
+        const consumedNodeIds = new Set();
+        for (const nodeData of Object.values(promptOutput)) {
+            if (!nodeData?.inputs) continue;
+            for (const val of Object.values(nodeData.inputs)) {
+                if (Array.isArray(val) && val.length >= 1) consumedNodeIds.add(String(val[0]));
+            }
+        }
+        for (const id of allKeys) {
+            if (!consumedNodeIds.has(id)) terminalNodeIds.add(id);
+        }
+    }
+
+    if (terminalNodeIds.size === 0) return allKeys.length;
+
+    // 2. Backward BFS traversal to collect all active dependency nodes
+    const activeNodeIds = new Set(terminalNodeIds);
+    const queue = [...terminalNodeIds];
+
+    while (queue.length > 0) {
+        const curId = queue.shift();
+        const nodeData = promptOutput[curId];
+        if (!nodeData || !nodeData.inputs) continue;
+
+        for (const val of Object.values(nodeData.inputs)) {
+            if (Array.isArray(val) && val.length >= 1) {
+                const upstreamId = String(val[0]);
+                if (promptOutput[upstreamId] && !activeNodeIds.has(upstreamId)) {
+                    activeNodeIds.add(upstreamId);
+                    queue.push(upstreamId);
+                }
+            }
+        }
+    }
+
+    return Math.max(1, activeNodeIds.size);
+}
 
 function getOrInitPrompt(promptId) {
     if (!promptsMap.has(promptId)) {
@@ -649,7 +741,7 @@ app.registerExtension({
                     if (currentTab) record.tabName = currentTab;
                     if (prompt?.output) {
                         record.promptApiData = prompt.output;
-                        record.totalNodes = Object.keys(prompt.output).length;
+                        record.totalNodes = calculateActiveExecutionNodes(prompt.output);
                     }
                 }
                 return response;
@@ -663,6 +755,8 @@ app.registerExtension({
                 return;
             }
             const queueRemaining = e.detail?.exec_info?.queue_remaining ?? 0;
+            currentQueueRemaining = queueRemaining;
+
             if (progressBarInstance) {
                 progressBarInstance.updateState({
                     currentQueue: queueRemaining,
@@ -714,6 +808,7 @@ app.registerExtension({
             if (nodeId == null) {
                 currentExecutingNodeId = null;
                 if (progressBarInstance) {
+                    progressBarInstance.completeExecution(currentQueueRemaining);
                     progressBarInstance.updateState({
                         currentNodeId: null,
                         step: 0,
@@ -807,6 +902,13 @@ app.registerExtension({
                         executedNodesCount: promptState.executedNodeIds.size
                     });
                 }
+            }
+        });
+
+        api.addEventListener("execution_success", () => {
+            if (!isProgressBarEnabled()) return;
+            if (progressBarInstance) {
+                progressBarInstance.completeExecution(currentQueueRemaining);
             }
         });
 
