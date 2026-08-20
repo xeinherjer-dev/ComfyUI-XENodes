@@ -38,6 +38,104 @@ def _resolve_path(raw_path: str) -> str:
     return path
 
 
+def get_image_files(path: str, sort_by: str = "name", reverse: bool = False, subfolders: bool = False, index: int = 0) -> list[str]:
+    resolved_path = _resolve_path(path)
+    if not resolved_path:
+        return []
+
+    if os.path.isfile(resolved_path):
+        return [resolved_path]
+    elif os.path.isdir(resolved_path):
+        valid_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif", ".tiff", ".tga"}
+        files = []
+        if subfolders:
+            for root, _, filenames in os.walk(resolved_path):
+                for f in filenames:
+                    if os.path.splitext(f)[1].lower() in valid_exts:
+                        files.append(os.path.join(root, f))
+        else:
+            for f in os.listdir(resolved_path):
+                if os.path.splitext(f)[1].lower() in valid_exts:
+                    files.append(os.path.join(resolved_path, f))
+
+        if not files:
+            return []
+
+        if sort_by == "name":
+            files.sort()
+        elif sort_by == "date_modified":
+            files.sort(key=lambda x: os.path.getmtime(x))
+        elif sort_by == "date_created":
+            files.sort(key=lambda x: os.path.getctime(x))
+        elif sort_by == "random":
+            rng = np.random.default_rng(index)
+            rng.shuffle(files)
+
+        if reverse and sort_by != "random":
+            files.reverse()
+
+        return files
+    return []
+
+
+try:
+    import io as python_io
+    from aiohttp import web
+    from server import PromptServer
+
+    if hasattr(PromptServer, "instance") and PromptServer.instance:
+        @PromptServer.instance.routes.get("/xenodes/load_image/preview")
+        async def get_load_image_preview(request: web.Request) -> web.Response:
+            try:
+                path = request.rel_url.query.get("path", "")
+                index_str = request.rel_url.query.get("index", "0")
+                try:
+                    index = int(index_str)
+                except ValueError:
+                    index = 0
+                sort_by = request.rel_url.query.get("sort_by", "name")
+                reverse = request.rel_url.query.get("reverse", "false").lower() in ("true", "1")
+                subfolders = request.rel_url.query.get("subfolders", "false").lower() in ("true", "1")
+
+                files = get_image_files(path, sort_by=sort_by, reverse=reverse, subfolders=subfolders, index=index)
+                if not files:
+                    return web.Response(status=404, text="No images found")
+
+                total_images = len(files)
+                actual_index = index % total_images
+                target_file = files[actual_index]
+
+                if not os.path.isfile(target_file):
+                    return web.Response(status=404, text="File not found")
+
+                with PILImage.open(target_file) as img:
+                    img = node_helpers.pillow(PILImageOps.exif_transpose, img)
+                    rgb_img = img.convert("RGB")
+
+                    # Resize preview image for optimal response time and memory
+                    max_size = 1024
+                    if rgb_img.width > max_size or rgb_img.height > max_size:
+                        rgb_img.thumbnail((max_size, max_size), PILImage.Resampling.BILINEAR)
+
+                    buf = python_io.BytesIO()
+                    rgb_img.save(buf, format="WEBP", quality=85)
+
+                    return web.Response(
+                        body=buf.getvalue(),
+                        content_type="image/webp",
+                        headers={
+                            "Cache-Control": "public, max-age=10",
+                            "X-Total-Images": str(total_images),
+                            "X-Actual-Index": str(actual_index),
+                            "X-Filename": os.path.basename(target_file),
+                        },
+                    )
+            except Exception as e:
+                return web.Response(status=500, text=str(e))
+except Exception:
+    pass
+
+
 class LoadImageFromFolder(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -103,39 +201,12 @@ class LoadImageFromFolder(io.ComfyNode):
         if not resolved_path:
             raise ValueError("Path is empty. Please provide a valid directory or image file path.")
 
-        if os.path.isfile(resolved_path):
-            files = [resolved_path]
-        elif os.path.isdir(resolved_path):
-            valid_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif", ".tiff", ".tga"}
-            files = []
-            if subfolders:
-                for root, _, filenames in os.walk(resolved_path):
-                    for f in filenames:
-                        if os.path.splitext(f)[1].lower() in valid_exts:
-                            files.append(os.path.join(root, f))
-            else:
-                for f in os.listdir(resolved_path):
-                    if os.path.splitext(f)[1].lower() in valid_exts:
-                        files.append(os.path.join(resolved_path, f))
-
-            if not files:
+        files = get_image_files(path, sort_by=sort_by, reverse=reverse, subfolders=subfolders, index=index)
+        if not files:
+            if os.path.exists(resolved_path):
                 raise FileNotFoundError(f"No valid images found in: {path}")
-
-            if sort_by == "name":
-                files.sort()
-            elif sort_by == "date_modified":
-                files.sort(key=lambda x: os.path.getmtime(x))
-            elif sort_by == "date_created":
-                files.sort(key=lambda x: os.path.getctime(x))
-            elif sort_by == "random":
-                # Deterministic random shuffle based on index
-                rng = np.random.default_rng(index)
-                rng.shuffle(files)
-
-            if reverse and sort_by != "random":
-                files.reverse()
-        else:
-            raise FileNotFoundError(f"Path does not exist: {path}")
+            else:
+                raise FileNotFoundError(f"Path does not exist: {path}")
 
         total_images = len(files)
         actual_index = index % total_images
