@@ -1,34 +1,29 @@
 /**
  * [XENodes.ProgressBar]
  * - Subgraph-aware Progress Bar & Node Navigator for ComfyUI.
- * - Accurately tracks executing nodes across deep subgraph hierarchies (Nodes 2.0 Subgraphs & GroupNodes).
- * - Multi-Workflow Tab Aware: Automatically switches to the executing workflow tab if a different tab is currently focused.
- * - Click anywhere on the progress bar to instantly drill down into nested subgraphs and smoothly center on the active node.
- * - Provides visual pulse/glow highlighting on focused nodes for effortless tracking.
+ * - Deeply tracks executing nodes across complex subgraph hierarchies (Nodes 2.0 Subgraphs & GroupNodes).
+ * - Multi-Workflow Tab Aware: Automatically switches to the executing workflow tab if another tab is focused.
+ * - Multi-Queue Robust: Isolates job progress per prompt_id so progress never resets when queuing new runs.
+ * - Click to smoothly jump/drill-down into executing subgraphs and highlight nodes with an animated glow.
  * - Right-click to quickly return to the root graph.
- * - Cleanly enabled or disabled via Settings -> XENodes -> Progress Bar.
+ * - Cleanly enabled/disabled via Settings -> XENodes -> Progress Bar.
  */
 
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
-
-console.log("[XENodes.ProgressBar] Initializing Progress Bar extension...");
 
 // ============================================================================
 // 1. Subgraph Hierarchy Search & Safe Traversal Utilities
 // ============================================================================
 
 /**
- * Safely extracts inner nodes from a subgraph parent node without throwing TypeErrors.
+ * Safely extracts inner nodes from a subgraph/group parent node.
  * @param {LGraphNode} node
  * @returns {LGraphNode[]}
  */
 function getInnerNodesSafely(node) {
     if (!node) return [];
-
-    if (Array.isArray(node.innerNodes)) {
-        return node.innerNodes;
-    }
+    if (Array.isArray(node.innerNodes)) return node.innerNodes;
 
     const symbols = Object.getOwnPropertySymbols(node);
     for (const sym of symbols) {
@@ -42,27 +37,19 @@ function getInnerNodesSafely(node) {
         try {
             const map = new Map();
             const res = node.getInnerNodes(map, [], [], new Set());
-            if (Array.isArray(res)) {
-                return res.map(item => (item && item.node ? item.node : item));
-            }
-        } catch (e) {
+            if (Array.isArray(res)) return res.map(item => (item?.node ? item.node : item));
+        } catch {
             try {
-                const map = new Map();
-                const res = node.getInnerNodes(map);
-                if (Array.isArray(res)) {
-                    return res.map(item => (item && item.node ? item.node : item));
-                }
-            } catch (e2) {}
+                const res = node.getInnerNodes(new Map());
+                if (Array.isArray(res)) return res.map(item => (item?.node ? item.node : item));
+            } catch {}
         }
     }
-
     return [];
 }
 
 /**
- * Traverses graph hierarchy to locate a node by its ID (flat ID, composite "10:25", or UUID).
- * Returns the target node, its owner graph (LGraph/Subgraph), and the path of parent subgraphs.
- * 
+ * Traverses graph hierarchy to locate a node by ID (flat ID, composite "10:25", or UUID).
  * @param {LGraph} rootGraph
  * @param {string|number} nodeId
  * @param {Array<{graph: LGraph|Subgraph, title: string}>} [currentPath=[]]
@@ -70,23 +57,17 @@ function getInnerNodesSafely(node) {
  */
 function findNodeAndHierarchy(rootGraph, nodeId, currentPath = []) {
     if (!rootGraph || nodeId == null) return null;
-
     const idStr = String(nodeId).trim();
     if (!idStr) return null;
 
-    // 1. Check direct match in root / current graph
-    let directNode = rootGraph.getNodeById(idStr) || rootGraph.getNodeById(Number(idStr));
+    // 1. Direct match in root / current graph
+    const directNode = rootGraph.getNodeById(idStr) || rootGraph.getNodeById(Number(idStr));
     if (directNode) {
-        return {
-            node: directNode,
-            graph: rootGraph,
-            path: currentPath
-        };
+        return { node: directNode, graph: rootGraph, path: currentPath };
     }
 
     // 2. Composite ID parsing (e.g. "10:25" or "10.25")
-    const separators = [":", "."];
-    for (const sep of separators) {
+    for (const sep of [":", "."]) {
         if (idStr.includes(sep)) {
             const parts = idStr.split(sep).filter(p => p.length > 0);
             let curGraph = rootGraph;
@@ -96,25 +77,18 @@ function findNodeAndHierarchy(rootGraph, nodeId, currentPath = []) {
             for (let i = 0; i < parts.length; i++) {
                 const part = parts[i];
                 if (!curGraph) break;
-
                 const n = curGraph.getNodeById(part) || curGraph.getNodeById(Number(part));
-                if (!n) {
-                    foundNode = null;
-                    break;
-                }
+                if (!n) { foundNode = null; break; }
 
                 foundNode = n;
                 if (n.subgraph) {
-                    path.push({
-                        graph: n.subgraph,
-                        title: n.title || n.subgraph.name || `Subgraph #${n.id}`
-                    });
+                    path.push({ graph: n.subgraph, title: n.title || n.subgraph.name || `Subgraph #${n.id}` });
                     curGraph = n.subgraph;
                 } else if (typeof n.getInnerNodes === "function" || Array.isArray(n.innerNodes)) {
-                    const innerNodes = getInnerNodesSafely(n);
+                    const inners = getInnerNodesSafely(n);
                     const nextPart = parts[i + 1];
-                    if (nextPart !== undefined && Array.isArray(innerNodes)) {
-                        const targetInner = innerNodes.find(item => {
+                    if (nextPart !== undefined && Array.isArray(inners)) {
+                        const targetInner = inners.find(item => {
                             if (!item) return false;
                             const itemId = String(item.id);
                             return itemId.endsWith(":" + nextPart) || itemId === nextPart || item.index === Number(nextPart);
@@ -127,41 +101,27 @@ function findNodeAndHierarchy(rootGraph, nodeId, currentPath = []) {
                     }
                 }
             }
-
-            if (foundNode) {
-                return {
-                    node: foundNode,
-                    graph: curGraph,
-                    path: path
-                };
-            }
+            if (foundNode) return { node: foundNode, graph: curGraph, path };
         }
     }
 
-    // 3. Search in all subgraphs registered on root graph (Nodes 2.0 centralized registry)
+    // 3. Search in all subgraphs registered on root graph
     if (rootGraph.subgraphs && typeof rootGraph.subgraphs.values === "function") {
         for (const sub of rootGraph.subgraphs.values()) {
             if (!sub || sub === rootGraph) continue;
             const matchInSub = sub.getNodeById(idStr) || sub.getNodeById(Number(idStr));
             if (matchInSub) {
-                return {
-                    node: matchInSub,
-                    graph: sub,
-                    path: [...currentPath, { graph: sub, title: sub.name || `Subgraph` }]
-                };
+                return { node: matchInSub, graph: sub, path: [...currentPath, { graph: sub, title: sub.name || "Subgraph" }] };
             }
         }
     }
 
-    // 4. Recursive search across child nodes in graph._nodes
+    // 4. Recursive search across child nodes
     const candidateNodes = rootGraph._nodes || rootGraph.nodes || [];
     for (const n of candidateNodes) {
         if (n.subgraph) {
             const subTitle = n.title || n.subgraph.name || `Subgraph #${n.id}`;
-            const subResult = findNodeAndHierarchy(n.subgraph, nodeId, [
-                ...currentPath,
-                { graph: n.subgraph, title: subTitle }
-            ]);
+            const subResult = findNodeAndHierarchy(n.subgraph, nodeId, [...currentPath, { graph: n.subgraph, title: subTitle }]);
             if (subResult) return subResult;
         } else if (typeof n.getInnerNodes === "function" || Array.isArray(n.innerNodes)) {
             const inners = getInnerNodesSafely(n);
@@ -172,16 +132,11 @@ function findNodeAndHierarchy(rootGraph, nodeId, currentPath = []) {
                     return iId === idStr || iId.split(":").at(-1) === idStr || (inner.index != null && String(inner.index) === idStr);
                 });
                 if (found) {
-                    return {
-                        node: found,
-                        graph: found.graph || rootGraph,
-                        path: [...currentPath, { graph: found.graph || rootGraph, title: n.title || `GroupNode #${n.id}` }]
-                    };
+                    return { node: found, graph: found.graph || rootGraph, path: [...currentPath, { graph: found.graph || rootGraph, title: n.title || `GroupNode #${n.id}` }] };
                 }
             }
         }
     }
-
     return null;
 }
 
@@ -191,12 +146,7 @@ function findNodeAndHierarchy(rootGraph, nodeId, currentPath = []) {
 
 let activeHighlightNode = null;
 let activeHighlightEnd = 0;
-let executingWorkflowTabName = null;
 
-/**
- * Dispatches a complete simulated click event sequence on an element.
- * @param {HTMLElement} el
- */
 function simulateFullClick(el) {
     if (!el) return;
     const opts = { bubbles: true, cancelable: true, view: window };
@@ -205,146 +155,98 @@ function simulateFullClick(el) {
     el.dispatchEvent(new PointerEvent("pointerup", opts));
     el.dispatchEvent(new MouseEvent("mouseup", opts));
     el.dispatchEvent(new MouseEvent("click", opts));
-    if (typeof el.click === "function") {
-        el.click();
-    }
+    if (typeof el.click === "function") el.click();
 }
 
-/**
- * Captures the currently active workflow tab name from ComfyUI DOM.
- * @returns {string|null}
- */
 function getActiveWorkflowTabName() {
     const activeLabel = document.querySelector(".workflow-tabs .p-togglebutton-checked .workflow-label")
         || document.querySelector(".workflow-tab.active .workflow-label")
         || document.querySelector(".p-togglebutton-checked .workflow-label");
-    if (activeLabel && activeLabel.textContent) {
-        return activeLabel.textContent.trim();
-    }
-    return null;
+    return activeLabel?.textContent ? activeLabel.textContent.trim() : null;
 }
 
-/**
- * Attempts to automatically switch to the workflow tab where execution is occurring.
- * @returns {boolean} Whether a tab switch trigger was dispatched
- */
-function switchTabToExecutingWorkflow() {
-    // 1. Locate all tab buttons in Topbar
+function switchTabToExecutingWorkflow(targetTabName) {
     const tabButtons = Array.from(document.querySelectorAll(".workflow-tabs .p-togglebutton, .workflow-tabs-container .p-togglebutton, .workflow-tab"));
     if (tabButtons.length === 0) return false;
 
     let targetTabBtn = null;
 
-    // Strategy A: Find inactive tab containing an execution spinner / loader icon
-    for (const el of tabButtons) {
-        const toggleBtn = el.closest(".p-togglebutton") || el;
-        const isActive = toggleBtn.classList.contains("p-togglebutton-checked") || el.classList.contains("active");
-        if (isActive) continue;
-
-        const hasSpinner = el.querySelector(".animate-spin, [class*='animate-spin'], [class*='loader'], [class*='spin'], .pi-spin, [role='img']");
-        if (hasSpinner) {
-            targetTabBtn = toggleBtn;
-            break;
-        }
-    }
-
-    // Strategy B: Match by saved executing tab name
-    if (!targetTabBtn && executingWorkflowTabName) {
+    // Match by target tab name
+    if (targetTabName) {
         for (const el of tabButtons) {
             const toggleBtn = el.closest(".p-togglebutton") || el;
-            const isActive = toggleBtn.classList.contains("p-togglebutton-checked") || el.classList.contains("active");
-            if (isActive) continue;
-
+            if (toggleBtn.classList.contains("p-togglebutton-checked") || el.classList.contains("active")) continue;
             const label = el.querySelector(".workflow-label") || el;
-            if (label && label.textContent && label.textContent.trim() === executingWorkflowTabName) {
+            if (label?.textContent?.trim() === targetTabName) {
                 targetTabBtn = toggleBtn;
                 break;
             }
         }
     }
 
-    // Strategy C: Any inactive tab if there are only 2 tabs and an execution is active
+    // Match by active execution spinner
     if (!targetTabBtn) {
-        const inactiveTabs = tabButtons.filter(el => {
+        for (const el of tabButtons) {
+            const toggleBtn = el.closest(".p-togglebutton") || el;
+            if (toggleBtn.classList.contains("p-togglebutton-checked") || el.classList.contains("active")) continue;
+            if (el.querySelector(".animate-spin, [class*='animate-spin'], [class*='loader'], [class*='spin'], .pi-spin, [role='img']")) {
+                targetTabBtn = toggleBtn;
+                break;
+            }
+        }
+    }
+
+    // Fallback: solitary inactive tab
+    if (!targetTabBtn) {
+        const inactive = tabButtons.filter(el => {
             const toggleBtn = el.closest(".p-togglebutton") || el;
             return !toggleBtn.classList.contains("p-togglebutton-checked") && !el.classList.contains("active");
         });
-        if (inactiveTabs.length === 1) {
-            targetTabBtn = inactiveTabs[0].closest(".p-togglebutton") || inactiveTabs[0];
-        }
+        if (inactive.length === 1) targetTabBtn = inactive[0].closest(".p-togglebutton") || inactive[0];
     }
 
     if (targetTabBtn) {
-        console.log("[XENodes.ProgressBar] Switching to executing workflow tab...");
         simulateFullClick(targetTabBtn);
-        const innerTab = targetTabBtn.querySelector(".workflow-tab") || targetTabBtn;
-        simulateFullClick(innerTab);
+        simulateFullClick(targetTabBtn.querySelector(".workflow-tab") || targetTabBtn);
         return true;
     }
-
     return false;
 }
 
-/**
- * Triggers a vibrant glowing pulse highlight around the focused node.
- * @param {LGraphNode} node
- */
 function pulseHighlightNode(node) {
     if (!node) return;
     activeHighlightNode = node;
-    activeHighlightEnd = performance.now() + 2000; // 2 seconds pulse
-
-    if (app.canvas) {
-        app.canvas.setDirty(true, true);
-    }
+    activeHighlightEnd = performance.now() + 2000;
+    if (app.canvas) app.canvas.setDirty(true, true);
 }
 
-/**
- * Seamlessly navigates the canvas to the target graph and focuses on the target node.
- * @param {LGraph|Subgraph} targetGraph
- * @param {LGraphNode} targetNode
- */
 async function navigateAndFocusNode(targetGraph, targetNode) {
     const canvas = app.canvas;
     if (!canvas || !targetNode) return;
-
     const rootGraph = app.rootGraph || app.graph;
 
-    // 1. Switch graph viewport if target graph differs from current active graph
     if (targetGraph && canvas.graph !== targetGraph) {
         const isRoot = !targetGraph || targetGraph === rootGraph || targetGraph.isRootGraph;
         canvas.subgraph = isRoot ? undefined : targetGraph;
-
-        if (typeof canvas.setGraph === "function") {
-            canvas.setGraph(targetGraph);
-        }
-
-        // Wait two animation frames for LiteGraph / Vue Nodes to mount and layout
-        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        if (typeof canvas.setGraph === "function") canvas.setGraph(targetGraph);
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     }
 
-    // 2. Center and zoom on the target node
     if (typeof canvas.centerOnNode === "function") {
         canvas.centerOnNode(targetNode);
     } else if (typeof canvas.animateToBounds === "function" && targetNode.boundingRect) {
         canvas.animateToBounds(targetNode.boundingRect);
     }
 
-    // 3. Select node
     if (typeof canvas.selectNode === "function") {
         canvas.selectNode(targetNode, false);
     }
-
-    // 4. Trigger pulse glow highlight
     pulseHighlightNode(targetNode);
 }
 
-/**
- * Installs canvas draw hook for rendering the glowing pulse effect around focused nodes.
- */
 function setupPulseDrawHook() {
     const LGraphCanvas = globalThis.LGraphCanvas || (globalThis.LiteGraph && globalThis.LiteGraph.LGraphCanvas);
-    if (!LGraphCanvas || !LGraphCanvas.prototype || LGraphCanvas.prototype.__xenodes_pulse_hooked) return;
+    if (!LGraphCanvas?.prototype || LGraphCanvas.prototype.__xenodes_pulse_hooked) return;
 
     LGraphCanvas.prototype.__xenodes_pulse_hooked = true;
     const originalDrawNode = LGraphCanvas.prototype.drawNode;
@@ -355,33 +257,27 @@ function setupPulseDrawHook() {
         if (activeHighlightNode && node === activeHighlightNode) {
             const now = performance.now();
             if (now < activeHighlightEnd) {
-                const remaining = (activeHighlightEnd - now) / 2000; // 1.0 -> 0.0
-                const pulse = Math.sin((1 - remaining) * Math.PI * 4) * 0.3 + 0.7; // Pulse frequency
+                const remaining = (activeHighlightEnd - now) / 2000;
+                const pulse = Math.sin((1 - remaining) * Math.PI * 4) * 0.3 + 0.7;
 
                 ctx.save();
                 const pad = 8 + (1 - remaining) * 6;
-                const radius = 10;
                 const x = -pad;
                 const y = -pad;
                 const w = node.size[0] + pad * 2;
                 const h = node.size[1] + pad * 2;
 
                 ctx.lineWidth = 3.5;
-                ctx.strokeStyle = `rgba(16, 185, 129, ${(remaining * pulse * 0.9).toFixed(2)})`; // Emerald Glow
-                ctx.shadowColor = `rgba(52, 211, 153, 0.8)`;
+                ctx.strokeStyle = `rgba(16, 185, 129, ${(remaining * pulse * 0.9).toFixed(2)})`;
+                ctx.shadowColor = "rgba(52, 211, 153, 0.8)";
                 ctx.shadowBlur = 16 * pulse;
 
-                // Draw rounded rectangle
                 ctx.beginPath();
-                if (ctx.roundRect) {
-                    ctx.roundRect(x, y, w, h, radius);
-                } else {
-                    ctx.rect(x, y, w, h);
-                }
+                if (ctx.roundRect) ctx.roundRect(x, y, w, h, 10);
+                else ctx.rect(x, y, w, h);
                 ctx.stroke();
                 ctx.restore();
 
-                // Keep repainting while animating
                 this.setDirty(true, true);
             } else {
                 activeHighlightNode = null;
@@ -403,6 +299,7 @@ class XENodesProgressBarElement extends HTMLElement {
         this.currentNodeId = null;
         this.currentQueue = 0;
         this.totalNodes = 0;
+        this.executedNodesCount = 0;
         this.currentStep = 0;
         this.maxSteps = 0;
         this.nodeTitle = "";
@@ -410,6 +307,7 @@ class XENodesProgressBarElement extends HTMLElement {
         this.isError = false;
         this.errorMessage = "";
         this.isExecuting = false;
+        this.currentExecutingTabName = null;
 
         this.render();
     }
@@ -419,50 +317,39 @@ class XENodesProgressBarElement extends HTMLElement {
     }
 
     setupInteractions() {
-        // Left-Click: Drill-down and navigate to executing node (switching tab if necessary)
         this.addEventListener("pointerdown", async (e) => {
-            if (e.button === 0) { // Left click
+            if (e.button === 0) { // Left click: Focus node
                 e.stopPropagation();
                 e.preventDefault();
-
                 if (!this.currentNodeId) return;
 
                 let rootGraph = app.rootGraph || app.graph;
                 let result = findNodeAndHierarchy(rootGraph, this.currentNodeId);
 
-                // If node is not found in currently active canvas, switch tab and poll for graph load
                 if (!result || !result.node) {
-                    const switchAttempted = switchTabToExecutingWorkflow();
+                    const switchAttempted = switchTabToExecutingWorkflow(this.currentExecutingTabName);
                     if (switchAttempted) {
-                        // Poll up to 1000ms (every 50ms) for the new graph to load and node to become available
-                        const startTime = performance.now();
-                        while (performance.now() - startTime < 1000) {
-                            await new Promise(resolve => setTimeout(resolve, 50));
+                        const start = performance.now();
+                        while (performance.now() - start < 1000) {
+                            await new Promise(r => setTimeout(r, 50));
                             rootGraph = app.rootGraph || app.graph;
                             result = findNodeAndHierarchy(rootGraph, this.currentNodeId);
-                            if (result && result.node) {
-                                break;
-                            }
+                            if (result?.node) break;
                         }
                     }
                 }
 
-                if (result && result.node) {
+                if (result?.node) {
                     await navigateAndFocusNode(result.graph, result.node);
-                } else {
-                    console.warn("[XENodes.ProgressBar] Could not locate node in graph:", this.currentNodeId);
                 }
-            } else if (e.button === 2) { // Right click: Quick return to root graph
+            } else if (e.button === 2) { // Right click: Return to root
                 e.stopPropagation();
                 e.preventDefault();
-
                 const rootGraph = app.rootGraph || app.graph;
                 const canvas = app.canvas;
                 if (canvas && rootGraph && canvas.graph !== rootGraph) {
                     canvas.subgraph = undefined;
-                    if (typeof canvas.setGraph === "function") {
-                        canvas.setGraph(rootGraph);
-                    }
+                    if (typeof canvas.setGraph === "function") canvas.setGraph(rootGraph);
                 }
             }
         });
@@ -473,10 +360,11 @@ class XENodesProgressBarElement extends HTMLElement {
         });
     }
 
-    updateState({ currentNodeId, currentQueue, totalNodes, executedNodesCount, step, maxSteps, nodeTitle, hierarchyPath, isError, errorMessage, isExecuting }) {
+    updateState({ currentNodeId, currentQueue, totalNodes, executedNodesCount, step, maxSteps, nodeTitle, hierarchyPath, isError, errorMessage, isExecuting, tabName }) {
         if (currentNodeId !== undefined) this.currentNodeId = currentNodeId;
         if (currentQueue !== undefined) this.currentQueue = currentQueue;
         if (totalNodes !== undefined) this.totalNodes = totalNodes;
+        if (executedNodesCount !== undefined) this.executedNodesCount = executedNodesCount;
         if (step !== undefined) this.currentStep = step;
         if (maxSteps !== undefined) this.maxSteps = maxSteps;
         if (nodeTitle !== undefined) this.nodeTitle = nodeTitle;
@@ -484,18 +372,17 @@ class XENodesProgressBarElement extends HTMLElement {
         if (isError !== undefined) this.isError = isError;
         if (errorMessage !== undefined) this.errorMessage = errorMessage;
         if (isExecuting !== undefined) this.isExecuting = isExecuting;
+        if (tabName !== undefined) this.currentExecutingTabName = tabName;
 
-        this.updateView(executedNodesCount);
+        this.updateView();
     }
 
-    updateView(executedNodesCount = 0) {
+    updateView() {
         if (!this.shadowRoot) return;
-
         const container = this.shadowRoot.querySelector(".progress-container");
         const barOverall = this.shadowRoot.querySelector(".bar-overall");
         const barStep = this.shadowRoot.querySelector(".bar-step");
         const textMain = this.shadowRoot.querySelector(".progress-text");
-
         if (!container || !barOverall || !barStep || !textMain) return;
 
         if (this.isError) {
@@ -509,11 +396,7 @@ class XENodesProgressBarElement extends HTMLElement {
         container.classList.remove("-error");
 
         if (!this.isExecuting) {
-            if (this.currentQueue > 0) {
-                textMain.textContent = `(${this.currentQueue}) In Queue...`;
-            } else {
-                textMain.textContent = `Idle`;
-            }
+            textMain.textContent = this.currentQueue > 0 ? `(${this.currentQueue}) In Queue...` : "Idle";
             barOverall.style.width = "0%";
             barStep.style.width = "0%";
             return;
@@ -522,17 +405,16 @@ class XENodesProgressBarElement extends HTMLElement {
         // Overall progress percentage
         let overallPercent = 0;
         if (this.totalNodes > 0) {
-            overallPercent = Math.min(100, Math.round((executedNodesCount / this.totalNodes) * 100));
+            overallPercent = Math.min(100, Math.round((this.executedNodesCount / this.totalNodes) * 100));
             barOverall.style.width = `${Math.max(2, overallPercent)}%`;
         } else {
             barOverall.style.width = "2%";
         }
 
         // Step progress percentage
-        let stepPercent = 0;
         let stepText = "";
         if (this.maxSteps > 0 && this.currentStep != null) {
-            stepPercent = Math.min(100, Math.round((this.currentStep / this.maxSteps) * 100));
+            const stepPercent = Math.min(100, Math.round((this.currentStep / this.maxSteps) * 100));
             barStep.style.width = `${stepPercent}%`;
             stepText = ` (${stepPercent}%)`;
         } else {
@@ -557,9 +439,7 @@ class XENodesProgressBarElement extends HTMLElement {
                     z-index: 1000;
                     font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                 }
-                :host([hidden]) {
-                    display: none !important;
-                }
+                :host([hidden]) { display: none !important; }
                 .progress-container {
                     position: relative;
                     width: 100%;
@@ -571,9 +451,7 @@ class XENodesProgressBarElement extends HTMLElement {
                     overflow: hidden;
                     transition: background-color 0.2s ease;
                 }
-                .progress-container:hover {
-                    background: rgba(30, 41, 59, 0.96);
-                }
+                .progress-container:hover { background: rgba(30, 41, 59, 0.96); }
                 .bar-overall {
                     position: absolute;
                     top: 0;
@@ -618,7 +496,7 @@ class XENodesProgressBarElement extends HTMLElement {
                     text-overflow: ellipsis;
                 }
             </style>
-            <div class="progress-container" title="XENodes Progress Bar&#013;Left-Click: Jump into subgraph and focus active node&#013;Right-Click: Return to root graph">
+            <div class="progress-container" title="XENodes Progress Bar&#013;Left-Click: Jump to active node&#013;Right-Click: Return to root graph">
                 <div class="bar-overall"></div>
                 <div class="bar-step"></div>
                 <div class="progress-text">Idle</div>
@@ -632,81 +510,68 @@ if (!customElements.get(XENodesProgressBarElement.TAG)) {
 }
 
 // ============================================================================
-// 4. Extension Core Lifecycle & Execution State Tracking
+// 4. Extension Core Lifecycle & Multi-Prompt State Tracking
 // ============================================================================
 
 let progressBarInstance = null;
 let currentPromptId = null;
-let totalNodesInPrompt = 0;
-let executedNodeIds = new Set();
 let currentExecutingNodeId = null;
-let promptApiData = null;
+const promptsMap = new Map();
 
-/**
- * Checks whether the Progress Bar is enabled by the user.
- * @param {boolean} [explicitVal]
- * @returns {boolean}
- */
+function getOrInitPrompt(promptId) {
+    if (!promptsMap.has(promptId)) {
+        promptsMap.set(promptId, {
+            promptApiData: null,
+            totalNodes: 0,
+            executedNodeIds: new Set(),
+            tabName: null
+        });
+    }
+    return promptsMap.get(promptId);
+}
+
 function isProgressBarEnabled(explicitVal) {
     if (explicitVal !== undefined) {
         return explicitVal !== false && explicitVal !== "false" && explicitVal !== 0;
     }
     const val = app.ui?.settings?.getSettingValue("XENodes.ProgressBar.Enabled");
-    if (val === false || val === "false" || val === 0) {
-        return false;
-    }
-    return true;
+    return val !== false && val !== "false" && val !== 0;
 }
 
-/**
- * Resolves node label and its subgraph hierarchy path string.
- * @param {string|number} nodeId
- * @returns {{ title: string, pathStr: string }}
- */
-function resolveNodeDisplayInfo(nodeId) {
+function resolveNodeDisplayInfo(nodeId, promptApiData) {
     if (!nodeId) return { title: "", pathStr: "" };
-
     const rootGraph = app.rootGraph || app.graph;
     const res = findNodeAndHierarchy(rootGraph, nodeId);
 
     let title = "";
     let pathStr = "";
-
-    if (res && res.node) {
+    if (res?.node) {
         title = res.node.title || res.node.type || `Node #${res.node.id}`;
         if (Array.isArray(res.path) && res.path.length > 0) {
             pathStr = res.path.map(p => p.title).join(" > ");
         }
-    } else if (promptApiData && promptApiData[String(nodeId)]) {
+    } else if (promptApiData?.[String(nodeId)]) {
         const apiNode = promptApiData[String(nodeId)];
         title = apiNode._meta?.title || apiNode.class_type || `Node #${nodeId}`;
     } else {
         title = `Node #${nodeId}`;
     }
-
     return { title, pathStr };
 }
 
-/**
- * Mounts, updates, or completely removes the progress bar DOM element.
- * @param {boolean} [explicitEnabled] Optional explicit boolean value from onChange
- */
 function syncProgressBarDOM(explicitEnabled) {
     const isEnabled = isProgressBarEnabled(explicitEnabled);
 
     if (!isEnabled) {
-        // Completely hide and remove all instances from DOM
         if (progressBarInstance) {
             progressBarInstance.style.display = "none";
             progressBarInstance.hidden = true;
-            if (progressBarInstance.parentNode) {
-                progressBarInstance.parentNode.removeChild(progressBarInstance);
-            }
+            progressBarInstance.remove();
         }
         document.querySelectorAll(XENodesProgressBarElement.TAG).forEach(el => {
             el.style.display = "none";
             el.hidden = true;
-            if (el.parentNode) el.parentNode.removeChild(el);
+            el.remove();
         });
         return;
     }
@@ -714,25 +579,18 @@ function syncProgressBarDOM(explicitEnabled) {
     if (!progressBarInstance) {
         progressBarInstance = document.createElement(XENodesProgressBarElement.TAG);
     }
-
     progressBarInstance.style.display = "block";
     progressBarInstance.hidden = false;
 
-    // Mount to ComfyUI body slot if available, otherwise document.body
     const topSlot = document.querySelector(".comfyui-body-top");
-
     if (topSlot) {
-        if (progressBarInstance.parentNode !== topSlot) {
-            topSlot.prepend(progressBarInstance);
-        }
+        if (progressBarInstance.parentNode !== topSlot) topSlot.prepend(progressBarInstance);
     } else {
         progressBarInstance.style.position = "fixed";
         progressBarInstance.style.top = "0";
         progressBarInstance.style.left = "0";
         progressBarInstance.style.width = "100%";
-        if (progressBarInstance.parentNode !== document.body) {
-            document.body.prepend(progressBarInstance);
-        }
+        if (progressBarInstance.parentNode !== document.body) document.body.prepend(progressBarInstance);
     }
 }
 
@@ -743,7 +601,6 @@ function syncProgressBarDOM(explicitEnabled) {
 app.registerExtension({
     name: "XENodes.ProgressBar",
 
-    // Expose extension settings array for standard ComfyUI registration
     settings: [
         {
             id: "XENodes.ProgressBar.Enabled",
@@ -751,46 +608,36 @@ app.registerExtension({
             name: "Display Progress Bar",
             type: "boolean",
             defaultValue: true,
-            onChange: (newValue) => {
-                syncProgressBarDOM(newValue);
-            }
+            onChange: (newValue) => syncProgressBarDOM(newValue)
         }
     ],
 
     async setup() {
-        console.log("[XENodes.ProgressBar] Setting up Progress Bar hooks...");
-
-        // Ensure setting is also registered via addSetting for fallback compatibility
         app.ui?.settings?.addSetting({
             id: "XENodes.ProgressBar.Enabled",
             category: ["XENodes", "Progress Bar"],
             name: "Display Progress Bar",
             type: "boolean",
             defaultValue: true,
-            onChange: (newValue) => {
-                syncProgressBarDOM(newValue);
-            }
+            onChange: (newValue) => syncProgressBarDOM(newValue)
         });
 
-        // Setup pulse glow rendering hook on LiteGraphCanvas
         setupPulseDrawHook();
-
-        // Initial sync of Progress Bar DOM based on user settings
         syncProgressBarDOM();
 
-        // Hook API queuePrompt to capture totalNodes & executing workflow tab
+        // Hook queuePrompt to capture per-job prompt structure and tab name
         const originalQueuePrompt = api.queuePrompt;
         if (typeof originalQueuePrompt === "function") {
             api.queuePrompt = async function (num, prompt, ...args) {
                 const currentTab = getActiveWorkflowTabName();
-                if (currentTab) {
-                    executingWorkflowTabName = currentTab;
-                }
-
                 const response = await originalQueuePrompt.apply(api, [num, prompt, ...args]);
-                if (response && response.prompt_id && prompt && prompt.output) {
-                    promptApiData = prompt.output;
-                    totalNodesInPrompt = Object.keys(prompt.output).length;
+                if (response?.prompt_id) {
+                    const record = getOrInitPrompt(response.prompt_id);
+                    if (currentTab) record.tabName = currentTab;
+                    if (prompt?.output) {
+                        record.promptApiData = prompt.output;
+                        record.totalNodes = Object.keys(prompt.output).length;
+                    }
                 }
                 return response;
             };
@@ -802,7 +649,7 @@ app.registerExtension({
                 syncProgressBarDOM(false);
                 return;
             }
-            const queueRemaining = e.detail?.exec_info?.queue_remaining || 0;
+            const queueRemaining = e.detail?.exec_info?.queue_remaining ?? 0;
             if (progressBarInstance) {
                 progressBarInstance.updateState({
                     currentQueue: queueRemaining,
@@ -816,26 +663,26 @@ app.registerExtension({
                 syncProgressBarDOM(false);
                 return;
             }
-            currentPromptId = e.detail?.prompt_id;
-            executedNodeIds.clear();
+            const pid = e.detail?.prompt_id;
+            currentPromptId = pid;
             currentExecutingNodeId = null;
 
+            const record = getOrInitPrompt(pid);
             const currentTab = getActiveWorkflowTabName();
-            if (currentTab && !executingWorkflowTabName) {
-                executingWorkflowTabName = currentTab;
-            }
+            if (currentTab && !record.tabName) record.tabName = currentTab;
 
             if (progressBarInstance) {
                 progressBarInstance.updateState({
                     currentNodeId: null,
-                    totalNodes: totalNodesInPrompt,
+                    totalNodes: record.totalNodes || 0,
                     executedNodesCount: 0,
                     step: 0,
                     maxSteps: 0,
                     nodeTitle: "",
                     hierarchyPath: "",
                     isError: false,
-                    isExecuting: true
+                    isExecuting: true,
+                    tabName: record.tabName
                 });
             }
         });
@@ -847,17 +694,12 @@ app.registerExtension({
             }
 
             let nodeId = null;
-            if (e.detail !== null && e.detail !== undefined) {
-                if (typeof e.detail === "object") {
-                    nodeId = e.detail.node || e.detail.display_node || null;
-                } else {
-                    nodeId = e.detail;
-                }
+            if (e.detail != null) {
+                nodeId = typeof e.detail === "object" ? (e.detail.node || e.detail.display_node || null) : e.detail;
             }
 
             if (nodeId == null) {
                 currentExecutingNodeId = null;
-                executingWorkflowTabName = null;
                 if (progressBarInstance) {
                     progressBarInstance.updateState({
                         currentNodeId: null,
@@ -871,23 +713,26 @@ app.registerExtension({
                 return;
             }
 
-            if (currentExecutingNodeId && currentExecutingNodeId !== nodeId) {
-                executedNodeIds.add(currentExecutingNodeId);
+            const promptState = currentPromptId ? getOrInitPrompt(currentPromptId) : null;
+            if (promptState && currentExecutingNodeId && currentExecutingNodeId !== nodeId) {
+                promptState.executedNodeIds.add(currentExecutingNodeId);
             }
 
             currentExecutingNodeId = nodeId;
-            const info = resolveNodeDisplayInfo(nodeId);
+            const info = resolveNodeDisplayInfo(nodeId, promptState?.promptApiData);
 
             if (progressBarInstance) {
                 progressBarInstance.updateState({
                     currentNodeId: nodeId,
-                    executedNodesCount: executedNodeIds.size,
+                    totalNodes: promptState?.totalNodes,
+                    executedNodesCount: promptState?.executedNodeIds?.size,
                     step: 0,
                     maxSteps: 0,
                     nodeTitle: info.title,
                     hierarchyPath: info.pathStr,
                     isError: false,
-                    isExecuting: true
+                    isExecuting: true,
+                    tabName: promptState?.tabName
                 });
             }
         });
@@ -903,33 +748,37 @@ app.registerExtension({
             const step = e.detail.value;
             const maxSteps = e.detail.max;
 
+            const promptState = currentPromptId ? getOrInitPrompt(currentPromptId) : null;
             if (nodeId && nodeId !== currentExecutingNodeId) {
-                if (currentExecutingNodeId) executedNodeIds.add(currentExecutingNodeId);
+                if (currentExecutingNodeId && promptState) {
+                    promptState.executedNodeIds.add(currentExecutingNodeId);
+                }
                 currentExecutingNodeId = nodeId;
             }
 
-            const info = resolveNodeDisplayInfo(currentExecutingNodeId);
+            const info = resolveNodeDisplayInfo(currentExecutingNodeId, promptState?.promptApiData);
 
             progressBarInstance.updateState({
                 currentNodeId: currentExecutingNodeId,
-                executedNodesCount: executedNodeIds.size,
-                step: step,
-                maxSteps: maxSteps,
+                totalNodes: promptState?.totalNodes,
+                executedNodesCount: promptState?.executedNodeIds?.size,
+                step,
+                maxSteps,
                 nodeTitle: info.title,
                 hierarchyPath: info.pathStr,
-                isExecuting: true
+                isExecuting: true,
+                tabName: promptState?.tabName
             });
         });
 
         api.addEventListener("execution_cached", (e) => {
             if (!isProgressBarEnabled()) return;
-            if (e.detail?.nodes && Array.isArray(e.detail.nodes)) {
-                for (const c of e.detail.nodes) {
-                    executedNodeIds.add(String(c));
-                }
+            const promptState = currentPromptId ? getOrInitPrompt(currentPromptId) : null;
+            if (promptState && Array.isArray(e.detail?.nodes)) {
+                for (const c of e.detail.nodes) promptState.executedNodeIds.add(String(c));
                 if (progressBarInstance) {
                     progressBarInstance.updateState({
-                        executedNodesCount: executedNodeIds.size
+                        executedNodesCount: promptState.executedNodeIds.size
                     });
                 }
             }
@@ -938,10 +787,8 @@ app.registerExtension({
         api.addEventListener("execution_error", (e) => {
             if (!isProgressBarEnabled()) return;
             if (progressBarInstance && e.detail) {
-                const errDetail = e.detail;
-                const errNodeId = errDetail.node_id;
-                const errMsg = errDetail.exception_message || errDetail.exception_type || "Error occurred";
-
+                const errNodeId = e.detail.node_id;
+                const errMsg = e.detail.exception_message || e.detail.exception_type || "Error occurred";
                 currentExecutingNodeId = errNodeId;
                 progressBarInstance.updateState({
                     currentNodeId: errNodeId,
@@ -951,7 +798,5 @@ app.registerExtension({
                 });
             }
         });
-
-        console.log("[XENodes.ProgressBar] Extension setup completed successfully.");
     }
 });
