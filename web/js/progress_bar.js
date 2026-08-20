@@ -413,12 +413,17 @@ class XENodesProgressBarElement extends HTMLElement {
 
         // Step progress percentage
         let stepText = "";
-        if (this.maxSteps > 0 && this.currentStep != null) {
+        const hasStep = this.maxSteps > 0 && this.currentStep != null;
+        if (hasStep) {
             const stepPercent = Math.min(100, Math.round((this.currentStep / this.maxSteps) * 100));
             barStep.style.width = `${stepPercent}%`;
+            barStep.style.height = "50%";
+            barOverall.style.height = "50%";
             stepText = ` (${stepPercent}%)`;
         } else {
             barStep.style.width = "0%";
+            barStep.style.height = "0%";
+            barOverall.style.height = "100%";
         }
 
         const pathPrefix = this.hierarchyPathStr ? `[${this.hierarchyPathStr}] ` : "";
@@ -459,19 +464,22 @@ class XENodesProgressBarElement extends HTMLElement {
                     height: 100%;
                     width: 0%;
                     background: linear-gradient(90deg, #059669 0%, #10b981 100%);
-                    opacity: 0.75;
-                    transition: width 0.15s ease-out;
+                    opacity: 0.85;
+                    transition: width 0.15s ease-out, height 0.15s ease-out;
                     pointer-events: none;
+                    z-index: 1;
                 }
                 .bar-step {
                     position: absolute;
-                    top: 0;
+                    top: 50%;
                     left: 0;
-                    height: 100%;
+                    height: 50%;
                     width: 0%;
-                    background: linear-gradient(90deg, rgba(6, 182, 212, 0.6) 0%, rgba(59, 130, 246, 0.85) 100%);
+                    background: linear-gradient(90deg, #0284c7 0%, #38bdf8 100%);
+                    opacity: 0.85;
                     transition: width 0.1s ease-out;
                     pointer-events: none;
+                    z-index: 2;
                 }
                 .progress-container.-error .bar-overall {
                     background: linear-gradient(90deg, #dc2626 0%, #ef4444 100%) !important;
