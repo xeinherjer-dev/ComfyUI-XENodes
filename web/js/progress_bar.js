@@ -402,10 +402,15 @@ class XENodesProgressBarElement extends HTMLElement {
             return;
         }
 
-        // Overall progress percentage
+        // Overall progress percentage (including fractional step progress of currently executing node)
         let overallPercent = 0;
         if (this.totalNodes > 0) {
-            overallPercent = Math.min(100, Math.round((this.executedNodesCount / this.totalNodes) * 100));
+            let stepFraction = 0;
+            if (this.maxSteps > 0 && this.currentStep != null) {
+                stepFraction = Math.min(1, this.currentStep / this.maxSteps);
+            }
+            const effectiveCompleted = this.executedNodesCount + stepFraction;
+            overallPercent = Math.min(100, Math.round((effectiveCompleted / this.totalNodes) * 100));
             barOverall.style.width = `${Math.max(2, overallPercent)}%`;
         } else {
             barOverall.style.width = "2%";
@@ -784,6 +789,19 @@ app.registerExtension({
             const promptState = currentPromptId ? getOrInitPrompt(currentPromptId) : null;
             if (promptState && Array.isArray(e.detail?.nodes)) {
                 for (const c of e.detail.nodes) promptState.executedNodeIds.add(String(c));
+                if (progressBarInstance) {
+                    progressBarInstance.updateState({
+                        executedNodesCount: promptState.executedNodeIds.size
+                    });
+                }
+            }
+        });
+
+        api.addEventListener("executed", (e) => {
+            if (!isProgressBarEnabled()) return;
+            const promptState = currentPromptId ? getOrInitPrompt(currentPromptId) : null;
+            if (promptState && e.detail?.node) {
+                promptState.executedNodeIds.add(String(e.detail.node));
                 if (progressBarInstance) {
                     progressBarInstance.updateState({
                         executedNodesCount: promptState.executedNodeIds.size
