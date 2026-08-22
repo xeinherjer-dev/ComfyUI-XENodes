@@ -158,6 +158,30 @@ function simulateFullClick(el) {
     if (typeof el.click === "function") el.click();
 }
 
+function getWorkflowTabButtons() {
+    return Array.from(document.querySelectorAll(
+        ".workflow-tabs .p-togglebutton, .workflow-tabs-container .p-togglebutton, .workflow-tab, [role='tablist'] [role='tab'], .workflow-tabs-list .workflow-tab-item"
+    ));
+}
+
+function isTabActive(el) {
+    if (!el) return false;
+    const toggleBtn = el.closest(".p-togglebutton") || el;
+    return (
+        toggleBtn.classList.contains("p-togglebutton-checked") ||
+        toggleBtn.classList.contains("active") ||
+        toggleBtn.getAttribute("aria-selected") === "true" ||
+        toggleBtn.getAttribute("data-p-highlight") === "true"
+    );
+}
+
+function hasExecutingSpinner(el) {
+    if (!el) return false;
+    return !!el.querySelector(
+        ".animate-spin, [class*='animate-spin'], [class*='loader'], [class*='spin'], .pi-spin, .pi-spinner, [data-icon*='spin'], [role='status']"
+    );
+}
+
 function getActiveWorkflowTabName() {
     const activeLabel = document.querySelector(".workflow-tabs .p-togglebutton-checked .workflow-label")
         || document.querySelector(".workflow-tab.active .workflow-label")
@@ -165,43 +189,61 @@ function getActiveWorkflowTabName() {
     return activeLabel?.textContent ? activeLabel.textContent.trim() : null;
 }
 
+function isCurrentlyOnExecutingTab(targetTabName) {
+    const tabButtons = getWorkflowTabButtons();
+    if (tabButtons.length === 0) return true;
+
+    const activeTab = tabButtons.find(isTabActive);
+    if (activeTab && hasExecutingSpinner(activeTab)) {
+        return true;
+    }
+
+    const otherRunningTab = tabButtons.find(el => !isTabActive(el) && hasExecutingSpinner(el));
+    if (otherRunningTab) {
+        return false;
+    }
+
+    if (targetTabName && activeTab) {
+        const activeLabel = activeTab.querySelector(".workflow-label") || activeTab;
+        const currentName = activeLabel?.textContent?.trim();
+        if (currentName && currentName !== targetTabName) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 function switchTabToExecutingWorkflow(targetTabName) {
-    const tabButtons = Array.from(document.querySelectorAll(".workflow-tabs .p-togglebutton, .workflow-tabs-container .p-togglebutton, .workflow-tab"));
+    const tabButtons = getWorkflowTabButtons();
     if (tabButtons.length === 0) return false;
 
     let targetTabBtn = null;
 
-    // Match by target tab name
-    if (targetTabName) {
+    // 1. Priority: Inactive tab with executing spinner
+    for (const el of tabButtons) {
+        if (isTabActive(el)) continue;
+        if (hasExecutingSpinner(el)) {
+            targetTabBtn = el.closest(".p-togglebutton") || el;
+            break;
+        }
+    }
+
+    // 2. Match by target tab name
+    if (!targetTabBtn && targetTabName) {
         for (const el of tabButtons) {
-            const toggleBtn = el.closest(".p-togglebutton") || el;
-            if (toggleBtn.classList.contains("p-togglebutton-checked") || el.classList.contains("active")) continue;
+            if (isTabActive(el)) continue;
             const label = el.querySelector(".workflow-label") || el;
             if (label?.textContent?.trim() === targetTabName) {
-                targetTabBtn = toggleBtn;
+                targetTabBtn = el.closest(".p-togglebutton") || el;
                 break;
             }
         }
     }
 
-    // Match by active execution spinner
+    // 3. Fallback: solitary inactive tab
     if (!targetTabBtn) {
-        for (const el of tabButtons) {
-            const toggleBtn = el.closest(".p-togglebutton") || el;
-            if (toggleBtn.classList.contains("p-togglebutton-checked") || el.classList.contains("active")) continue;
-            if (el.querySelector(".animate-spin, [class*='animate-spin'], [class*='loader'], [class*='spin'], .pi-spin, [role='img']")) {
-                targetTabBtn = toggleBtn;
-                break;
-            }
-        }
-    }
-
-    // Fallback: solitary inactive tab
-    if (!targetTabBtn) {
-        const inactive = tabButtons.filter(el => {
-            const toggleBtn = el.closest(".p-togglebutton") || el;
-            return !toggleBtn.classList.contains("p-togglebutton-checked") && !el.classList.contains("active");
-        });
+        const inactive = tabButtons.filter(el => !isTabActive(el));
         if (inactive.length === 1) targetTabBtn = inactive[0].closest(".p-togglebutton") || inactive[0];
     }
 
@@ -323,19 +365,28 @@ class XENodesProgressBarElement extends HTMLElement {
                 e.preventDefault();
                 if (!this.currentNodeId) return;
 
+                // 1. If currently active tab is not the executing tab, switch first
+                if (!isCurrentlyOnExecutingTab(this.currentExecutingTabName)) {
+                    const switched = switchTabToExecutingWorkflow(this.currentExecutingTabName);
+                    if (switched) {
+                        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                        await new Promise(r => setTimeout(r, 60));
+                    }
+                }
+
                 let rootGraph = app.rootGraph || app.graph;
                 let result = findNodeAndHierarchy(rootGraph, this.currentNodeId);
 
+                // 2. Fallback if node is not found yet (wait for graph load / retry switch)
                 if (!result || !result.node) {
                     const switchAttempted = switchTabToExecutingWorkflow(this.currentExecutingTabName);
-                    if (switchAttempted) {
-                        const start = performance.now();
-                        while (performance.now() - start < 1000) {
-                            await new Promise(r => setTimeout(r, 50));
-                            rootGraph = app.rootGraph || app.graph;
-                            result = findNodeAndHierarchy(rootGraph, this.currentNodeId);
-                            if (result?.node) break;
-                        }
+                    const maxWait = switchAttempted ? 1000 : 400;
+                    const start = performance.now();
+                    while (performance.now() - start < maxWait) {
+                        await new Promise(r => setTimeout(r, 50));
+                        rootGraph = app.rootGraph || app.graph;
+                        result = findNodeAndHierarchy(rootGraph, this.currentNodeId);
+                        if (result?.node) break;
                     }
                 }
 
