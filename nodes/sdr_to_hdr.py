@@ -92,6 +92,10 @@ class SDRtoHDR(io.ComfyNode):
             itm_exponent=itm_exponent,
             color_space=internal_algo,
         )
+        try:
+            hdr_images._color_space = comfy_color_space
+        except Exception:
+            pass
 
         hdr_video = InputImpl.VideoFromComponents(
             Types.VideoComponents(

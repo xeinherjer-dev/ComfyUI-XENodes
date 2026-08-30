@@ -28,7 +28,7 @@ def find_ffmpeg() -> str | None:
         return None
 
 
-def _parse_image_options(format_input: dict | str, kwargs: dict) -> tuple[str, bool, int, int, float, str]:
+def _parse_image_options(format_input: dict | str, kwargs: dict) -> tuple[str, bool, int, int, float]:
     sources = []
     if isinstance(format_input, dict):
         sources.append(format_input)
@@ -42,7 +42,6 @@ def _parse_image_options(format_input: dict | str, kwargs: dict) -> tuple[str, b
     quality = 90
     compression = 6
     crf = 2.0
-    color_space = "auto"
 
     for src in sources:
         if "format" in src and isinstance(src["format"], str):
@@ -69,17 +68,13 @@ def _parse_image_options(format_input: dict | str, kwargs: dict) -> tuple[str, b
             except (ValueError, TypeError):
                 pass
 
-        if "color_space" in src and isinstance(src["color_space"], str):
-            color_space = src["color_space"]
-
-    return format_str, lossless, quality, compression, crf, color_space
+    return format_str, lossless, quality, compression, crf
 
 
 def _save_avif_image(
     image_tensor: torch.Tensor,
     file_path: str,
     crf: float,
-    color_space: str,
     saved_metadata: dict | None,
 ):
     ffmpeg_exe = find_ffmpeg()
@@ -87,30 +82,29 @@ def _save_avif_image(
         raise RuntimeError("FFmpeg executable not found. Please install ffmpeg or imageio-ffmpeg.")
 
     height, width = image_tensor.shape[0], image_tensor.shape[1]
-    is_hdr = color_space in ("auto", "HDR PQ (HDR10)", "HDR PQ", "HDR HLG", "HDR")
     
-    input_pix_fmt = "gbrpf32le" if is_hdr else "rgb24"
-    out_pix_fmt = "yuv420p10le" if is_hdr else "yuv420p"
+    # Auto-detect color space from tensor metadata or default to HDR PQ
+    color_space = getattr(image_tensor, "_color_space", "HDR PQ")
+    is_hlg = color_space == "HDR" or "HLG" in str(color_space).upper()
 
     cmd = [
         ffmpeg_exe, "-y", "-v", "error",
         "-f", "rawvideo",
-        "-pix_fmt", input_pix_fmt,
+        "-pix_fmt", "gbrpf32le",
         "-s", f"{width}x{height}",
         "-r", "25",
         "-i", "-",
         "-c:v", "libsvtav1",
         "-preset", "6",
         "-svtav1-params", "lookahead=0:tune=0",
-        "-pix_fmt", out_pix_fmt,
+        "-pix_fmt", "yuv420p10le",
         "-crf", str(int(crf)),
     ]
 
-    if is_hdr:
-        if "HLG" in color_space.upper() or color_space == "HDR":
-            cmd.extend(["-color_primaries", "bt2020", "-color_trc", "arib-std-b67", "-colorspace", "bt2020nc"])
-        else:
-            cmd.extend(["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"])
+    if is_hlg:
+        cmd.extend(["-color_primaries", "bt2020", "-color_trc", "arib-std-b67", "-colorspace", "bt2020nc"])
+    else:
+        cmd.extend(["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"])
 
     cmd.extend(["-frames:v", "1", file_path])
 
@@ -119,11 +113,8 @@ def _save_avif_image(
 
     try:
         rgb_tensor = image_tensor[..., :3].detach().to(device="cpu", dtype=torch.float32).clamp(0.0, 1.0)
-        if is_hdr:
-            gbr_planar = rgb_tensor[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
-            img_bytes = gbr_planar.numpy().astype(np.float32).tobytes()
-        else:
-            img_bytes = (rgb_tensor * 255.0).round().to(torch.uint8).contiguous().numpy().tobytes()
+        gbr_planar = rgb_tensor[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
+        img_bytes = gbr_planar.numpy().astype(np.float32).tobytes()
 
         proc.stdin.write(img_bytes)
         proc.stdin.close()
@@ -178,7 +169,7 @@ class SaveImage(io.ComfyNode):
             node_id="XENodes.SaveImage",
             display_name="Save Image",
             category="xenodes/image",
-            description="Saves the input images as PNG, WebP, or 10-bit HDR AVIF.",
+            description="Saves the input images as PNG, WebP, or 10-bit HDR AVIF. AVIF automatically detects HDR color space from SDR to HDR.",
             inputs=[
                 io.Image.Input("images", tooltip="The images to save (supports SDR and 10-bit HDR images)."),
                 io.String.Input(
@@ -206,13 +197,6 @@ class SaveImage(io.ComfyNode):
                             "avif",
                             [
                                 io.Float.Input("crf", default=2.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CRF for AVIF AV1 (lower = higher quality, default 2)."),
-                                io.Combo.Input(
-                                    "color_space",
-                                    options=["auto", "HDR(PQ)", "HDR(HLG)", "sRGB"],
-                                    default="auto",
-                                    optional=True,
-                                    tooltip="Color space / EOTF metadata for AVIF. 'auto' selects HDR(PQ).",
-                                ),
                             ]
                         ),
                     ],
@@ -226,7 +210,7 @@ class SaveImage(io.ComfyNode):
 
     @classmethod
     def execute(cls, images: Input.Image, filename_prefix: str, format: dict | str = "png", **kwargs) -> io.NodeOutput:
-        format_str, lossless, quality, compression, crf, color_space = _parse_image_options(format, kwargs)
+        format_str, lossless, quality, compression, crf = _parse_image_options(format, kwargs)
 
         from ..utils.text import apply_text_replacements
         filename_prefix = apply_text_replacements(filename_prefix, cls.hidden.prompt, cls.hidden.extra_pnginfo)
@@ -254,7 +238,6 @@ class SaveImage(io.ComfyNode):
                     image_tensor=image_tensor,
                     file_path=file_path,
                     crf=crf,
-                    color_space=color_space,
                     saved_metadata=saved_metadata,
                 )
             elif format_str == "webp":
