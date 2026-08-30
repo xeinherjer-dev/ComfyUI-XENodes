@@ -428,9 +428,7 @@ class SaveVideo(io.ComfyNode):
 
         print(
             f"[XENodes] SaveVideo breakdown:\n"
-            f"  - get_components: {t_get_comp - t_prep_start:.3f}s\n"
-            f"  - expand_audio:  {t_expand_audio - t_get_comp:.3f}s\n"
-            f"  - prepare_files: {t_files_prep - t_expand_audio:.3f}s\n"
+            f"  - prepare:       {t_encode_start - t0:.3f}s\n"
             f"  - ffmpeg encode: {t_encode_end - t_encode_start:.3f}s\n"
             f"  - TOTAL:         {t_encode_end - t0:.3f}s"
         )
