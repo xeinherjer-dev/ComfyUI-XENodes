@@ -71,9 +71,9 @@ class SaveHDRImage(io.ComfyNode):
         return io.Schema(
             node_id="XENodes.SaveHDRImage",
             display_name="Save HDR Image",
-            category="xenodes/experimental",
-            is_experimental=True,
-            description="Saves the input image natively as HDR AVIF using ffmpeg.",
+            category="xenodes/deprecated",
+            is_deprecated=True,
+            description="[DEPRECATED] Please use 'SDR to HDR Image' -> 'Save Image' (AVIF) instead. Saves the input image natively as HDR AVIF.",
             inputs=[
                 io.Image.Input("images", tooltip="The images to save."),
                 io.String.Input("filename_prefix", default="image/ComfyUI", tooltip="The prefix for the file to save."),

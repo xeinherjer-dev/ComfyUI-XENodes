@@ -71,19 +71,33 @@ def _iter_frame_byte_chunks(
     images: torch.Tensor,
     frame_indices: list[int],
     total_plays: int,
+    is_10bit: bool = False,
     max_chunk_bytes: int = _MAX_RAW_FRAME_CHUNK_BYTES,
 ):
-    bytes_per_frame = images.shape[1] * images.shape[2] * 3
-    frames_per_chunk = max(1, min(32, max_chunk_bytes // bytes_per_frame))
-    
-    full_indices = []
-    for _ in range(total_plays):
-        full_indices.extend(frame_indices)
+    if is_10bit:
+        bytes_per_frame = images.shape[1] * images.shape[2] * 3 * 2  # 16-bit uint (rgb48le)
+        frames_per_chunk = max(1, min(16, max_chunk_bytes // bytes_per_frame))
         
-    for start in range(0, len(full_indices), frames_per_chunk):
-        chunk_indices = full_indices[start : start + frames_per_chunk]
-        chunk = images[chunk_indices, ..., :3].detach().to(device="cpu", dtype=torch.float32).clamp_(0, 1)
-        yield (chunk * 255.0).round_().to(torch.uint8).numpy().tobytes()
+        full_indices = []
+        for _ in range(total_plays):
+            full_indices.extend(frame_indices)
+            
+        for start in range(0, len(full_indices), frames_per_chunk):
+            chunk_indices = full_indices[start : start + frames_per_chunk]
+            chunk = images[chunk_indices, ..., :3].detach().to(device="cpu", dtype=torch.float32).clamp_(0.0, 1.0)
+            yield (chunk * 65535.0).round_().to(torch.int32).clamp_(0, 65535).to(torch.uint16).numpy().tobytes()
+    else:
+        bytes_per_frame = images.shape[1] * images.shape[2] * 3
+        frames_per_chunk = max(1, min(32, max_chunk_bytes // bytes_per_frame))
+        
+        full_indices = []
+        for _ in range(total_plays):
+            full_indices.extend(frame_indices)
+            
+        for start in range(0, len(full_indices), frames_per_chunk):
+            chunk_indices = full_indices[start : start + frames_per_chunk]
+            chunk = images[chunk_indices, ..., :3].detach().to(device="cpu", dtype=torch.float32).clamp_(0.0, 1.0)
+            yield (chunk * 255.0).round_().to(torch.uint8).numpy().tobytes()
 
 def _parse_options(format_input: dict | str, kwargs: dict) -> tuple[str, str, float | None, str, str | None]:
     sources = []
@@ -145,9 +159,9 @@ class SaveVideo(io.ComfyNode):
             node_id="XENodes.SaveVideo",
             display_name="Save Video",
             category="xenodes/video",
-            description="Saves the input video natively with AV1/CRF support, independently of core save_to.",
+            description="Saves the input video (SDR or HDR) natively with AV1/CRF and NVENC support.",
             inputs=[
-                io.Video.Input("video", tooltip="The video to save."),
+                io.Video.Input("video", tooltip="The video to save (supports both SDR and 10-bit HDR videos)."),
                 io.String.Input("filename_prefix", default="video/ComfyUI", tooltip="The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."),
                 io.DynamicCombo.Input(
                     "format",
@@ -237,7 +251,11 @@ class SaveVideo(io.ComfyNode):
         codec = codec_str
         audio_codec = audio_codec_str
 
-        print(f"[XENodes] SaveVideo parsed: format={format!r}, codec={codec!r}, crf={crf!r}, audio_codec={audio_codec!r}, audio_bitrate={audio_bitrate!r}")
+        color_space = video.get_color_space()
+        bit_depth = video.get_bit_depth()
+        is_hdr = (color_space in ("HDR PQ", "HDR")) or (bit_depth >= 10)
+
+        print(f"[XENodes] SaveVideo parsed: format={format!r}, codec={codec!r}, crf={crf!r}, color_space={color_space!r}, bit_depth={bit_depth!r}, is_hdr={is_hdr}")
 
         from ..utils.text import apply_text_replacements
         filename_prefix = apply_text_replacements(filename_prefix, cls.hidden.prompt, cls.hidden.extra_pnginfo)
@@ -283,10 +301,10 @@ class SaveVideo(io.ComfyNode):
             crf = crf_defaults.get(codec, 23.0)
 
         codec_config = {
-            'h264': {'codec': 'libx264', 'pix_fmt': 'yuv420p', 'options': ['-preset', 'slow']},
+            'h264': {'codec': 'libx264', 'pix_fmt': 'yuv420p10le' if is_hdr else 'yuv420p', 'options': ['-preset', 'slow']},
             'h265': {'codec': 'libx265', 'pix_fmt': 'yuv420p10le', 'options': ['-preset', 'slow']},
             'av1':  {'codec': 'libsvtav1', 'pix_fmt': 'yuv420p10le', 'options': ['-preset', '6']},
-            'h264_nvenc': {'codec': 'h264_nvenc', 'pix_fmt': 'yuv420p', 'options': ['-preset', 'p7']},
+            'h264_nvenc': {'codec': 'h264_nvenc', 'pix_fmt': 'yuv420p10le' if is_hdr else 'yuv420p', 'options': ['-preset', 'p7']},
             'hevc_nvenc': {'codec': 'hevc_nvenc', 'pix_fmt': 'p010le', 'options': ['-preset', 'p7']},
             'av1_nvenc':  {'codec': 'av1_nvenc', 'pix_fmt': 'p010le', 'options': ['-preset', 'p7']}
         }
@@ -303,9 +321,10 @@ class SaveVideo(io.ComfyNode):
 
         cmd = [ffmpeg_exe, "-y", "-v", "error"]
 
+        input_pix_fmt = "rgb48le" if is_hdr else "rgb24"
         cmd.extend([
             "-f", "rawvideo",
-            "-pix_fmt", "rgb24",
+            "-pix_fmt", input_pix_fmt,
             "-s", f"{width}x{height}",
             "-framerate", str(float(frame_rate)),
             "-i", "-",
@@ -348,6 +367,16 @@ class SaveVideo(io.ComfyNode):
         else:
             cmd.extend(["-crf", str(int(crf))])
 
+        if format == "mp4":
+            cmd.extend(["-movflags", "+use_metadata_tags+faststart"])
+
+        # HDR Color Properties & Metadata
+        if is_hdr:
+            if color_space == "HDR":  # HLG
+                cmd.extend(["-color_primaries", "bt2020", "-color_trc", "arib-std-b67", "-colorspace", "bt2020nc"])
+            else:  # HDR PQ
+                cmd.extend(["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"])
+
         if audio_map:
             audio_codec_map = {
                 "aac": "aac",
@@ -360,9 +389,6 @@ class SaveVideo(io.ComfyNode):
                 cmd.extend(["-ar", "48000"])
             if audio_bitrate is not None and av_audio_codec != "flac":
                 cmd.extend(["-b:a", audio_bitrate])
-
-        if format == "mp4":
-            cmd.extend(["-movflags", "+use_metadata_tags+faststart"])
 
         cmd.append(file_path)
 
@@ -379,7 +405,7 @@ class SaveVideo(io.ComfyNode):
         )
 
         try:
-            for chunk in _iter_frame_byte_chunks(images, frame_indices, total_plays):
+            for chunk in _iter_frame_byte_chunks(images, frame_indices, total_plays, is_10bit=is_hdr):
                 process.stdin.write(chunk)
             process.stdin.close()
             retcode = process.wait()

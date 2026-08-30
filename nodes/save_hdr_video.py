@@ -152,9 +152,9 @@ class SaveHDRVideo(io.ComfyNode):
         return io.Schema(
             node_id="XENodes.SaveHDRVideo",
             display_name="Save HDR Video",
-            category="xenodes/experimental",
-            is_experimental=True,
-            description="Saves the input video natively as HDR using ffmpeg, without AI processing models.",
+            category="xenodes/deprecated",
+            is_deprecated=True,
+            description="[DEPRECATED] Please use 'SDR to HDR Video' -> 'Save Video' instead. Saves the input video natively as HDR using ffmpeg.",
             inputs=[
                 io.Video.Input("video", tooltip="The video to save."),
                 io.String.Input("filename_prefix", default="video/ComfyUI", tooltip="The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."),
@@ -332,10 +332,8 @@ class SaveHDRVideo(io.ComfyNode):
         cmd.extend(["-map", video_map])
         if audio_map:
             cmd.extend(["-map", audio_map])
-        if meta_map:
-            cmd.extend(["-map_metadata", meta_map])
-
-        cmd.extend(["-c:v", av_codec, "-pix_fmt", "yuv420p10le"])
+        pix_fmt = "p010le" if "nvenc" in codec else "yuv420p10le"
+        cmd.extend(["-c:v", av_codec, "-pix_fmt", pix_fmt])
         cmd.extend(base_options)
 
         if "nvenc" in av_codec:
