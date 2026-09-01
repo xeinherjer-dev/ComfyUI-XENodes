@@ -1,6 +1,6 @@
 # ComfyUI-XENodes
 
-A collection of custom nodes and UI extensions for ComfyUI, featuring Multi-Switch, Multi-Pipe, Slider, Slider 2D, Save Image, Save Video, Save Audio, Save HDR Image, Save HDR Video, Combo Selector, Show Any, Load Image From Folder nodes, and Node Execution Time helper.
+A collection of custom nodes and UI extensions for ComfyUI, featuring Multi-Switch, Multi-Pipe, Slider, Slider 2D, SDR to HDR, Save Image, Save Video, Save Audio, Combo Selector, Show Any, Load Image From Folder nodes, and Node Execution Time helper.
 
 ## Features
 
@@ -8,7 +8,7 @@ A collection of custom nodes and UI extensions for ComfyUI, featuring Multi-Swit
 
 ## Requirements
 
-- **FFmpeg**: Required for `Save HDR Image` and `Save HDR Video` nodes. Ensure `ffmpeg` is installed and available in your system's PATH.
+- **FFmpeg**: Required for `Save Video`, `Save Image` (AVIF format), and `Save Audio` nodes. Ensure `ffmpeg` is installed and available in your system's PATH.
 
 ## Installation
 
@@ -57,13 +57,31 @@ An intuitive 2D slider node for manipulating X and Y values simultaneously on a 
 - **Dynamic Type Switching**: Similar to the Slider node, the output port types for each axis change dynamically based on their respective step settings.
 - **Snap Feature**: Enable the `snap` property to snap the handle to the specified step increments.
 
+### SDR to HDR
+
+Expands SDR images, video frames, or video into 10-bit HDR using Inverse Tone Mapping and wide color gamut conversion.
+
+- **Inverse Tone Mapping (ITM)**: Soft-knee luminance expansion with configurable `peak_nits`, `itm_knee`, and `itm_exponent`.
+- **Wide Color Gamut**: Converts linear BT.709 to linear BT.2020 color space.
+- **HDR Transfer Functions**: Supports both **HDR(PQ)** (SMPTE ST 2084 / HDR10) and **HDR(HLG)** (ITU-R BT.2100) curves.
+- **Image & Video Support**: Accepts `IMAGE` or `VIDEO` inputs and outputs HDR `IMAGE` and 10-bit HDR `VIDEO`.
+- **Chunked Processing**: Memory-safe batch execution for high-resolution images and video frames.
+
 ### Save Image
 
-An image saving node with configurable **format** (`png`, `webp`), **lossless** encoding, and **quality** settings.
+An image saving node with configurable format, compression, and HDR support.
+
+- **Format Support**: Encode to `png`, `webp` (with lossless and quality control), or 10-bit `avif`.
+- **Automatic HDR Detection**: Automatically detects HDR color space metadata from `SDR to HDR` and applies proper CICP parameters for AVIF export.
+- **Metadata Embedding**: Embeds ComfyUI workflow and prompt metadata into AVIF (via `exiftool`), PNG, and WebP.
 
 ### Save Video
 
-A video saving node with configurable **format** (`mp4`, `webm`), **codec** (`h264`, `h265`, `av1`), and **crf** settings.
+A video saving node with configurable format, codec, and 10-bit HDR encoding support.
+
+- **Format & Codec Support**: Encode to `mp4` or `webm` using `h264`, `h265`, `av1`, or GPU-accelerated NVENC codecs.
+- **HDR Pipeline**: Automatically applies 10-bit pixel formats (`yuv420p10le`, `p010le`) and BT.2020/PQ/HLG metadata tags to FFmpeg when processing HDR video.
+- **Quality Control**: Configurable `crf` and audio bitrate settings.
 
 ### Save Audio
 
@@ -73,13 +91,10 @@ Save audio clips natively with professional codec support.
 - **Bitrate Control**: Select from standard bitrates or use variable bitrate (V0) for MP3.
 - **Native Preview**: Includes a built-in audio player for immediate feedback in the ComfyUI interface.
 
-### Save HDR Image
+### Save HDR Image / Save HDR Video `[Deprecated]`
 
-Save images in HDR format (AVIF) with support for PQ (SMPTE ST 2084) color space.
-
-### Save HDR Video
-
-Save videos in HDR format with support for high bit-depth and PQ color space.
+> [!WARNING]
+> These standalone experimental nodes are now deprecated. Please use **`SDR to HDR`** combined with **`Save Image`** (AVIF) or **`Save Video`** instead.
 
 ### Combo Selector
 
