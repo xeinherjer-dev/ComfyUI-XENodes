@@ -2,7 +2,6 @@ from __future__ import annotations
 from typing_extensions import override
 import json
 from comfy_api.latest import ComfyExtension, io
-from comfy_api.latest import _io
 
 class ComboSelectorNode(io.ComfyNode):
     @classmethod
@@ -16,7 +15,7 @@ class ComboSelectorNode(io.ComfyNode):
                 io.String.Input("hidden_list", default="[]"),
             ],
             outputs=[
-                _io.Custom("COMBO").Output(display_name="COMBO"),
+                io.AnyType.Output(display_name="COMBO"),
                 io.String.Output(display_name="STRING"),
             ],
         )
