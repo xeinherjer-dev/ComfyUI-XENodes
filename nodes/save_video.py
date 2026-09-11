@@ -8,6 +8,7 @@ import json
 import time
 import math
 import torch
+import av
 from fractions import Fraction
 from typing_extensions import override
 
@@ -19,6 +20,87 @@ from ..utils.video import generate_frame_indices
 from ..utils.metadata import get_saved_metadata
 
 _MAX_RAW_FRAME_CHUNK_BYTES = 64 * 1024 * 1024
+
+def _can_passthrough_video(
+    video: Input.Video,
+    target_format: str,
+    target_audio_codec: str,
+    target_audio_bitrate: str | None,
+    loop_count: int,
+    pingpong: bool,
+) -> tuple[bool, str | None, str | None, bool, bool]:
+    """
+    Checks if the video input can be saved without re-encoding the video track.
+    Returns:
+        (can_video_passthrough, source_file_path, video_codec_name, has_audio, can_audio_copy)
+    """
+    if loop_count != 0 or pingpong:
+        return False, None, None, False, False
+
+    if not hasattr(video, "get_stream_source"):
+        return False, None, None, False, False
+
+    # Check for trim or crop (VideoFromFile internal attributes)
+    if getattr(video, "_VideoFromFile__start_time", 0) != 0:
+        return False, None, None, False, False
+    if getattr(video, "_VideoFromFile__duration", 0) != 0:
+        return False, None, None, False, False
+    if getattr(video, "_VideoFromFile__crop", None) is not None:
+        return False, None, None, False, False
+
+    source = video.get_stream_source()
+    if not isinstance(source, (str, os.PathLike)) or not os.path.exists(source):
+        return False, None, None, False, False
+
+    source_path = str(source)
+
+    try:
+        with av.open(source_path, mode="r") as container:
+            if not container.streams.video:
+                return False, None, None, False, False
+            v_stream = container.streams.video[0]
+            v_codec = v_stream.codec.canonical_name if v_stream.codec else ""
+
+            # Video container compatibility check
+            if target_format == "mp4":
+                if v_codec not in {"h264", "hevc", "av1", "mpeg4"}:
+                    return False, None, None, False, False
+            elif target_format == "webm":
+                if v_codec not in {"av1", "vp9", "vp8"}:
+                    return False, None, None, False, False
+            else:
+                return False, None, None, False, False
+
+            # Check audio streams
+            has_audio = len(container.streams.audio) > 0
+            can_audio_copy = False
+            if has_audio:
+                a_stream = container.streams.audio[0]
+                a_codec = a_stream.codec.canonical_name if a_stream.codec else ""
+                
+                # Check if the source audio codec matches the requested format and target codec
+                if target_format == "mp4":
+                    allowed_codecs = {"aac", "mp3", "opus", "flac", "ac3", "eac3"}
+                    if a_codec in allowed_codecs:
+                        if target_audio_codec == a_codec and target_audio_bitrate is None:
+                            can_audio_copy = True
+                        elif target_audio_codec == "aac" and a_codec == "aac":
+                            can_audio_copy = (target_audio_bitrate is None or target_audio_bitrate == "128k")
+                elif target_format == "webm":
+                    allowed_codecs = {"opus", "vorbis"}
+                    if a_codec in allowed_codecs:
+                        if target_audio_codec == a_codec and target_audio_bitrate is None:
+                            can_audio_copy = True
+                        elif target_audio_codec == "opus" and a_codec == "opus":
+                            can_audio_copy = (target_audio_bitrate is None or target_audio_bitrate == "128k")
+
+            return True, source_path, v_codec, has_audio, can_audio_copy
+
+    except Exception as e:
+        print(f"[XENodes] SaveVideo passthrough check failed: {e}")
+        return False, None, None, False, False
+
+    return False, None, None, False, False
 
 def find_ffmpeg() -> str | None:
     path_ffmpeg = shutil.which("ffmpeg")
@@ -273,6 +355,72 @@ class SaveVideo(io.ComfyNode):
         file_name = f"{filename}_{counter:05}_.{format}"
         file_path = os.path.join(full_output_folder, file_name)
 
+        ffmpeg_exe = find_ffmpeg()
+        if not ffmpeg_exe:
+            raise RuntimeError("FFmpeg executable not found. Please install ffmpeg or imageio-ffmpeg.")
+
+        # Check if the input video can be reused without re-encoding (auto passthrough)
+        can_passthrough, source_file, source_vcodec, has_audio, can_audio_copy = _can_passthrough_video(
+            video, format, audio_codec, audio_bitrate, loop_count, pingpong
+        )
+
+        if can_passthrough and source_file:
+            passthrough_mode = "video+audio copy" if (has_audio and can_audio_copy) else ("video copy + audio re-encode" if has_audio else "video copy (no audio)")
+            print(f"[XENodes] SaveVideo: Input unchanged, reusing original video ({passthrough_mode}).")
+            metadata_file = _create_ffmetadata_file(saved_metadata)
+            cmd = [ffmpeg_exe, "-y", "-v", "error", "-i", source_file]
+
+            if metadata_file is not None:
+                cmd.extend(["-f", "ffmetadata", "-i", metadata_file, "-map_metadata", "1"])
+            else:
+                cmd.extend(["-map_metadata", "0"])
+
+            cmd.extend(["-map", "0:v:0", "-c:v", "copy"])
+
+            if has_audio:
+                cmd.extend(["-map", "0:a:0"])
+                if can_audio_copy:
+                    cmd.extend(["-c:a", "copy"])
+                else:
+                    audio_codec_map = {
+                        "aac": "aac",
+                        "opus": "libopus",
+                        "flac": "flac"
+                    }
+                    av_audio_codec = audio_codec_map.get(audio_codec, "aac")
+                    if format == "webm" and av_audio_codec == "aac":
+                        av_audio_codec = "libopus"
+                    cmd.extend(["-c:a", av_audio_codec])
+                    if av_audio_codec == "libopus":
+                        cmd.extend(["-ar", "48000"])
+                    if audio_bitrate is not None and av_audio_codec != "flac":
+                        cmd.extend(["-b:a", audio_bitrate])
+
+            if format == "mp4":
+                cmd.extend(["-movflags", "+use_metadata_tags+faststart"])
+                if source_vcodec in ("hevc", "h265"):
+                    cmd.extend(["-tag:v", "hvc1"])
+
+            cmd.append(file_path)
+
+            print(f"[XENodes] SaveVideo (FFmpeg Passthrough): running command: {' '.join(cmd)}")
+            t_encode_start = time.perf_counter()
+            ret = subprocess.run(cmd, capture_output=True, text=True)
+            t_encode_end = time.perf_counter()
+
+            if metadata_file and os.path.exists(metadata_file):
+                os.unlink(metadata_file)
+
+            if ret.returncode == 0:
+                print(
+                    f"[XENodes] SaveVideo breakdown:\n"
+                    f"  - passthrough:   {t_encode_end - t_encode_start:.3f}s\n"
+                    f"  - TOTAL:         {t_encode_end - t0:.3f}s"
+                )
+                return io.NodeOutput(video, ui=ui.PreviewVideo([ui.SavedResult(file_name, subfolder, io.FolderType.output)]))
+            else:
+                print(f"[XENodes] SaveVideo passthrough failed (code {ret.returncode}: {ret.stderr.strip()}), falling back to re-encode.")
+
         t_prep_start = time.perf_counter()
         
         components = video.get_components()
@@ -288,10 +436,6 @@ class SaveVideo(io.ComfyNode):
 
         waveform, audio_sample_rate, layout = expand_audio_waveform(components, float(frame_rate), n_orig, total_plays)
         t_expand_audio = time.perf_counter()
-
-        ffmpeg_exe = find_ffmpeg()
-        if not ffmpeg_exe:
-            raise RuntimeError("FFmpeg executable not found. Please install ffmpeg or imageio-ffmpeg.")
 
         if crf is None:
             crf_defaults = {
