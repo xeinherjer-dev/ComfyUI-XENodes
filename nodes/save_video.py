@@ -359,6 +359,15 @@ class SaveVideo(io.ComfyNode):
         if meta_map:
             cmd.extend(["-map_metadata", meta_map])
 
+        # Video filter for color matrix conversion (RGB to YUV)
+        vf_filters = []
+        if is_hdr:
+            vf_filters.append("scale=out_color_matrix=bt2020:out_range=tv")
+        else:
+            vf_filters.append("scale=out_color_matrix=bt709:out_range=tv")
+        if vf_filters:
+            cmd.extend(["-vf", ",".join(vf_filters)])
+
         cmd.extend(["-c:v", av_codec, "-pix_fmt", pix_fmt])
         cmd.extend(base_options)
 
@@ -369,13 +378,48 @@ class SaveVideo(io.ComfyNode):
 
         if format == "mp4":
             cmd.extend(["-movflags", "+use_metadata_tags+faststart"])
+            if codec in ("h265", "hevc_nvenc"):
+                cmd.extend(["-tag:v", "hvc1"])
 
-        # HDR Color Properties & Metadata
+        # Color Properties & Metadata
         if is_hdr:
             if color_space == "HDR":  # HLG
-                cmd.extend(["-color_primaries", "bt2020", "-color_trc", "arib-std-b67", "-colorspace", "bt2020nc"])
+                color_primaries = "bt2020"
+                color_trc = "arib-std-b67"
+                colorspace = "bt2020nc"
+                svt_trc = "18"  # ARIB STD-B67
+                x265_transfer = "arib-std-b67"
             else:  # HDR PQ
-                cmd.extend(["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"])
+                color_primaries = "bt2020"
+                color_trc = "smpte2084"
+                colorspace = "bt2020nc"
+                svt_trc = "16"  # SMPTE ST 2084
+                x265_transfer = "smpte2084"
+
+            cmd.extend([
+                "-color_primaries", color_primaries,
+                "-color_trc", color_trc,
+                "-colorspace", colorspace,
+                "-color_range", "tv",
+            ])
+
+            if av_codec == "libsvtav1":
+                cmd.extend([
+                    "-svtav1-params",
+                    f"enable-hdr=1:color-primaries=9:transfer-characteristics={svt_trc}:matrix-coefficients=9:color-range=0",
+                ])
+            elif av_codec == "libx265":
+                cmd.extend([
+                    "-x265-params",
+                    f"colorprim=bt2020:transfer={x265_transfer}:colormatrix=bt2020nc:range=limited",
+                ])
+        else:
+            cmd.extend([
+                "-color_primaries", "bt709",
+                "-color_trc", "bt709",
+                "-colorspace", "bt709",
+                "-color_range", "tv",
+            ])
 
         if audio_map:
             audio_codec_map = {
