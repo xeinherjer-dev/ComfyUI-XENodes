@@ -63,7 +63,7 @@ Expands SDR images, video frames, or video into 10-bit HDR using Inverse Tone Ma
 
 - **Inverse Tone Mapping (ITM)**: Soft-knee luminance expansion with configurable `peak_nits`, `itm_knee`, and `itm_exponent`.
 - **Wide Color Gamut**: Converts linear BT.709 to linear BT.2020 color space.
-- **HDR Transfer Functions**: Supports both **HDR(PQ)** (SMPTE ST 2084 / HDR10) and **HDR(HLG)** (ITU-R BT.2100) curves.
+- **HDR Transfer Functions**: Supports both **HDR PQ** (SMPTE ST 2084 / HDR10) and **HDR** (ITU-R BT.2100 / HLG) curves, consistent with ComfyUI core nodes.
 - **Image & Video Support**: Accepts `IMAGE` or `VIDEO` inputs and outputs HDR `IMAGE` and 10-bit HDR `VIDEO`.
 - **Chunked Processing**: Memory-safe batch execution for high-resolution images and video frames.
 

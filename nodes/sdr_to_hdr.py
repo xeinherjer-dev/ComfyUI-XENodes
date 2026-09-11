@@ -20,8 +20,8 @@ def _resolve_color_space(cs: str) -> tuple[str, str]:
 
 
 COLOR_SPACE_OPTIONS = [
-    "HDR(PQ)",
-    "HDR(HLG)",
+    "HDR",
+    "HDR PQ",
 ]
 
 
@@ -42,8 +42,8 @@ class SDRtoHDR(io.ComfyNode):
                 io.Combo.Input(
                     "color_space",
                     options=COLOR_SPACE_OPTIONS,
-                    default="HDR(PQ)",
-                    tooltip="Target HDR color space. 'HDR(PQ)' (HDR10) is recommended for PC, Mobile, Web, and YouTube. 'HDR(HLG)' is designed for 4K TV broadcast.",
+                    default="HDR PQ",
+                    tooltip="Target HDR color space. 'HDR PQ' (HDR10) is recommended for PC, Mobile, Web, and YouTube. 'HDR' (HLG) is designed for 4K TV broadcast.",
                 ),
             ],
             outputs=[
@@ -60,7 +60,7 @@ class SDRtoHDR(io.ComfyNode):
         peak_nits: float = 400.0,
         itm_knee: float = 0.0,
         itm_exponent: float = 1.0,
-        color_space: str = "HDR(PQ)",
+        color_space: str = "HDR PQ",
     ) -> io.NodeOutput:
         if images is None and video is None:
             raise ValueError("[XENodes.SDRtoHDR] Either 'images' or 'video' must be provided.")
