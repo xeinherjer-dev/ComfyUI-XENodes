@@ -37,7 +37,11 @@ def _can_passthrough_video(
     if loop_count != 0 or pingpong:
         return False, None, None, False, False
 
-    if not hasattr(video, "get_stream_source"):
+    # Only VideoFromFile can be passed through without re-encoding.
+    # VideoFromComponents inherits a fallback get_stream_source() from VideoInput
+    # that encodes the entire video into a BytesIO buffer via self.save_to(buffer),
+    # which causes an expensive full re-encode (taking 20+ seconds)!
+    if type(video).__name__ != "VideoFromFile":
         return False, None, None, False, False
 
     # Check for trim or crop (VideoFromFile internal attributes)
