@@ -12,7 +12,7 @@ import av
 from fractions import Fraction
 from typing_extensions import override
 
-from comfy_api.latest import ComfyExtension, io, Input, ui
+from comfy_api.latest import ComfyExtension, io, Input, InputImpl, ui
 import folder_paths
 
 from ..utils.audio import expand_audio_waveform
@@ -20,6 +20,8 @@ from ..utils.video import generate_frame_indices
 from ..utils.metadata import get_saved_metadata
 
 _MAX_RAW_FRAME_CHUNK_BYTES = 64 * 1024 * 1024
+DEFAULT_AUDIO_BITRATE = "128k"
+
 
 def _can_passthrough_video(
     video: Input.Video,
@@ -41,14 +43,20 @@ def _can_passthrough_video(
     # VideoFromComponents inherits a fallback get_stream_source() from VideoInput
     # that encodes the entire video into a BytesIO buffer via self.save_to(buffer),
     # which causes an expensive full re-encode (taking 20+ seconds)!
-    if type(video).__name__ != "VideoFromFile":
+    if not isinstance(video, InputImpl.VideoFromFile) and type(video).__name__ != "VideoFromFile":
         return False, None, None, False, False
 
-    # Check for trim or crop (VideoFromFile internal attributes)
-    if getattr(video, "_VideoFromFile__start_time", 0) != 0:
-        return False, None, None, False, False
-    if getattr(video, "_VideoFromFile__duration", 0) != 0:
-        return False, None, None, False, False
+    # Check for trim or crop (VideoFromFile attributes)
+    if hasattr(video, "get_active_trim_window"):
+        start_time, duration = video.get_active_trim_window()
+        if start_time != 0 or duration != 0:
+            return False, None, None, False, False
+    else:
+        if getattr(video, "_VideoFromFile__start_time", 0) != 0:
+            return False, None, None, False, False
+        if getattr(video, "_VideoFromFile__duration", 0) != 0:
+            return False, None, None, False, False
+
     if getattr(video, "_VideoFromFile__crop", None) is not None:
         return False, None, None, False, False
 
@@ -89,22 +97,20 @@ def _can_passthrough_video(
                         if target_audio_codec == a_codec and target_audio_bitrate is None:
                             can_audio_copy = True
                         elif target_audio_codec == "aac" and a_codec == "aac":
-                            can_audio_copy = (target_audio_bitrate is None or target_audio_bitrate == "128k")
+                            can_audio_copy = (target_audio_bitrate is None or target_audio_bitrate == DEFAULT_AUDIO_BITRATE)
                 elif target_format == "webm":
                     allowed_codecs = {"opus", "vorbis"}
                     if a_codec in allowed_codecs:
                         if target_audio_codec == a_codec and target_audio_bitrate is None:
                             can_audio_copy = True
                         elif target_audio_codec == "opus" and a_codec == "opus":
-                            can_audio_copy = (target_audio_bitrate is None or target_audio_bitrate == "128k")
+                            can_audio_copy = (target_audio_bitrate is None or target_audio_bitrate == DEFAULT_AUDIO_BITRATE)
 
             return True, source_path, v_codec, has_audio, can_audio_copy
 
     except Exception as e:
         print(f"[XENodes] SaveVideo passthrough check failed: {e}")
         return False, None, None, False, False
-
-    return False, None, None, False, False
 
 def find_ffmpeg() -> str | None:
     path_ffmpeg = shutil.which("ffmpeg")
@@ -272,11 +278,11 @@ class SaveVideo(io.ComfyNode):
                                     options=[
                                         io.DynamicCombo.Option(
                                             "aac",
-                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", optional=True, tooltip="Bitrate for AAC audio.")],
+                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default=DEFAULT_AUDIO_BITRATE, optional=True, tooltip="Bitrate for AAC audio.")],
                                         ),
                                         io.DynamicCombo.Option(
                                             "opus",
-                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", optional=True, tooltip="Bitrate for Opus audio.")],
+                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default=DEFAULT_AUDIO_BITRATE, optional=True, tooltip="Bitrate for Opus audio.")],
                                         ),
                                         io.DynamicCombo.Option("flac", []),
                                     ],
@@ -300,7 +306,7 @@ class SaveVideo(io.ComfyNode):
                                     options=[
                                         io.DynamicCombo.Option(
                                             "opus",
-                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default="128k", optional=True, tooltip="Bitrate for Opus audio.")],
+                                            [io.Combo.Input("audio_bitrate", options=["64k", "128k", "192k", "256k", "320k"], default=DEFAULT_AUDIO_BITRATE, optional=True, tooltip="Bitrate for Opus audio.")],
                                         ),
                                         io.DynamicCombo.Option("flac", []),
                                     ],
@@ -372,48 +378,49 @@ class SaveVideo(io.ComfyNode):
             passthrough_mode = "video+audio copy" if (has_audio and can_audio_copy) else ("video copy + audio re-encode" if has_audio else "video copy (no audio)")
             print(f"[XENodes] SaveVideo: Input unchanged, reusing original video ({passthrough_mode}).")
             metadata_file = _create_ffmetadata_file(saved_metadata)
-            cmd = [ffmpeg_exe, "-y", "-v", "error", "-i", source_file]
+            try:
+                cmd = [ffmpeg_exe, "-y", "-v", "error", "-i", source_file]
 
-            if metadata_file is not None:
-                cmd.extend(["-f", "ffmetadata", "-i", metadata_file, "-map_metadata", "1"])
-            else:
-                cmd.extend(["-map_metadata", "0"])
-
-            cmd.extend(["-map", "0:v:0", "-c:v", "copy"])
-
-            if has_audio:
-                cmd.extend(["-map", "0:a:0"])
-                if can_audio_copy:
-                    cmd.extend(["-c:a", "copy"])
+                if metadata_file is not None:
+                    cmd.extend(["-f", "ffmetadata", "-i", metadata_file, "-map_metadata", "1"])
                 else:
-                    audio_codec_map = {
-                        "aac": "aac",
-                        "opus": "libopus",
-                        "flac": "flac"
-                    }
-                    av_audio_codec = audio_codec_map.get(audio_codec, "aac")
-                    if format == "webm" and av_audio_codec == "aac":
-                        av_audio_codec = "libopus"
-                    cmd.extend(["-c:a", av_audio_codec])
-                    if av_audio_codec == "libopus":
-                        cmd.extend(["-ar", "48000"])
-                    if audio_bitrate is not None and av_audio_codec != "flac":
-                        cmd.extend(["-b:a", audio_bitrate])
+                    cmd.extend(["-map_metadata", "0"])
 
-            if format == "mp4":
-                cmd.extend(["-movflags", "+use_metadata_tags+faststart"])
-                if source_vcodec in ("hevc", "h265"):
-                    cmd.extend(["-tag:v", "hvc1"])
+                cmd.extend(["-map", "0:v:0", "-c:v", "copy"])
 
-            cmd.append(file_path)
+                if has_audio:
+                    cmd.extend(["-map", "0:a:0"])
+                    if can_audio_copy:
+                        cmd.extend(["-c:a", "copy"])
+                    else:
+                        audio_codec_map = {
+                            "aac": "aac",
+                            "opus": "libopus",
+                            "flac": "flac"
+                        }
+                        av_audio_codec = audio_codec_map.get(audio_codec, "aac")
+                        if format == "webm" and av_audio_codec == "aac":
+                            av_audio_codec = "libopus"
+                        cmd.extend(["-c:a", av_audio_codec])
+                        if av_audio_codec == "libopus":
+                            cmd.extend(["-ar", "48000"])
+                        if audio_bitrate is not None and av_audio_codec != "flac":
+                            cmd.extend(["-b:a", audio_bitrate])
 
-            print(f"[XENodes] SaveVideo (FFmpeg Passthrough): running command: {' '.join(cmd)}")
-            t_encode_start = time.perf_counter()
-            ret = subprocess.run(cmd, capture_output=True, text=True)
-            t_encode_end = time.perf_counter()
+                if format == "mp4":
+                    cmd.extend(["-movflags", "+use_metadata_tags+faststart"])
+                    if source_vcodec in ("hevc", "h265"):
+                        cmd.extend(["-tag:v", "hvc1"])
 
-            if metadata_file and os.path.exists(metadata_file):
-                os.unlink(metadata_file)
+                cmd.append(file_path)
+
+                print(f"[XENodes] SaveVideo (FFmpeg Passthrough): running command: {' '.join(cmd)}")
+                t_encode_start = time.perf_counter()
+                ret = subprocess.run(cmd, capture_output=True, text=True)
+                t_encode_end = time.perf_counter()
+            finally:
+                if metadata_file and os.path.exists(metadata_file):
+                    os.unlink(metadata_file)
 
             if ret.returncode == 0:
                 print(
@@ -508,13 +515,8 @@ class SaveVideo(io.ComfyNode):
             cmd.extend(["-map_metadata", meta_map])
 
         # Video filter for color matrix conversion (RGB to YUV)
-        vf_filters = []
-        if is_hdr:
-            vf_filters.append("scale=out_color_matrix=bt2020:out_range=tv")
-        else:
-            vf_filters.append("scale=out_color_matrix=bt709:out_range=tv")
-        if vf_filters:
-            cmd.extend(["-vf", ",".join(vf_filters)])
+        vf_filter = "scale=out_color_matrix=bt2020:out_range=tv" if is_hdr else "scale=out_color_matrix=bt709:out_range=tv"
+        cmd.extend(["-vf", vf_filter])
 
         cmd.extend(["-c:v", av_codec, "-pix_fmt", pix_fmt])
         cmd.extend(base_options)
