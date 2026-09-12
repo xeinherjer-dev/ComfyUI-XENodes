@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import re
 import asyncio
+import subprocess
+import shutil
 import torch
 import numpy as np
 from PIL import Image as PILImage, ImageOps as PILImageOps
@@ -14,7 +16,16 @@ import comfy.model_management
 import folder_paths
 import node_helpers
 
-VALID_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif", ".tiff", ".tga"}
+# Dynamically discover all image formats supported by Pillow
+SUPPORTED_IMAGE_EXTS = {
+    ext.lower()
+    for ext, fmt in PILImage.registered_extensions().items()
+    if fmt in PILImage.OPEN and ext.lower() not in {".pdf", ".eps", ".ps", ".bin"}
+}
+if not SUPPORTED_IMAGE_EXTS:
+    SUPPORTED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif", ".tiff", ".tga"}
+
+VALID_IMAGE_EXTS = SUPPORTED_IMAGE_EXTS
 MAX_SCAN_FILES = 10000
 
 
@@ -164,36 +175,66 @@ _FOLDERS_CACHE = {"time": 0.0, "data": ["output", "input"]}
 FOLDERS_CACHE_TTL = 300.0  # 5 minutes cache
 
 
+def _find_image_dirs(base_dir: str, prefix: str) -> list[str]:
+    """Finds all directories under base_dir that contain at least one valid image file."""
+    if not base_dir or not os.path.exists(base_dir):
+        return []
+
+    # 1. Fast path on Linux/WSL using native 'find' command
+    if os.name == "posix" and shutil.which("find"):
+        try:
+            ext_args = []
+            for ext in sorted(SUPPORTED_IMAGE_EXTS):
+                clean = ext.lstrip(".")
+                if ext_args:
+                    ext_args.append("-o")
+                ext_args.extend(["-name", f"*.{clean.lower()}", "-o", "-name", f"*.{clean.upper()}"])
+
+            cmd = ["find", base_dir, "-type", "f", "("] + ext_args + [")", "-printf", "%h\n"]
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=True)
+            raw_dirs = set(filter(None, proc.stdout.split("\n")))
+            result = []
+            for d in raw_dirs:
+                rel = os.path.relpath(d, base_dir).replace(os.sep, "/")
+                result.append(prefix if rel == "." else f"{prefix}/{rel}")
+            result.sort()
+            return result
+        except Exception:
+            pass
+
+    # 2. Cross-platform Python fallback
+    valid_dirs = set()
+    try:
+        for root, _, filenames in os.walk(base_dir, followlinks=False):
+            for f in filenames:
+                ext = os.path.splitext(f)[1].lower()
+                if ext in VALID_IMAGE_EXTS:
+                    rel = os.path.relpath(root, base_dir).replace(os.sep, "/")
+                    valid_dirs.add(prefix if rel == "." else f"{prefix}/{rel}")
+                    break
+    except Exception:
+        pass
+
+    result = list(valid_dirs)
+    result.sort()
+    return result
+
+
 def get_available_folders() -> list[str]:
-    """Returns a complete list of all selectable folders in output and input directories without any limits."""
+    """Returns a list of all folders in output and input directories that contain supported images."""
     global _FOLDERS_CACHE
     now = time.time()
     if now - _FOLDERS_CACHE["time"] < FOLDERS_CACHE_TTL and _FOLDERS_CACHE["data"]:
         return list(_FOLDERS_CACHE["data"])
 
     folders = []
-
-    def _collect_folders(base_dir: str, prefix: str):
-        if not base_dir or not os.path.exists(base_dir):
-            return
-        folders.append(prefix)
-        sub_list = []
-        try:
-            for root, dirs, _ in os.walk(base_dir, followlinks=False):
-                for d in dirs:
-                    full_d = os.path.join(root, d)
-                    rel = os.path.relpath(full_d, base_dir).replace(os.sep, "/")
-                    sub_list.append(f"{prefix}/{rel}")
-        except Exception:
-            pass
-        sub_list.sort()
-        folders.extend(sub_list)
-
     output_dir = folder_paths.get_output_directory()
-    _collect_folders(output_dir, "output")
+    if output_dir:
+        folders.extend(_find_image_dirs(output_dir, "output"))
 
     input_dir = folder_paths.get_input_directory()
-    _collect_folders(input_dir, "input")
+    if input_dir:
+        folders.extend(_find_image_dirs(input_dir, "input"))
 
     result = folders or ["output", "input"]
     _FOLDERS_CACHE = {"time": now, "data": result}
