@@ -63,6 +63,32 @@ app.registerExtension({
         }
 
         /**
+         * Fetches latest folder list from backend and updates the path combo widget.
+         * @param {object} node - LiteGraph node instance
+         * @param {boolean} force - Whether to force bypass server-side cache
+         */
+        async function refreshFolders(node, force = false) {
+            try {
+                const url = force ? "/xenodes/load_image/folders?force=true" : "/xenodes/load_image/folders";
+                const resp = await fetch(url);
+                if (resp.ok) {
+                    const folders = await resp.json();
+                    const pathWidget = node.widgets?.find((w) => w.name === "path");
+                    if (pathWidget && Array.isArray(folders) && folders.length > 0) {
+                        pathWidget.options = pathWidget.options || {};
+                        pathWidget.options.values = folders;
+                        if (!pathWidget.value) {
+                            pathWidget.value = folders[0];
+                        }
+                        app.graph.setDirtyCanvas(true, true);
+                    }
+                }
+            } catch (e) {
+                console.warn("[xenodes] Failed to fetch folder list:", e);
+            }
+        }
+
+        /**
          * Sets up debounced preview updater and hooks widget callbacks.
          * @param {object} node - LiteGraph node instance
          */
@@ -93,10 +119,25 @@ app.registerExtension({
             }
         }
 
+        const originalGetExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
+        nodeType.prototype.getExtraMenuOptions = function (_, options) {
+            const r = originalGetExtraMenuOptions ? originalGetExtraMenuOptions.apply(this, arguments) : undefined;
+            options.push({
+                content: "Refresh Folders",
+                callback: () => {
+                    refreshFolders(this, true).then(() => {
+                        fetchAndShowPreview(this);
+                    });
+                },
+            });
+            return r;
+        };
+
         const originalOnNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = originalOnNodeCreated ? originalOnNodeCreated.apply(this, arguments) : undefined;
             setupPreviewHooks(this);
+            refreshFolders(this);
             // Fetch initial preview if path is set
             requestAnimationFrame(() => {
                 fetchAndShowPreview(this);
@@ -108,6 +149,7 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function () {
             const r = originalOnConfigure ? originalOnConfigure.apply(this, arguments) : undefined;
             setupPreviewHooks(this);
+            refreshFolders(this);
             // Fetch preview when workflow is loaded / configured
             requestAnimationFrame(() => {
                 setTimeout(() => {

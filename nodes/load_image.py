@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import asyncio
 import torch
 import numpy as np
 from PIL import Image as PILImage, ImageOps as PILImageOps
@@ -13,50 +14,129 @@ import comfy.model_management
 import folder_paths
 import node_helpers
 
+VALID_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif", ".tiff", ".tga"}
+MAX_SCAN_FILES = 10000
+
+
+def get_allowed_directories() -> list[tuple[str, str]]:
+    """Returns a list of (type_name, canonical_directory_path)."""
+    allowed = []
+    output_dir = folder_paths.get_output_directory()
+    if output_dir:
+        allowed.append(("output", os.path.realpath(output_dir)))
+    input_dir = folder_paths.get_input_directory()
+    if input_dir:
+        allowed.append(("input", os.path.realpath(input_dir)))
+    temp_dir = folder_paths.get_temp_directory()
+    if temp_dir:
+        allowed.append(("temp", os.path.realpath(temp_dir)))
+    return allowed
+
+
+def is_path_safe_and_allowed(target_path: str) -> bool:
+    """Checks if the target_path resolves strictly within one of the allowed directories."""
+    if not target_path:
+        return False
+    try:
+        real_target = os.path.realpath(target_path)
+        for _, base_dir in get_allowed_directories():
+            if folder_paths.is_within_directory(base_dir, real_target):
+                return True
+    except Exception:
+        return False
+    return False
+
 
 def _resolve_path(raw_path: str) -> str:
     path = raw_path.strip().strip('"').strip("'")
+    output_dir = folder_paths.get_output_directory() or ""
+    input_dir = folder_paths.get_input_directory() or ""
+    temp_dir = folder_paths.get_temp_directory() or ""
+
+    # If empty, default to output directory
     if not path:
-        return ""
+        return os.path.realpath(output_dir) if output_dir else ""
 
-    # If the path exists as-is, return it
-    if os.path.exists(path):
-        return path
+    # If user explicitly specifies output, input, or temp prefix
+    norm_path = path.replace("\\", "/")
+    if norm_path == "output" or norm_path.startswith("output/"):
+        rel = norm_path[6:].lstrip("/")
+        return os.path.realpath(os.path.join(output_dir, rel))
+    elif norm_path == "input" or norm_path.startswith("input/"):
+        rel = norm_path[5:].lstrip("/")
+        return os.path.realpath(os.path.join(input_dir, rel))
+    elif norm_path == "temp" or norm_path.startswith("temp/"):
+        rel = norm_path[4:].lstrip("/")
+        return os.path.realpath(os.path.join(temp_dir, rel))
 
-    # Auto-convert Windows path to WSL path (e.g., C:\Users\... -> /mnt/c/Users/...)
+    # Auto-convert Windows path to WSL path if running under Linux/WSL
     if re.match(r"^[a-zA-Z]:[\\/]", path):
         drive = path[0].lower()
         wsl_path = f"/mnt/{drive}/" + path[2:].replace("\\", "/").lstrip("/")
         if os.path.exists(wsl_path):
-            return wsl_path
+            path = wsl_path
 
-    # Standardize backslashes for unix environments if applicable
-    norm_path = path.replace("\\", "/")
-    if os.path.exists(norm_path):
-        return norm_path
+    # If it's already an absolute path, normalize it
+    if os.path.isabs(path):
+        real_p = os.path.realpath(path)
+        if is_path_safe_and_allowed(real_p):
+            return real_p
+        # If absolute path is outside allowed directories, disallow
+        return ""
 
-    return path
+    # For relative paths without prefix, check output directory first, then input directory
+    if output_dir:
+        candidate_output = os.path.realpath(os.path.join(output_dir, path))
+        if os.path.exists(candidate_output) and is_path_safe_and_allowed(candidate_output):
+            return candidate_output
+
+    if input_dir:
+        candidate_input = os.path.realpath(os.path.join(input_dir, path))
+        if os.path.exists(candidate_input) and is_path_safe_and_allowed(candidate_input):
+            return candidate_input
+
+    # Fallback to output directory path
+    if output_dir:
+        candidate = os.path.realpath(os.path.join(output_dir, path))
+        if is_path_safe_and_allowed(candidate):
+            return candidate
+
+    return ""
 
 
 def get_image_files(path: str, sort_by: str = "name", reverse: bool = False, subfolders: bool = False, index: int = 0) -> list[str]:
     resolved_path = _resolve_path(path)
-    if not resolved_path:
+    if not resolved_path or not is_path_safe_and_allowed(resolved_path):
         return []
 
     if os.path.isfile(resolved_path):
-        return [resolved_path]
+        ext = os.path.splitext(resolved_path)[1].lower()
+        if ext in VALID_IMAGE_EXTS:
+            return [resolved_path]
+        return []
+
     elif os.path.isdir(resolved_path):
-        valid_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif", ".tiff", ".tga"}
         files = []
         if subfolders:
             for root, _, filenames in os.walk(resolved_path):
+                # Ensure symlinks inside directories do not escape allowed sandbox
+                if not is_path_safe_and_allowed(root):
+                    continue
                 for f in filenames:
-                    if os.path.splitext(f)[1].lower() in valid_exts:
+                    if os.path.splitext(f)[1].lower() in VALID_IMAGE_EXTS:
                         files.append(os.path.join(root, f))
+                        if len(files) >= MAX_SCAN_FILES:
+                            break
+                if len(files) >= MAX_SCAN_FILES:
+                    break
         else:
             for f in os.listdir(resolved_path):
-                if os.path.splitext(f)[1].lower() in valid_exts:
-                    files.append(os.path.join(resolved_path, f))
+                if os.path.splitext(f)[1].lower() in VALID_IMAGE_EXTS:
+                    full_p = os.path.join(resolved_path, f)
+                    if os.path.isfile(full_p):
+                        files.append(full_p)
+                        if len(files) >= MAX_SCAN_FILES:
+                            break
 
         if not files:
             return []
@@ -78,16 +158,70 @@ def get_image_files(path: str, sort_by: str = "name", reverse: bool = False, sub
     return []
 
 
+import time
+
+_FOLDERS_CACHE = {"time": 0.0, "data": ["output", "input"]}
+FOLDERS_CACHE_TTL = 300.0  # 5 minutes cache
+
+
+def get_available_folders() -> list[str]:
+    """Returns a complete list of all selectable folders in output and input directories without any limits."""
+    global _FOLDERS_CACHE
+    now = time.time()
+    if now - _FOLDERS_CACHE["time"] < FOLDERS_CACHE_TTL and _FOLDERS_CACHE["data"]:
+        return list(_FOLDERS_CACHE["data"])
+
+    folders = []
+
+    def _collect_folders(base_dir: str, prefix: str):
+        if not base_dir or not os.path.exists(base_dir):
+            return
+        folders.append(prefix)
+        sub_list = []
+        try:
+            for root, dirs, _ in os.walk(base_dir, followlinks=False):
+                for d in dirs:
+                    full_d = os.path.join(root, d)
+                    rel = os.path.relpath(full_d, base_dir).replace(os.sep, "/")
+                    sub_list.append(f"{prefix}/{rel}")
+        except Exception:
+            pass
+        sub_list.sort()
+        folders.extend(sub_list)
+
+    output_dir = folder_paths.get_output_directory()
+    _collect_folders(output_dir, "output")
+
+    input_dir = folder_paths.get_input_directory()
+    _collect_folders(input_dir, "input")
+
+    result = folders or ["output", "input"]
+    _FOLDERS_CACHE = {"time": now, "data": result}
+    return list(result)
+
+
 try:
     import io as python_io
     from aiohttp import web
     from server import PromptServer
 
     if hasattr(PromptServer, "instance") and PromptServer.instance:
+        @PromptServer.instance.routes.get("/xenodes/load_image/folders")
+        async def get_load_image_folders(request: web.Request) -> web.Response:
+            try:
+                force = request.rel_url.query.get("force", "false").lower() in ("true", "1")
+                if force:
+                    global _FOLDERS_CACHE
+                    _FOLDERS_CACHE["time"] = 0.0
+                folders = await asyncio.to_thread(get_available_folders)
+                return web.json_response(folders)
+            except Exception:
+                return web.json_response(["output", "input"])
+
         @PromptServer.instance.routes.get("/xenodes/load_image/preview")
         async def get_load_image_preview(request: web.Request) -> web.Response:
             try:
-                path = request.rel_url.query.get("path", "")
+                path = request.rel_url.query.get("path", "output")
                 index_str = request.rel_url.query.get("index", "0")
                 try:
                     index = int(index_str)
@@ -97,41 +231,53 @@ try:
                 reverse = request.rel_url.query.get("reverse", "false").lower() in ("true", "1")
                 subfolders = request.rel_url.query.get("subfolders", "false").lower() in ("true", "1")
 
-                files = get_image_files(path, sort_by=sort_by, reverse=reverse, subfolders=subfolders, index=index)
-                if not files:
-                    return web.Response(status=404, text="No images found")
+                resolved_path = _resolve_path(path)
+                if not resolved_path or not is_path_safe_and_allowed(resolved_path):
+                    return web.Response(status=403, text="Access denied: path must be within input or output directory")
 
-                total_images = len(files)
-                actual_index = index % total_images
-                target_file = files[actual_index]
+                def _generate_preview():
+                    files = get_image_files(path, sort_by=sort_by, reverse=reverse, subfolders=subfolders, index=index)
+                    if not files:
+                        return None, 404, "No images found"
 
-                if not os.path.isfile(target_file):
-                    return web.Response(status=404, text="File not found")
+                    total_images = len(files)
+                    actual_index = index % total_images
+                    target_file = files[actual_index]
 
-                with PILImage.open(target_file) as img:
-                    img = node_helpers.pillow(PILImageOps.exif_transpose, img)
-                    rgb_img = img.convert("RGB")
+                    if not os.path.isfile(target_file):
+                        return None, 404, "File not found"
 
-                    # Resize preview image for optimal response time and memory
-                    max_size = 1024
-                    if rgb_img.width > max_size or rgb_img.height > max_size:
-                        rgb_img.thumbnail((max_size, max_size), PILImage.Resampling.BILINEAR)
+                    with PILImage.open(target_file) as img:
+                        img = node_helpers.pillow(PILImageOps.exif_transpose, img)
+                        rgb_img = img.convert("RGB")
 
-                    buf = python_io.BytesIO()
-                    rgb_img.save(buf, format="WEBP", quality=85)
+                        # Resize preview image for optimal response time and memory
+                        max_size = 1024
+                        if rgb_img.width > max_size or rgb_img.height > max_size:
+                            rgb_img.thumbnail((max_size, max_size), PILImage.Resampling.BILINEAR)
 
-                    return web.Response(
-                        body=buf.getvalue(),
-                        content_type="image/webp",
-                        headers={
-                            "Cache-Control": "public, max-age=10",
-                            "X-Total-Images": str(total_images),
-                            "X-Actual-Index": str(actual_index),
-                            "X-Filename": os.path.basename(target_file),
-                        },
-                    )
-            except Exception as e:
-                return web.Response(status=500, text=str(e))
+                        buf = python_io.BytesIO()
+                        rgb_img.save(buf, format="WEBP", quality=85)
+                        return (buf.getvalue(), total_images, actual_index, os.path.basename(target_file)), 200, None
+
+                # Offload blocking I/O and PIL operations to thread pool to prevent blocking aiohttp event loop
+                res_data, status, err_msg = await asyncio.to_thread(_generate_preview)
+                if status != 200:
+                    return web.Response(status=status, text=err_msg)
+
+                body, total_images, actual_index, filename = res_data
+                return web.Response(
+                    body=body,
+                    content_type="image/webp",
+                    headers={
+                        "Cache-Control": "public, max-age=10",
+                        "X-Total-Images": str(total_images),
+                        "X-Actual-Index": str(actual_index),
+                        "X-Filename": filename,
+                    },
+                )
+            except Exception:
+                return web.Response(status=500, text="Internal server error")
 except Exception:
     pass
 
@@ -145,10 +291,11 @@ class LoadImageFromFolder(io.ComfyNode):
             category="xenodes/image",
             description="Loads a single image from a directory or direct file path without resizing, ideal for queues and vision LLMs.",
             inputs=[
-                io.String.Input(
+                io.Combo.Input(
                     "path",
-                    default="",
-                    tooltip="Path to a directory containing images, or a direct image file path.",
+                    options=["output", "input"],
+                    default="output",
+                    tooltip="Select a folder from the output or input directory.",
                 ),
                 io.Int.Input(
                     "index",
@@ -190,16 +337,19 @@ class LoadImageFromFolder(io.ComfyNode):
         )
 
     @classmethod
-    def fingerprint_inputs(cls, path: str, index: int, sort_by: str = "name", reverse: bool = False, subfolders: bool = False) -> str:
+    def fingerprint_inputs(cls, path: str = "output", index: int = 0, sort_by: str = "name", reverse: bool = False, subfolders: bool = False) -> str:
         if sort_by == "random":
             return str(os.urandom(8))
         return f"{path}_{index}_{sort_by}_{reverse}_{subfolders}"
 
     @classmethod
-    def execute(cls, path: str, index: int = 0, sort_by: str = "name", reverse: bool = False, subfolders: bool = False) -> io.NodeOutput:
+    def execute(cls, path: str = "output", index: int = 0, sort_by: str = "name", reverse: bool = False, subfolders: bool = False) -> io.NodeOutput:
         resolved_path = _resolve_path(path)
         if not resolved_path:
-            raise ValueError("Path is empty. Please provide a valid directory or image file path.")
+            raise ValueError(f"Invalid or disallowed path: '{path}'. Path must be located inside ComfyUI 'input' or 'output' directory.")
+
+        if not is_path_safe_and_allowed(resolved_path):
+            raise PermissionError(f"Access denied: '{path}' is outside allowed directories (input/output).")
 
         files = get_image_files(path, sort_by=sort_by, reverse=reverse, subfolders=subfolders, index=index)
         if not files:
