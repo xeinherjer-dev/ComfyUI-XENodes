@@ -58,6 +58,34 @@ def is_path_safe_and_allowed(target_path: str) -> bool:
     return False
 
 
+def get_relative_filepath(target_path: str, fallback_path_prefix: str = "") -> str:
+    """Returns a relative path prefixed with 'output', 'input', or 'temp' matching the input path format."""
+    if not target_path:
+        return ""
+    try:
+        norm_target = os.path.normpath(target_path).replace("\\", "/")
+        for prefix, base_dir in get_allowed_directories():
+            if not base_dir:
+                continue
+            norm_base = os.path.normpath(base_dir).replace("\\", "/")
+            if norm_target == norm_base or norm_target.startswith(norm_base + "/"):
+                rel = norm_target[len(norm_base):].lstrip("/")
+                return prefix if not rel else f"{prefix}/{rel}"
+
+        # Fallback with realpath in case of symlinks
+        real_target = os.path.realpath(target_path)
+        for prefix, base_dir in get_allowed_directories():
+            if folder_paths.is_within_directory(base_dir, real_target):
+                rel = os.path.relpath(real_target, base_dir).replace(os.sep, "/")
+                return prefix if rel == "." else f"{prefix}/{rel}"
+    except Exception:
+        pass
+    if fallback_path_prefix:
+        clean_prefix = fallback_path_prefix.replace("\\", "/").rstrip("/")
+        return f"{clean_prefix}/{os.path.basename(target_path)}"
+    return target_path.replace("\\", "/")
+
+
 def _resolve_path(raw_path: str) -> str:
     path = raw_path.strip().strip('"').strip("'")
     output_dir = folder_paths.get_output_directory() or ""
@@ -334,7 +362,7 @@ class LoadImageFromFolder(io.ComfyNode):
             inputs=[
                 io.Combo.Input(
                     "path",
-                    options=["output", "input"],
+                    options=get_available_folders(),
                     default="output",
                     tooltip="Select a folder from the output or input directory.",
                 ),
@@ -370,12 +398,26 @@ class LoadImageFromFolder(io.ComfyNode):
                 io.Image.Output("image", display_name="IMAGE", tooltip="Loaded image tensor [1, H, W, 3] without resizing."),
                 io.Mask.Output("mask", display_name="MASK", tooltip="Alpha mask if present, otherwise zeros."),
                 io.String.Output("filename", display_name="filename", tooltip="Filename of the loaded image."),
-                io.String.Output("filepath", display_name="filepath", tooltip="Full filepath of the loaded image."),
+                io.String.Output("filepath", display_name="filepath", tooltip="Relative filepath of the loaded image (e.g. output/2026-09-13/file.webp)."),
                 io.Int.Output("current_index", display_name="index", tooltip="Current index within the image list."),
                 io.Int.Output("total_images", display_name="total_images", tooltip="Total count of images found."),
             ],
             is_output_node=True,
         )
+
+    @classmethod
+    def validate_inputs(cls, path: str = "output") -> bool | str:
+        resolved_path = _resolve_path(path)
+        if not resolved_path:
+            return f"Invalid or disallowed path: '{path}'. Path must be located inside ComfyUI 'input' or 'output' directory."
+
+        if not is_path_safe_and_allowed(resolved_path):
+            return f"Access denied: '{path}' is outside allowed directories (input/output)."
+
+        if not os.path.exists(resolved_path):
+            return f"Path does not exist: '{path}'"
+
+        return True
 
     @classmethod
     def fingerprint_inputs(cls, path: str = "output", index: int = 0, sort_by: str = "name", reverse: bool = False, subfolders: bool = False) -> str:
@@ -403,6 +445,7 @@ class LoadImageFromFolder(io.ComfyNode):
         actual_index = index % total_images
         target_file = files[actual_index]
         filename = os.path.basename(target_file)
+        relative_filepath = get_relative_filepath(target_file, fallback_path_prefix=path)
 
         # Load image without resizing
         with PILImage.open(target_file) as img:
@@ -440,7 +483,7 @@ class LoadImageFromFolder(io.ComfyNode):
             image_tensor,
             mask_tensor,
             filename,
-            target_file,
+            relative_filepath,
             actual_index,
             total_images,
             ui=ui_output,
