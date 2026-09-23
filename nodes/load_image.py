@@ -217,7 +217,6 @@ def _find_image_dirs(base_dir: str, prefix: str) -> list[str]:
                 if ext_args:
                     ext_args.append("-o")
                 ext_args.extend(["-name", f"*.{clean.lower()}", "-o", "-name", f"*.{clean.upper()}"])
-
             cmd = ["find", base_dir, "-type", "f", "("] + ext_args + [")", "-printf", "%h\n"]
             proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=True)
             raw_dirs = set(filter(None, proc.stdout.split("\n")))
@@ -225,7 +224,6 @@ def _find_image_dirs(base_dir: str, prefix: str) -> list[str]:
             for d in raw_dirs:
                 rel = os.path.relpath(d, base_dir).replace(os.sep, "/")
                 result.append(prefix if rel == "." else f"{prefix}/{rel}")
-            result.sort()
             return result
         except Exception:
             pass
@@ -243,30 +241,62 @@ def _find_image_dirs(base_dir: str, prefix: str) -> list[str]:
     except Exception:
         pass
 
-    result = list(valid_dirs)
-    result.sort()
+    return list(valid_dirs)
+
+
+DATE_REGEX = re.compile(r"(\d{4}[-_/]\d{2}[-_/]\d{2})")
+
+
+def _sort_folders(folders: list[str], sort_by: str = "newest_first") -> list[str]:
+    """Sorts a list of folder relative paths based on sort_by criteria.
+    Accurately detects YYYY-MM-DD dates in paths so newest dates always appear first.
+    """
+    result = list(folders)
+
+    if sort_by == "oldest_first":
+        def _sort_key_oldest(path: str):
+            m = DATE_REGEX.search(path)
+            if m:
+                date_str = m.group(1).replace("/", "-").replace("_", "-")
+                return (0, date_str, path)
+            return (1, "", path)
+        result.sort(key=_sort_key_oldest)
+
+    else:  # newest_first (default)
+        def _sort_key_newest(path: str):
+            m = DATE_REGEX.search(path)
+            if m:
+                date_str = m.group(1).replace("/", "-").replace("_", "-")
+                # Group 0: has date. Invert character codes to sort descending
+                inv_date = "".join(chr(255 - ord(c)) for c in date_str)
+                return (0, inv_date, path)
+            # Group 1: non-dated folders at the end, sorted alphabetically
+            return (1, "", path)
+        result.sort(key=_sort_key_newest)
+
     return result
 
 
-def get_available_folders() -> list[str]:
-    """Returns a list of all folders in output and input directories that contain supported images."""
+def get_available_folders(sort_by: str = "newest_first") -> list[str]:
+    """Returns a list of all folders in output and input directories that contain supported images, sorted by sort_by."""
     global _FOLDERS_CACHE
     now = time.time()
     if now - _FOLDERS_CACHE["time"] < FOLDERS_CACHE_TTL and _FOLDERS_CACHE["data"]:
-        return list(_FOLDERS_CACHE["data"])
+        raw_folders = _FOLDERS_CACHE["data"]
+    else:
+        folders = []
+        output_dir = folder_paths.get_output_directory()
+        if output_dir:
+            folders.extend(_find_image_dirs(output_dir, "output"))
 
-    folders = []
-    output_dir = folder_paths.get_output_directory()
-    if output_dir:
-        folders.extend(_find_image_dirs(output_dir, "output"))
+        input_dir = folder_paths.get_input_directory()
+        if input_dir:
+            folders.extend(_find_image_dirs(input_dir, "input"))
 
-    input_dir = folder_paths.get_input_directory()
-    if input_dir:
-        folders.extend(_find_image_dirs(input_dir, "input"))
+        raw_folders = folders or ["output", "input"]
+        _FOLDERS_CACHE = {"time": now, "data": raw_folders}
 
-    result = folders or ["output", "input"]
-    _FOLDERS_CACHE = {"time": now, "data": result}
-    return list(result)
+    return _sort_folders(raw_folders, sort_by=sort_by)
 
 
 try:
@@ -279,10 +309,11 @@ try:
         async def get_load_image_folders(request: web.Request) -> web.Response:
             try:
                 force = request.rel_url.query.get("force", "false").lower() in ("true", "1")
+                sort_by = request.rel_url.query.get("sort_by", "newest_first")
                 if force:
                     global _FOLDERS_CACHE
                     _FOLDERS_CACHE["time"] = 0.0
-                folders = await asyncio.to_thread(get_available_folders)
+                folders = await asyncio.to_thread(get_available_folders, sort_by)
                 return web.json_response(folders)
             except Exception:
                 return web.json_response(["output", "input"])
@@ -362,9 +393,15 @@ class LoadImageFromFolder(io.ComfyNode):
             inputs=[
                 io.Combo.Input(
                     "path",
-                    options=get_available_folders(),
+                    options=get_available_folders("newest_first"),
                     default="output",
                     tooltip="Select a folder from the output or input directory.",
+                ),
+                io.Combo.Input(
+                    "folder_sort",
+                    options=["newest_first", "oldest_first"],
+                    default="newest_first",
+                    tooltip="Display order of directories in the path combo dropdown.",
                 ),
                 io.Int.Input(
                     "index",
@@ -406,7 +443,7 @@ class LoadImageFromFolder(io.ComfyNode):
         )
 
     @classmethod
-    def validate_inputs(cls, path: str = "output") -> bool | str:
+    def validate_inputs(cls, path: str = "output", folder_sort: str = "newest_first") -> bool | str:
         resolved_path = _resolve_path(path)
         if not resolved_path:
             return f"Invalid or disallowed path: '{path}'. Path must be located inside ComfyUI 'input' or 'output' directory."
@@ -420,13 +457,13 @@ class LoadImageFromFolder(io.ComfyNode):
         return True
 
     @classmethod
-    def fingerprint_inputs(cls, path: str = "output", index: int = 0, sort_by: str = "name", reverse: bool = False, subfolders: bool = False) -> str:
+    def fingerprint_inputs(cls, path: str = "output", folder_sort: str = "newest_first", index: int = 0, sort_by: str = "name", reverse: bool = False, subfolders: bool = False) -> str:
         if sort_by == "random":
             return str(os.urandom(8))
         return f"{path}_{index}_{sort_by}_{reverse}_{subfolders}"
 
     @classmethod
-    def execute(cls, path: str = "output", index: int = 0, sort_by: str = "name", reverse: bool = False, subfolders: bool = False) -> io.NodeOutput:
+    def execute(cls, path: str = "output", folder_sort: str = "newest_first", index: int = 0, sort_by: str = "name", reverse: bool = False, subfolders: bool = False) -> io.NodeOutput:
         resolved_path = _resolve_path(path)
         if not resolved_path:
             raise ValueError(f"Invalid or disallowed path: '{path}'. Path must be located inside ComfyUI 'input' or 'output' directory.")
