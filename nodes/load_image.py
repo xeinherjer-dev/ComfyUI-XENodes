@@ -351,11 +351,6 @@ try:
                         img = node_helpers.pillow(PILImageOps.exif_transpose, img)
                         rgb_img = img.convert("RGB")
 
-                        # Resize preview image for optimal response time and memory
-                        max_size = 1024
-                        if rgb_img.width > max_size or rgb_img.height > max_size:
-                            rgb_img.thumbnail((max_size, max_size), PILImage.Resampling.BILINEAR)
-
                         buf = python_io.BytesIO()
                         rgb_img.save(buf, format="WEBP", quality=85)
                         return (buf.getvalue(), total_images, actual_index, os.path.basename(target_file)), 200, None

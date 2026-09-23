@@ -5,6 +5,8 @@ app.registerExtension({
     name: "XENodes.ShowAny",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name === "XENodes.ShowAny") {
+            const TAG = (node) => `[XENodes.ShowAny #${node?.id ?? "?"} "${node?.title || "Show Any"}"]`;
+
             /**
              * Populate text preview widgets
              * @param {string|string[]} text 
@@ -31,14 +33,21 @@ app.registerExtension({
                     if (!Array.isArray(list)) list = [list];
                     for (const l of list) {
                         try {
-                            const w = ComfyWidgets["STRING"](this, `text_preview_${idx++}`, ["STRING", { multiline: true }], app).widget;
-                            w.element.readOnly = true;
-                            w.element.style.opacity = 0.8;
+                            const widgetName = `text_preview_${idx++}`;
+                            const w = ComfyWidgets["STRING"](this, widgetName, ["STRING", { multiline: true }], app)?.widget;
+                            if (!w) {
+                                console.error(`${TAG(this)} ComfyWidgets["STRING"] returned null/undefined for ${widgetName}`);
+                                continue;
+                            }
+                            if (w.element) {
+                                w.element.readOnly = true;
+                                w.element.style.opacity = 0.8;
+                            }
                             w.value = l;
                             w.is_xenode_preview = true;
                             w.serialize_ignore = true;
                         } catch (e) {
-                            console.error("[XENodes] Widget creation failed:", e);
+                            console.error(`${TAG(this)} Preview widget creation failed:`, e, "item was:", l);
                         }
                     }
                 }
@@ -56,9 +65,15 @@ app.registerExtension({
             nodeType.prototype.onExecuted = function(message) {
                 onExecuted?.apply(this, arguments);
                 
-                if (!message) return;
+                if (!message) {
+                    console.warn(`${TAG(this)} onExecuted received null/undefined message!`);
+                    return;
+                }
 
                 const texts = message.text || [];
+                if (!message.text) {
+                    console.warn(`${TAG(this)} onExecuted message has no 'text' property:`, message);
+                }
                 populate.call(this, texts);
             };
 
@@ -80,6 +95,19 @@ app.registerExtension({
                         requestAnimationFrame(() => populate.call(this, dynamicVals));
                     }
                 }
+            };
+
+            const serialize = nodeType.prototype.serialize;
+            nodeType.prototype.serialize = function() {
+                const data = serialize?.apply(this, arguments);
+                const hasPreview = this.widgets?.some(w => w.is_xenode_preview && w.value);
+                if (hasPreview && (!data?.widgets_values || data.widgets_values.length === 0)) {
+                    console.warn(`${TAG(this)} Preview text exists on widget but widgets_values is empty during serialize!`, {
+                        node_id: this.id,
+                        widgets: this.widgets
+                    });
+                }
+                return data;
             };
         }
     }
