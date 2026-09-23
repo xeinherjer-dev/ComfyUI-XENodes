@@ -107,12 +107,18 @@ app.registerExtension({
         injectContextMenuStyles();
         setupContextMenuAutoScroll();
 
+        function isNodeMutedOrBypassed(node) {
+            if (!node) return false;
+            // LiteGraph.NEVER = 2 (Muted), LiteGraph.BYPASS = 4 (Bypassed)
+            return node.mode === 2 || node.mode === 4;
+        }
+
         /**
          * Fetches preview image from backend API and displays it on the node.
          * @param {object} node - LiteGraph node instance
          */
         function fetchAndShowPreview(node) {
-            if (!node || !node.widgets) return;
+            if (!node || !node.widgets || isNodeMutedOrBypassed(node)) return;
 
             const pathWidget = node.widgets.find((w) => w.name === "path");
             const indexWidget = node.widgets.find((w) => w.name === "index");
@@ -148,7 +154,7 @@ app.registerExtension({
 
             const img = new Image();
             img.onload = () => {
-                if (node._xe_last_req_id !== reqId) return;
+                if (node._xe_last_req_id !== reqId || isNodeMutedOrBypassed(node)) return;
 
                 node.imgs = [img];
                 node.setSizeForImage?.();
@@ -198,14 +204,58 @@ app.registerExtension({
          * @param {object} node - LiteGraph node instance
          */
         function setupPreviewHooks(node) {
+            // Monitor node.mode changes to restore preview when un-muted/un-bypassed
+            if (!node._xe_mode_hooked) {
+                node._xe_mode_hooked = true;
+                let _mode = node.mode;
+                Object.defineProperty(node, "mode", {
+                    get() {
+                        return _mode;
+                    },
+                    set(val) {
+                        const oldMode = _mode;
+                        _mode = val;
+                        if ((oldMode === 2 || oldMode === 4) && val === 0) {
+                            requestAnimationFrame(() => {
+                                fetchAndShowPreview(node);
+                            });
+                        }
+                    },
+                    configurable: true,
+                    enumerable: true,
+                });
+            }
+
             if (!node._xe_update_preview) {
                 let debounceTimer = null;
                 node._xe_update_preview = () => {
+                    if (isNodeMutedOrBypassed(node)) return;
                     if (debounceTimer) clearTimeout(debounceTimer);
                     debounceTimer = setTimeout(() => {
                         fetchAndShowPreview(node);
                     }, 120);
                 };
+            }
+
+            // Hook control_after_generate to prevent changing index/seed when bypassed or muted
+            for (const widget of node.widgets || []) {
+                if (widget.name === "control_after_generate" || widget.name?.includes("control_after_generate")) {
+                    if (!widget._xe_control_hooked) {
+                        widget._xe_control_hooked = true;
+                        const origBeforeQueued = widget.beforeQueued;
+                        const origAfterQueued = widget.afterQueued;
+
+                        widget.beforeQueued = function () {
+                            if (isNodeMutedOrBypassed(node)) return;
+                            return origBeforeQueued ? origBeforeQueued.apply(this, arguments) : undefined;
+                        };
+
+                        widget.afterQueued = function () {
+                            if (isNodeMutedOrBypassed(node)) return;
+                            return origAfterQueued ? origAfterQueued.apply(this, arguments) : undefined;
+                        };
+                    }
+                }
             }
 
             // Hook folder_sort callback to immediately re-sort path options
@@ -242,6 +292,12 @@ app.registerExtension({
                 }
             }
         }
+
+        const originalOnExecuted = nodeType.prototype.onExecuted;
+        nodeType.prototype.onExecuted = function (message) {
+            if (isNodeMutedOrBypassed(this)) return;
+            return originalOnExecuted ? originalOnExecuted.apply(this, arguments) : undefined;
+        };
 
         const originalGetExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
         nodeType.prototype.getExtraMenuOptions = function (_, options) {
