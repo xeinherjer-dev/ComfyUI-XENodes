@@ -1,28 +1,15 @@
 from __future__ import annotations
 
-from fractions import Fraction
 from typing_extensions import override
-import torch
 
-from comfy_api.latest import ComfyExtension, io, Input, InputImpl, Types
+from comfy_api.latest import ComfyExtension, io, Input
 from ..utils.color import sdr_to_hdr_tensor
-
-
-def _resolve_color_space(cs: str) -> tuple[str, str]:
-    """
-    Resolves UI color space string to:
-      - internal_algo: "HDR" (HLG) or "HDR PQ" (PQ)
-      - comfy_color_space: "HDR" (HLG) or "HDR PQ" (PQ) expected by ComfyUI VideoFromComponents
-    """
-    if "HLG" in cs.upper() or cs == "HDR":
-        return "HDR", "HDR"
-    return "HDR PQ", "HDR PQ"
-
-
-COLOR_SPACE_OPTIONS = [
-    "HDR",
-    "HDR PQ",
-]
+from ..utils.hdr_io import (
+    COLOR_SPACE_OPTIONS,
+    resolve_color_space as _resolve_color_space,
+    unpack_sdr_inputs,
+    pack_hdr_outputs,
+)
 
 
 class SDRtoHDR(io.ComfyNode):
@@ -62,52 +49,18 @@ class SDRtoHDR(io.ComfyNode):
         itm_exponent: float = 1.0,
         color_space: str = "HDR PQ",
     ) -> io.NodeOutput:
-        if images is None and video is None:
-            raise ValueError("[XENodes.SDRtoHDR] Either 'images' or 'video' must be provided.")
-
+        src = unpack_sdr_inputs(images, video, "XENodes.SDRtoHDR")
         internal_algo, comfy_color_space = _resolve_color_space(color_space)
 
-        if images is not None:
-            raw_images = images
-            alpha = None
-            audio = None
-            frame_rate = Fraction(24, 1)
-
-            if video is not None:
-                comp = video.get_components()
-                alpha = comp.alpha
-                audio = comp.audio
-                frame_rate = comp.frame_rate
-        else:
-            comp = video.get_components()
-            raw_images = comp.images
-            alpha = comp.alpha
-            audio = comp.audio
-            frame_rate = comp.frame_rate
-
         hdr_images = sdr_to_hdr_tensor(
-            raw_images,
+            src.images,
             peak_nits=peak_nits,
             itm_knee=itm_knee,
             itm_exponent=itm_exponent,
             color_space=internal_algo,
         )
-        try:
-            hdr_images._color_space = comfy_color_space
-        except Exception:
-            pass
 
-        hdr_video = InputImpl.VideoFromComponents(
-            Types.VideoComponents(
-                images=hdr_images,
-                alpha=alpha,
-                audio=audio,
-                frame_rate=frame_rate,
-            ),
-            bit_depth=10,
-            color_space=comfy_color_space,
-        )
-
+        hdr_images, hdr_video = pack_hdr_outputs(hdr_images, src, comfy_color_space)
         return io.NodeOutput(hdr_images, hdr_video)
 
 

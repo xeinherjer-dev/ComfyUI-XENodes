@@ -112,6 +112,51 @@ def linear_to_hlg(linear_hdr: torch.Tensor, peak_nits: float = 400.0) -> torch.T
     )
     return torch.clamp(hlg, 0.0, 1.0)
 
+def pq_to_linear(pq: torch.Tensor, nits_scale: float = 100.0) -> torch.Tensor:
+    """
+    Applies SMPTE ST 2084 (PQ) EOTF, the inverse of linear_to_pq.
+
+    Args:
+        pq (torch.Tensor): PQ encoded tensor in [0, 1] (1.0 = 10,000 nits).
+        nits_scale (float): Luminance that 1.0 in the returned linear tensor represents (default 100 nits).
+    Returns:
+        torch.Tensor: Linear HDR tensor where 1.0 corresponds to nits_scale.
+    """
+    m1 = 0.1593017578125
+    m2 = 78.84375
+    c1 = 0.8359375
+    c2 = 18.8515625
+    c3 = 18.6875
+
+    e = torch.clamp(pq, 0.0, 1.0)
+    e_p = torch.pow(e, 1.0 / m2)
+    num = torch.clamp(e_p - c1, min=0.0)
+    den = c2 - c3 * e_p
+    y = torch.pow(num / den, 1.0 / m1)
+    return y * (10000.0 / nits_scale)
+
+def is_hlg_color_space(color_space: str) -> bool:
+    """Returns True if the given color space string denotes HLG ("HDR" or contains "HLG")."""
+    return "HLG" in color_space.upper() or color_space == "HDR"
+
+def encode_linear_bt2020(linear_2020: torch.Tensor, color_space: str, peak_nits: float) -> torch.Tensor:
+    """
+    Encodes linear BT.2020 HDR (1.0 = 100 nits) with the target transfer function (PQ or HLG).
+    Shared by the algorithmic (ITM) and AI-based SDR-to-HDR nodes.
+    """
+    if is_hlg_color_space(color_space):
+        return linear_to_hlg(linear_2020, peak_nits=peak_nits)
+    return linear_to_pq(linear_2020, nits_scale=100.0)
+
+def pq_to_hdr_output(pq_2020: torch.Tensor, color_space: str, peak_nits: float) -> torch.Tensor:
+    """
+    Converts a BT.2020 PQ tensor (e.g. the output of an AI ITM model) to the target HDR encoding.
+    Luminance is clipped to peak_nits so that the result respects the requested display peak.
+    """
+    linear_2020 = pq_to_linear(pq_2020, nits_scale=100.0)
+    linear_2020 = torch.clamp(linear_2020, 0.0, peak_nits / 100.0)
+    return encode_linear_bt2020(linear_2020, color_space, peak_nits)
+
 def sdr_to_hdr_tensor(
     images: torch.Tensor,
     peak_nits: float = 400.0,
@@ -143,9 +188,6 @@ def sdr_to_hdr_tensor(
     rgb_images = images[..., :3].contiguous()
     alpha = images[..., 3:] if has_alpha else None
 
-    # Determine transfer mode
-    is_hlg = "HLG" in color_space.upper() or color_space == "HDR"
-
     output_chunks = []
     total_frames = rgb_images.shape[0]
 
@@ -159,11 +201,8 @@ def sdr_to_hdr_tensor(
         linear_2020 = convert_bt709_to_bt2020(linear_hdr)
         
         # 3. Linear -> PQ or HLG OETF
-        if is_hlg:
-            hdr_chunk = linear_to_hlg(linear_2020, peak_nits=peak_nits)
-        else:
-            hdr_chunk = linear_to_pq(linear_2020, nits_scale=100.0)
-            
+        hdr_chunk = encode_linear_bt2020(linear_2020, color_space, peak_nits)
+
         output_chunks.append(hdr_chunk)
 
     hdr_rgb = torch.cat(output_chunks, dim=0)
