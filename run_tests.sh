@@ -40,9 +40,9 @@ if [ "$RUN_GUI" = true ]; then
     echo ">> [2/2] Running GUI Frontend Regression Tests..."
     FRONTEND_DIR="$COMFYUI_DIR/../ComfyUI_frontend"
     if [ -d "$FRONTEND_DIR" ] && command -v pnpm &> /dev/null; then
-        (cd "$FRONTEND_DIR" && pnpm exec node --experimental-vm-modules --test "$SCRIPT_DIR/web/tests/test_gui_regression.mjs")
+        (cd "$FRONTEND_DIR" && pnpm exec node --experimental-vm-modules --test "$SCRIPT_DIR/tests/web/test_gui_regression.mjs")
     elif command -v node &> /dev/null; then
-        node --experimental-vm-modules --test "$SCRIPT_DIR/web/tests/test_gui_regression.mjs"
+        node --experimental-vm-modules --test "$SCRIPT_DIR/tests/web/test_gui_regression.mjs"
     else
         echo ">> Warning: node/pnpm not found, skipping GUI regression tests."
     fi

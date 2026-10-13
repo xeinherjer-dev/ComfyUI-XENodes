@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const JS_DIR = path.resolve(__dirname, "../js");
+const JS_DIR = path.resolve(__dirname, "../../web/js");
 
 /**
  * Creates an isolated mock environment for ComfyUI web extensions.
