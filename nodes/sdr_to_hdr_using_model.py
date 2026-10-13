@@ -18,6 +18,8 @@ from ..utils.hdr_io import (
 from ..utils.hdr_models import (
     ARCH_AGCM,
     ARCH_ENSEMBLE,
+    ARCH_HDRTVDM,
+    ARCH_ITMLUT,
     ARCH_LE,
     ARCH_LE_PLUS,
     MODEL_FOLDER_NAME,
@@ -47,15 +49,21 @@ class LoadSDRtoHDRModel(io.ComfyNode):
             is_experimental=True,
             description=(
                 f"[BETA] Loads an inverse tone mapping model from 'models/{MODEL_FOLDER_NAME}'. "
-                "Supports Ensemble_AGCM_LE.pth (recommended) or AGCM.pth. "
+                "Supports Ensemble_AGCM_LE.pth (recommended for anime/video), "
+                "HDRTVDM_params.pth (CVPR 2023 Restormer/Transformer standard baseline), "
+                "HDRTVDM_params_3DM.pth (CVPR 2023 Restormer for heavily compressed real-world SDR), or "
+                "ITMLUT_params.pth (ultra-fast Neural 3D-LUT for real-time video). "
                 "Default models are downloaded automatically on first run if not present."
             ),
             inputs=[
                 io.Combo.Input(
                     "model_name",
                     options=files,
-                    default="Ensemble_AGCM_LE.pth",
-                    tooltip="Model file (e.g. Ensemble_AGCM_LE.pth or AGCM.pth). Automatically downloaded if missing.",
+                    default="Ensemble_AGCM_LE.pth" if "Ensemble_AGCM_LE.pth" in files else files[0],
+                    tooltip=(
+                        "Model file (Ensemble_AGCM_LE.pth, HDRTVDM_params.pth, HDRTVDM_params_3DM.pth, ITMLUT_params.pth). "
+                        "Automatically downloaded if missing."
+                    ),
                 ),
             ],
             outputs=[SDRtoHDRModel.Output("model")],
@@ -71,16 +79,20 @@ class LoadSDRtoHDRModel(io.ComfyNode):
             agcm = model.AGCM
             le = model.LE
             is_ensemble = True
+            bundle = SDRtoHDRModelBundle(agcm=agcm, le=le, arch=arch, names=[model_name], is_ensemble=is_ensemble)
         elif arch == ARCH_AGCM:
             agcm = model
             le = None
             is_ensemble = False
+            bundle = SDRtoHDRModelBundle(agcm=agcm, le=le, arch=arch, names=[model_name], is_ensemble=is_ensemble)
+        elif arch in (ARCH_HDRTVDM, ARCH_ITMLUT):
+            bundle = SDRtoHDRModelBundle(model=model, arch=arch, names=[model_name])
         else:
             raise ValueError(
-                f"[XENodes.LoadSDRtoHDRModel] '{model_name}' is {arch}, expected {ARCH_AGCM} or {ARCH_ENSEMBLE}."
+                f"[XENodes.LoadSDRtoHDRModel] '{model_name}' is {arch}, "
+                f"expected {ARCH_AGCM}, {ARCH_ENSEMBLE}, {ARCH_HDRTVDM}, or {ARCH_ITMLUT}."
             )
 
-        bundle = SDRtoHDRModelBundle(agcm=agcm, le=le, names=[model_name], is_ensemble=is_ensemble)
         bundle.to(mm.unet_offload_device())
         return io.NodeOutput(bundle)
 
@@ -194,6 +206,7 @@ class SDRtoHDRAI(SDRtoHDRUsingModel):
     def define_schema(cls):
         schema = super().define_schema()
         schema.node_id = "XENodes.SDRtoHDRAI"
+        schema.display_name = "SDR to HDR (AI) [Deprecated]"
         schema.is_deprecated = True
         schema.category = "xenodes/deprecated"
         return schema
