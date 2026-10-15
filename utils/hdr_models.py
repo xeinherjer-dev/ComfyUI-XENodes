@@ -126,6 +126,10 @@ def download_model_file(url: str, dest_path: str) -> None:
                             flush=True,
                         )
 
+            if total_bytes > 0 and downloaded != total_bytes:
+                raise IOError(
+                    f"incomplete download ({downloaded}/{total_bytes} bytes)"
+                )
             print(f"\n[XENodes] Successfully saved to: {dest_path}")
         shutil.move(tmp_path, dest_path)
     except Exception as e:
