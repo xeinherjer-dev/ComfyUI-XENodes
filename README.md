@@ -67,6 +67,14 @@ Expands SDR images, video frames, or video into 10-bit HDR using Inverse Tone Ma
 - **Image & Video Support**: Accepts `IMAGE` or `VIDEO` inputs and outputs HDR `IMAGE` and 10-bit HDR `VIDEO`.
 - **Chunked Processing**: Memory-safe batch execution for high-resolution images and video frames.
 
+### SDR to HDR (using Model) `[Beta]`
+
+Expands SDR images or video to HDR using learned Inverse Tone Mapping neural models (HDRTVNet, HDRTVNet++, HDRTVDM, ITMLUT).
+
+- **Learned Inverse Tone Mapping**: Semantic-aware HDR reconstruction preserving natural midtones while boosting highlights.
+- **Luminance Fine-Tuning**: Linear HDR luminance controls (`exposure` for EV stops, `lift` for shadow/midtone floor boost) with strict color/hue preservation.
+- **HDR Transfer Functions**: Outputs native **HDR PQ** or **HDR (HLG)** formats compatible with `Save Image` and `Save Video`.
+
 ### Save Image
 
 An image saving node with configurable format, compression, and HDR support.

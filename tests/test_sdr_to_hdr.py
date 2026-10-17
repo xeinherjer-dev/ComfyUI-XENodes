@@ -16,7 +16,6 @@ from custom_nodes.xenodes.nodes.sdr_to_hdr import (
 from custom_nodes.xenodes.nodes.sdr_to_hdr_using_model import (
     LoadSDRtoHDRModel,
     SDRtoHDRUsingModel,
-    SDRtoHDRAI,
     SDRtoHDRUsingModelExtension,
     comfy_entrypoint as sdr_to_hdr_model_entrypoint,
 )
@@ -64,11 +63,41 @@ class TestSDRtoHDRNodes(unittest.TestCase):
         exec_schema = SDRtoHDRUsingModel.define_schema()
         self.assertEqual(exec_schema.node_id, "XENodes.SDRtoHDRUsingModel")
         self.assertTrue(exec_schema.is_experimental)
+        input_ids = [inp.id for inp in exec_schema.inputs]
+        self.assertIn("exposure", input_ids)
+        self.assertIn("lift", input_ids)
+        exposure_inp = next(inp for inp in exec_schema.inputs if inp.id == "exposure")
+        lift_inp = next(inp for inp in exec_schema.inputs if inp.id == "lift")
+        self.assertEqual(exposure_inp.default, 0.0)
+        self.assertEqual(lift_inp.default, 0.0)
 
-        # Deprecated alias schema
-        ai_schema = SDRtoHDRAI.define_schema()
-        self.assertEqual(ai_schema.node_id, "XENodes.SDRtoHDRAI")
-        self.assertTrue(ai_schema.is_deprecated)
+    def test_hdr_luminance_adjustments(self):
+        from custom_nodes.xenodes.utils.color import adjust_hdr_luminance, pq_to_hdr_output
+
+        # Create dummy linear BT.2020 image (1.0 = 100 nits)
+        linear = torch.tensor([[[0.1, 0.2, 0.3], [1.0, 1.0, 1.0]]], dtype=torch.float32)
+
+        # 1. Neutral (no change when exposure=0 and lift=0)
+        unchanged = adjust_hdr_luminance(linear, exposure=0.0, lift=0.0)
+        torch.testing.assert_close(unchanged, linear)
+
+        # 2. Exposure (+1 EV should double luminance)
+        doubled = adjust_hdr_luminance(linear, exposure=1.0, lift=0.0)
+        torch.testing.assert_close(doubled, linear * 2.0, rtol=1e-4, atol=1e-4)
+
+        # 3. Lift should raise shadow/midtone
+        lifted = adjust_hdr_luminance(linear, exposure=0.0, lift=0.1)
+        self.assertTrue(torch.all(lifted >= linear))
+        # Shadow pixel [0.1, 0.2, 0.3] should be raised more proportionally than [1.0, 1.0, 1.0]
+        shadow_gain = (lifted[0, 0, 0] / linear[0, 0, 0]).item()
+        white_gain = (lifted[0, 1, 0] / linear[0, 1, 0]).item()
+        self.assertGreater(shadow_gain, white_gain)
+
+        # 4. pq_to_hdr_output integration
+        dummy_pq = torch.full((1, 4, 4, 3), 0.5, dtype=torch.float32)
+        out_hdr = pq_to_hdr_output(dummy_pq, color_space="HDR PQ", peak_nits=1000.0, exposure=0.5, lift=0.05)
+        self.assertEqual(out_hdr.shape, dummy_pq.shape)
+        self.assertTrue(torch.all(out_hdr >= 0.0) and torch.all(out_hdr <= 1.0))
 
     def test_extensions(self):
         ext_algo = asyncio.run(sdr_to_hdr_entrypoint())
@@ -81,7 +110,6 @@ class TestSDRtoHDRNodes(unittest.TestCase):
         nodes_model = asyncio.run(ext_model.get_node_list())
         self.assertIn(LoadSDRtoHDRModel, nodes_model)
         self.assertIn(SDRtoHDRUsingModel, nodes_model)
-        self.assertIn(SDRtoHDRAI, nodes_model)
 
 
 if __name__ == "__main__":

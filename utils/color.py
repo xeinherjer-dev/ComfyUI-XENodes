@@ -148,12 +148,58 @@ def encode_linear_bt2020(linear_2020: torch.Tensor, color_space: str, peak_nits:
         return linear_to_hlg(linear_2020, peak_nits=peak_nits)
     return linear_to_pq(linear_2020, nits_scale=100.0)
 
-def pq_to_hdr_output(pq_2020: torch.Tensor, color_space: str, peak_nits: float) -> torch.Tensor:
+_BT2020_LUMA_WEIGHTS = [0.2627, 0.6780, 0.0593]
+
+def adjust_hdr_luminance(
+    linear_2020: torch.Tensor,
+    exposure: float = 0.0,
+    lift: float = 0.0,
+) -> torch.Tensor:
+    """
+    Adjusts linear BT.2020 HDR luminance (exposure and shadow lift) while strictly preserving color/hue.
+
+    Args:
+        linear_2020 (torch.Tensor): Linear BT.2020 HDR tensor (where 1.0 = 100 nits).
+        exposure (float): Exposure compensation in EV stops. +1.0 doubles luminance (+1 stop), -1.0 halves it.
+                          0.0 = unchanged.
+        lift (float): Shadow and midtone brightness lift (floor boost). 0.0 = off.
+                      Smoothly raises darker areas while tapering off as luminance reaches highlight levels.
+
+    Returns:
+        torch.Tensor: Adjusted linear BT.2020 tensor.
+    """
+    if exposure == 0.0 and lift == 0.0:
+        return linear_2020
+
+    luma_weights = torch.tensor(_BT2020_LUMA_WEIGHTS, device=linear_2020.device, dtype=linear_2020.dtype)
+    luma = torch.sum(linear_2020 * luma_weights, dim=-1, keepdim=True)
+
+    new_luma = luma
+    if exposure != 0.0:
+        new_luma = new_luma * (2.0 ** exposure)
+
+    if lift > 0.0:
+        boost = lift * torch.exp(-torch.clamp(new_luma, min=0.0) / 2.0)
+        new_luma = new_luma + boost
+
+    ratio = torch.clamp((new_luma + 1e-6) / (luma + 1e-6), min=0.0)
+    return linear_2020 * ratio
+
+def pq_to_hdr_output(
+    pq_2020: torch.Tensor,
+    color_space: str,
+    peak_nits: float,
+    exposure: float = 0.0,
+    lift: float = 0.0,
+) -> torch.Tensor:
     """
     Converts a BT.2020 PQ tensor (e.g. the output of an AI ITM model) to the target HDR encoding.
+    Optionally applies linear HDR luminance adjustments (exposure, shadow lift).
     Luminance is clipped to peak_nits so that the result respects the requested display peak.
     """
     linear_2020 = pq_to_linear(pq_2020, nits_scale=100.0)
+    if exposure != 0.0 or lift != 0.0:
+        linear_2020 = adjust_hdr_luminance(linear_2020, exposure=exposure, lift=lift)
     linear_2020 = torch.clamp(linear_2020, 0.0, peak_nits / 100.0)
     return encode_linear_bt2020(linear_2020, color_space, peak_nits)
 

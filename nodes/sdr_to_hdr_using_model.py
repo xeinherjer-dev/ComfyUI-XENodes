@@ -118,6 +118,14 @@ class SDRtoHDRUsingModel(io.ComfyNode):
                     "peak_nits", default=1000.0, min=100.0, max=10000.0, step=1.0,
                     tooltip="Output luminance is clipped to this peak. HDRTVNet was trained on 1000-nit HDR10 content.",
                 ),
+                io.Float.Input(
+                    "exposure", default=0.0, min=-3.0, max=3.0, step=0.1,
+                    tooltip="Exposure adjustment in EV stops applied in linear HDR space. +1.0 = twice as bright (+1 stop), -1.0 = half as bright. Default 0.0 = pure AI output.",
+                ),
+                io.Float.Input(
+                    "lift", default=0.0, min=0.0, max=0.5, step=0.01,
+                    tooltip="Shadow & midtone brightness lift (floor boost). 0.0 = off. Useful to raise dark or muddy scenes.",
+                ),
                 io.Combo.Input(
                     "color_space",
                     options=COLOR_SPACE_OPTIONS,
@@ -150,6 +158,8 @@ class SDRtoHDRUsingModel(io.ComfyNode):
         images: Input.Image | None = None,
         video: Input.Video | None = None,
         peak_nits: float = 1000.0,
+        exposure: float = 0.0,
+        lift: float = 0.0,
         color_space: str = "HDR PQ",
         condition_scale: int = 4,
         condition_smoothing: float = 0.0,
@@ -183,7 +193,13 @@ class SDRtoHDRUsingModel(io.ComfyNode):
                     prev_condition=prev_fea,
                     condition_smoothing=condition_smoothing,
                 )
-                hdr = pq_to_hdr_output(pq.permute(0, 2, 3, 1), internal_algo, peak_nits)
+                hdr = pq_to_hdr_output(
+                    pq.permute(0, 2, 3, 1),
+                    internal_algo,
+                    peak_nits,
+                    exposure=exposure,
+                    lift=lift,
+                )
                 outputs.append(hdr.to(out_device))
                 pbar.update(1)
         finally:
@@ -200,22 +216,10 @@ class SDRtoHDRUsingModel(io.ComfyNode):
         return io.NodeOutput(hdr_images, hdr_video)
 
 
-class SDRtoHDRAI(SDRtoHDRUsingModel):
-    """Backwards-compatibility alias for previously saved workflows."""
-    @classmethod
-    def define_schema(cls):
-        schema = super().define_schema()
-        schema.node_id = "XENodes.SDRtoHDRAI"
-        schema.display_name = "SDR to HDR (AI) [Deprecated]"
-        schema.is_deprecated = True
-        schema.category = "xenodes/deprecated"
-        return schema
-
-
 class SDRtoHDRUsingModelExtension(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        return [LoadSDRtoHDRModel, SDRtoHDRUsingModel, SDRtoHDRAI]
+        return [LoadSDRtoHDRModel, SDRtoHDRUsingModel]
 
 
 async def comfy_entrypoint() -> SDRtoHDRUsingModelExtension:

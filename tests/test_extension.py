@@ -36,7 +36,6 @@ class TestXENodesExtensionIntegration(unittest.TestCase):
             "XENodes.SDRtoHDR",
             "XENodes.LoadSDRtoHDRModel",
             "XENodes.SDRtoHDRUsingModel",
-            "XENodes.SDRtoHDRAI",
             "XENodes.FastGroupsMuterBypasser",
             "XENodes.LoadImageFromFolder",
         }
