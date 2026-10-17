@@ -44,19 +44,6 @@ function compareMagic(data, offset, magic) {
 }
 
 /**
- * Traverses the Ogg page structure to extract all segments belonging to the
- * OpusTags packet.
- *
- * Scans pages sequentially by verifying the `OggS` capture pattern, reads
- * the segment table from each page header, and collects contiguous segments
- * that form the OpusTags packet. Relies on Ogg lacing rules: a segment
- * shorter than 255 bytes signals the end of the current packet.
- *
- * @param {Uint8Array} data - Raw binary content of the Ogg file.
- * @returns {Uint8Array[]} An array of `Uint8Array` segments that together constitute the
- *   OpusTags packet, or an empty array if the packet is not found.
- */
-/**
  * Processes segments within a single Ogg page to extract OpusTags data.
  * @param {Uint8Array} data
  * @param {number} lengthsOffset
@@ -212,11 +199,16 @@ function parseJsonWithNonFinite(text) {
  */
 function getCommentsOffset(packetData, packetView) {
   const readIndex = 8; // Skip 'OpusTags' magic string (8 bytes)
+
+  // Bounds check: ensure vendor length field is within packet
   if (readIndex + 4 > packetData.length) return null;
 
+  // Skip vendor string length (4 bytes) + vendor string
   const vendorLength = packetView.getUint32(readIndex, true);
   const afterVendor = readIndex + 4 + vendorLength;
 
+  // Bounds check: ensure vendor string and the user comment list length field
+  // are within packet
   if (afterVendor + 4 > packetData.length) return null;
   return afterVendor;
 }
@@ -273,18 +265,23 @@ function parseVorbisComments(packetData, decoder) {
     return { prompt: undefined, workflow: undefined };
   }
 
+  // Get the number of user comments
   const userCommentListLength = packetView.getUint32(commentsOffset, true);
   let readIndex = commentsOffset + 4;
 
   const result = {};
   for (let i = 0; i < userCommentListLength; i++) {
+    // Bounds check: ensure comment length field is within packet
     if (readIndex + 4 > packetData.length) break;
 
+    // Vorbis Comments spec: Get comment length (32-bit little-endian)
     const commentLength = packetView.getUint32(readIndex, true);
     readIndex += 4;
 
+    // Bounds check: ensure comment data is within packet
     if (readIndex + commentLength > packetData.length) break;
 
+    // Extract and decode the comment string (UTF-8)
     const text = decoder.decode(
       packetData.subarray(readIndex, readIndex + commentLength)
     );
