@@ -75,46 +75,71 @@ def _save_avif_image(
     image_tensor: torch.Tensor,
     file_path: str,
     crf: float,
-    saved_metadata: dict | None,
+    parent_images: torch.Tensor | None = None,
+    saved_metadata: dict | None = None,
 ):
     ffmpeg_exe = find_ffmpeg()
     if not ffmpeg_exe:
         raise RuntimeError("FFmpeg executable not found. Please install ffmpeg or imageio-ffmpeg.")
 
     height, width = image_tensor.shape[0], image_tensor.shape[1]
-    
-    # Auto-detect color space from tensor metadata or default to HDR PQ
-    color_space = getattr(image_tensor, "_color_space", "HDR PQ")
-    is_hlg = color_space == "HDR" or "HLG" in str(color_space).upper()
+
+    # Auto-detect color space from tensor metadata (set by SDR to HDR node) or fallback to HDR PQ
+    resolved_cs = getattr(image_tensor, "_color_space", getattr(parent_images, "_color_space", "HDR PQ"))
+
+    is_hlg = resolved_cs == "HDR" or "HLG" in str(resolved_cs).upper()
+    is_srgb = resolved_cs == "sRGB" or "SRGB" in str(resolved_cs).upper()
+    is_pq = not is_hlg and not is_srgb
+
+    if is_srgb:
+        cp_num, tc_num, mc_num = 1, 13, 1
+        primaries, trc, csp = "bt709", "iec61966-2-1", "bt709"
+        out_pix_fmt = "yuv420p"
+        hdr_flag = "0"
+    elif is_hlg:
+        cp_num, tc_num, mc_num = 9, 18, 9
+        primaries, trc, csp = "bt2020", "arib-std-b67", "bt2020nc"
+        out_pix_fmt = "yuv420p10le"
+        hdr_flag = "1"
+    else:  # HDR PQ
+        cp_num, tc_num, mc_num = 9, 16, 9
+        primaries, trc, csp = "bt2020", "smpte2084", "bt2020nc"
+        out_pix_fmt = "yuv420p10le"
+        hdr_flag = "1"
+
+    svtav1_params = (
+        f"lookahead=0:tune=0:enable-hdr={hdr_flag}:"
+        f"color-primaries={cp_num}:transfer-characteristics={tc_num}:matrix-coefficients={mc_num}:color-range=1"
+    )
 
     cmd = [
         ffmpeg_exe, "-y", "-v", "error",
         "-f", "rawvideo",
-        "-pix_fmt", "gbrpf32le",
+        "-pix_fmt", "rgb48le",
         "-s", f"{width}x{height}",
         "-r", "25",
+        "-color_primaries", primaries,
+        "-color_trc", trc,
+        "-colorspace", csp,
         "-i", "-",
         "-c:v", "libsvtav1",
         "-preset", "6",
-        "-svtav1-params", "lookahead=0:tune=0",
-        "-pix_fmt", "yuv420p10le",
-        "-crf", str(int(crf)),
+        "-svtav1-params", svtav1_params,
+        "-pix_fmt", out_pix_fmt,
+        "-color_primaries", primaries,
+        "-color_trc", trc,
+        "-colorspace", csp,
+        "-crf", str(int(round(crf))),
+        "-frames:v", "1",
+        file_path,
     ]
-
-    if is_hlg:
-        cmd.extend(["-color_primaries", "bt2020", "-color_trc", "arib-std-b67", "-colorspace", "bt2020nc"])
-    else:
-        cmd.extend(["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"])
-
-    cmd.extend(["-frames:v", "1", file_path])
 
     stderr_tmp = tempfile.TemporaryFile()
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=stderr_tmp)
 
     try:
         rgb_tensor = image_tensor[..., :3].detach().to(device="cpu", dtype=torch.float32).clamp(0.0, 1.0)
-        gbr_planar = rgb_tensor[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
-        img_bytes = gbr_planar.numpy().astype(np.float32).tobytes()
+        img_bytes = (rgb_tensor * 65535.0).round().clamp(0, 65535).to(torch.int32).numpy().astype(np.uint16).tobytes()
 
         proc.stdin.write(img_bytes)
         proc.stdin.close()
@@ -238,6 +263,7 @@ class SaveImage(io.ComfyNode):
                     image_tensor=image_tensor,
                     file_path=file_path,
                     crf=crf,
+                    parent_images=images,
                     saved_metadata=saved_metadata,
                 )
             elif format_str == "webp":

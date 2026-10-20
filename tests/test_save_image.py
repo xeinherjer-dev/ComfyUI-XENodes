@@ -52,6 +52,12 @@ class TestSaveImage(unittest.TestCase):
         self.assertTrue(lossless)
         self.assertEqual(quality, 95)
 
+        fmt, lossless, quality, compression, crf = _parse_image_options(
+            {"format": "avif", "crf": 18}, {}
+        )
+        self.assertEqual(fmt, "avif")
+        self.assertEqual(crf, 18.0)
+
     def test_execute_save_png(self):
         img_tensor = conftest_base.create_dummy_image(batch=1, height=16, width=16)
         prefix = "tests/test_img_png"
