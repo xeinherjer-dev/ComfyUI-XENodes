@@ -111,6 +111,43 @@ class TestSDRtoHDRNodes(unittest.TestCase):
         self.assertIn(LoadSDRtoHDRModel, nodes_model)
         self.assertIn(SDRtoHDRUsingModel, nodes_model)
 
+    def test_hg_and_hr_support(self):
+        from custom_nodes.xenodes.utils.hdr_models import (
+            DEFAULT_MODELS,
+            HallucinationGenerator,
+            generate_highlight_mask,
+            run_sdr_to_hdr_frame,
+            SDRtoHDRModelBundle,
+            ARCH_HG,
+        )
+
+        # 1. HR.pth is in default models list
+        self.assertIn("HR.pth", DEFAULT_MODELS)
+
+        # 2. Highlight mask generation
+        sdr_test = torch.tensor([[[[0.5, 0.96], [0.98, 1.0]]]], dtype=torch.float32)
+        sdr_test = sdr_test.repeat(1, 3, 1, 1)  # (1, 3, 2, 2)
+        mask = generate_highlight_mask(sdr_test, threshold=0.95)
+        self.assertEqual(mask.shape, (1, 1, 2, 2))
+        self.assertEqual(mask[0, 0, 0, 0].item(), 0.0)  # 0.5 <= 0.95 -> 0.0
+        self.assertGreater(mask[0, 0, 0, 1].item(), 0.0)  # 0.96 > 0.95 -> > 0.0
+        self.assertEqual(mask[0, 0, 1, 1].item(), 1.0)  # 1.0 -> 1.0
+
+        # 3. HallucinationGenerator forward pass
+        hg_net = HallucinationGenerator(nf=16).eval()  # eval mode for BatchNorm
+        dummy_in = torch.ones((1, 3, 32, 32), dtype=torch.float32)
+        dummy_mask = torch.zeros((1, 1, 32, 32), dtype=torch.float32)
+        out = hg_net(dummy_in, dummy_mask)
+        self.assertEqual(out.shape, dummy_in.shape)
+        # When mask is 0, output must equal input (out = mask * out + img)
+        torch.testing.assert_close(out, dummy_in)
+
+        # 4. run_sdr_to_hdr_frame with ARCH_HG
+        bundle = SDRtoHDRModelBundle(model=hg_net, arch=ARCH_HG, names=["HG_test.pth"])
+        res, fea = run_sdr_to_hdr_frame(bundle, dummy_in)
+        self.assertEqual(res.shape, dummy_in.shape)
+        self.assertIsNone(fea)
+
 
 if __name__ == "__main__":
     unittest.main()

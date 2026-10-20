@@ -67,6 +67,9 @@ MODEL_DOWNLOAD_URLS: dict[str, str] = {
     "Ensemble_AGCM_LE.pth": (
         "https://github.com/xiaom233/HDRTVNet-plus/raw/main/pretrained_models/Ensemble_AGCM_LE.pth"
     ),
+    "HR.pth": (
+        "https://github.com/xiaom233/HDRTVNet-plus/raw/main/pretrained_models/HR.pth"
+    ),
     "HDRTVDM_params_3DM.pth": (
         "https://raw.githubusercontent.com/AndreGuo/HDRTVDM/main/method/params_3DM.pth"
     ),
@@ -91,8 +94,7 @@ MODEL_DOWNLOAD_URLS: dict[str, str] = {
 }
 
 DEFAULT_MODELS: list[str] = [
-    "Ensemble_AGCM_LE.pth",
-    "HDRTVDM_params.pth",
+    "HR.pth",
     "HDRTVDM_params_3DM.pth",
     "ITMLUT_params.pth",
 ]
@@ -492,6 +494,111 @@ class EnsembleAGCMLE(nn.Module):
         agcm_out = self.AGCM(content, condition)
         le_out = self.LE((agcm_out, agcm_out))
         return le_out, agcm_out
+
+
+# --------------------------------------------------------------------------------------
+# HDRTVNet Highlight Generation (HG / Hallucination Generator from ICCV 2021)
+# --------------------------------------------------------------------------------------
+def generate_highlight_mask(sdr_bchw: torch.Tensor, threshold: float = 0.95) -> torch.Tensor:
+    """
+    Computes soft saturation highlight mask (B, 1, H, W) in [0, 1] from input SDR image.
+    Pixels with max RGB > threshold ramp linearly from 0.0 to 1.0.
+    """
+    max_c, _ = torch.max(sdr_bchw, dim=1, keepdim=True)
+    mask = torch.clamp((max_c - threshold) / max(1e-5, 1.0 - threshold), 0.0, 1.0)
+    return mask
+
+
+def _hg_conv_bn_relu(in_nc: int, out_nc: int, kernel_size: int = 3, stride: int = 1, padding: int = 1) -> nn.Sequential:
+    return nn.Sequential(
+        nn.Conv2d(in_nc, out_nc, kernel_size, stride=stride, padding=padding),
+        nn.BatchNorm2d(out_nc, affine=True),
+        nn.ReLU(inplace=True),
+    )
+
+
+def _hg_up_pixel_shuffle(in_nc: int, out_nc: int, sf: int = 2) -> nn.Sequential:
+    return nn.Sequential(
+        nn.Conv2d(in_nc, out_nc * (sf ** 2), kernel_size=3, stride=1, padding=1),
+        nn.PixelShuffle(sf),
+        nn.ReLU(inplace=True),
+    )
+
+
+class HallucinationGenerator(nn.Module):
+    """
+    Highlight Generation (HG) network from ICCV 2021 HDRTVNet.
+    Takes (LE_output_image, highlight_mask) and synthesizes realistic radiance/texture in saturated areas.
+    """
+
+    def __init__(self, in_nc: int = 3, out_nc: int = 3, nf: int = 64, sf: int = 2):
+        super().__init__()
+        self.maxpool = nn.MaxPool2d(sf)
+
+        self.conv1 = _hg_conv_bn_relu(in_nc, nf)
+        self.conv2 = _hg_conv_bn_relu(nf, 2 * nf)
+
+        self.conv3_1 = _hg_conv_bn_relu(2 * nf, 4 * nf)
+        self.conv3_2 = _hg_conv_bn_relu(4 * nf, 4 * nf)
+
+        self.conv4_1 = _hg_conv_bn_relu(4 * nf, 8 * nf)
+        self.conv4_2 = _hg_conv_bn_relu(8 * nf, 8 * nf)
+
+        self.conv5_1 = _hg_conv_bn_relu(8 * nf, 8 * nf)
+        self.conv5_2 = _hg_conv_bn_relu(8 * nf, 8 * nf)
+
+        self.conv_code1 = _hg_conv_bn_relu(8 * nf, 8 * nf)
+        self.conv_code2 = _hg_conv_bn_relu(8 * nf, 8 * nf)
+
+        self.Up_conv1 = _hg_up_pixel_shuffle(8 * nf, 8 * nf, sf=2)
+        self.conv6 = nn.Conv2d(16 * nf, 8 * nf, 1, 1)
+
+        self.Up_conv2 = _hg_up_pixel_shuffle(8 * nf, 8 * nf, sf=2)
+        self.conv7 = nn.Conv2d(16 * nf, 4 * nf, 1, 1)
+
+        self.Up_conv3 = _hg_up_pixel_shuffle(4 * nf, 4 * nf, sf=2)
+        self.conv8 = nn.Conv2d(8 * nf, 2 * nf, 1, 1)
+
+        self.Up_conv4 = _hg_up_pixel_shuffle(2 * nf, 2 * nf, sf=2)
+        self.conv9 = nn.Conv2d(4 * nf, nf, 1, 1)
+
+        self.Up_conv5 = _hg_up_pixel_shuffle(nf, nf, sf=2)
+        self.conv10 = nn.Conv2d(2 * nf, out_nc, 1, 1)
+
+        self.conv_last = nn.Conv2d(2 * out_nc, out_nc, 1, 1)
+
+    def forward(self, img: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        # Spatial dimensions must be divisible by 32 for the 5-stage poolings
+        h, w = img.shape[-2:]
+        pad_h = (32 - (h % 32)) % 32
+        pad_w = (32 - (w % 32)) % 32
+        if pad_h > 0 or pad_w > 0:
+            img_in = F.pad(img, (0, pad_w, 0, pad_h), mode="reflect")
+        else:
+            img_in = img
+
+        conv1_out = self.conv1(img_in)
+        conv2_out = self.conv2(self.maxpool(conv1_out))
+
+        conv3_out = self.conv3_2(self.maxpool(self.conv3_1(conv2_out)))
+        conv4_out = self.conv4_2(self.maxpool(self.conv4_1(conv3_out)))
+        conv5_out = self.conv5_2(self.maxpool(self.conv5_1(conv4_out)))
+
+        conv_code = self.conv_code2(self.maxpool(self.conv_code1(conv5_out)))
+
+        conv6_out = self.conv6(torch.cat((self.Up_conv1(conv_code), conv5_out), dim=1))
+        conv7_out = self.conv7(torch.cat((self.Up_conv2(conv6_out), conv4_out), dim=1))
+        conv8_out = self.conv8(torch.cat((self.Up_conv3(conv7_out), conv3_out), dim=1))
+        conv9_out = self.conv9(torch.cat((self.Up_conv4(conv8_out), conv2_out), dim=1))
+        conv10_out = self.conv10(torch.cat((self.Up_conv5(conv9_out), conv1_out), dim=1))
+
+        out = self.conv_last(torch.cat((conv10_out, img_in), dim=1))
+
+        if pad_h > 0 or pad_w > 0:
+            out = out[..., :h, :w]
+
+        # In HDRTVNet formulation: out = mask * out + img
+        return mask * out + img
 
 
 # --------------------------------------------------------------------------------------
@@ -1108,6 +1215,7 @@ ARCH_AGCM = "HDRTVNet-AGCM"
 ARCH_ENSEMBLE = "HDRTVNet-Plus-Ensemble"
 ARCH_LE_PLUS = "HDRTVNet-Plus-LE"
 ARCH_LE = "HDRTVNet-LE"
+ARCH_HG = "HDRTVNet-HG"
 ARCH_HDRTVDM = "HDRTVDM-LSN"
 ARCH_ITMLUT = "ITMLUT-AiLUT"
 
@@ -1141,6 +1249,9 @@ def detect_architecture(sd: dict) -> str:
     # 5. HDRTVNet original LE (SRResNet)
     if "recon_trunk.0.conv1.weight" in sd and "upconv.weight" in sd:
         return ARCH_LE
+    # 6. HDRTVNet Highlight Generation (Hallucination Generator)
+    if "conv_code1.0.weight" in sd and "conv10.weight" in sd:
+        return ARCH_HG
 
     sample = ", ".join(list(sd.keys())[:8])
     raise ValueError(f"Unsupported SDR-to-HDR model architecture. First keys: {sample}")
@@ -1165,6 +1276,9 @@ def build_model(sd: dict) -> tuple[nn.Module, str]:
     elif arch == ARCH_LE_PLUS:
         nf = sd["conv_first.weight"].shape[0]
         model = HDRUNet3T1(in_nc=3, out_nc=3, nf=nf, act_type="relu", weighting_network=False)
+    elif arch == ARCH_HG:
+        nf = sd["conv1.0.weight"].shape[0]
+        model = HallucinationGenerator(nf=nf)
     else:  # ARCH_LE
         nf, in_nc = sd["conv_first.weight"].shape[:2]
         out_nc = sd["conv_last.weight"].shape[0]
@@ -1230,6 +1344,12 @@ def run_sdr_to_hdr_frame(
     Returns:
         (BT.2020 PQ frames (B, 3, H, W) in [0, 1], condition vector used or None)
     """
+    # 0. Standalone Highlight Generation model (HG)
+    if bundle.arch == ARCH_HG and bundle.model is not None:
+        mask = generate_highlight_mask(frame_bchw)
+        out = bundle.model(frame_bchw, mask)
+        return out.clamp(0.0, 1.0), None
+
     # 1. End-to-end models: ITMLUT (Neural 3D-LUT) or HDRTVDM (Restormer Transformer-UNet)
     if bundle.arch in (ARCH_HDRTVDM, ARCH_ITMLUT) and bundle.model is not None:
         out = bundle.model(frame_bchw)

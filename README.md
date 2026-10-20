@@ -72,10 +72,10 @@ Expands SDR images, video frames, or video into 10-bit HDR using Inverse Tone Ma
 Expands SDR images or video to HDR using learned Inverse Tone Mapping neural models (HDRTVNet, HDRTVNet++, HDRTVDM, ITMLUT).
 
 - **Learned Inverse Tone Mapping**: Semantic-aware HDR reconstruction preserving natural midtones while boosting highlights.
-- **Supported Models**:
-  - `Ensemble_AGCM_LE.pth`: End-to-end AGCM + Local Enhancement (HDRTVNet++, MIT License). Recommended default.
-  - `HDRTVDM_params.pth` / `HDRTVDM_params_3DM.pth`: TriSegNet Transformer-UNet (HDRTVDM, MPL-2.0 License).
-  - `ITMLUT_params.pth`: Ultra-fast Adaptive Interval 3D-LUT (ITMLUT, MPL-2.0 License).
+- **Supported Models** (automatically downloaded on-demand):
+  - `HR.pth`: **Highest Visual Quality** (HDRTVNet++, MIT License). GAN-refined Highlight Refinement with perceptual loss for enhanced highlight contrast and vivid BT.2020 wide-gamut colors (recommended for anime, CG, art, and illustrations).
+  - `HDRTVDM_params_3DM.pth`: **Live-Action & Artifact Restoration** (HDRTVDM, MPL-2.0 License). TriSegNet Transformer-UNet trained to suppress real-world compression artifacts, banding, and noise (recommended for live-action video and movies).
+  - `ITMLUT_params.pth`: **Ultra-Fast & Lightweight** (ITMLUT, MPL-2.0 License). Real-time 3D-LUT running orders of magnitude faster than deep models (recommended for long video batches and low VRAM).
 - **Luminance Fine-Tuning**: Linear HDR luminance controls (`exposure` for EV stops, `lift` for shadow/midtone floor boost) with strict color/hue preservation.
 - **HDR Transfer Functions**: Outputs native **HDR PQ** or **HDR (HLG)** formats compatible with `Save Image` and `Save Video`.
 - **Note on Commercial vs. Academic Use**: Pretrained weights are downloaded automatically on-demand from upstream open-source repositories. Note that some models (such as HDRTVNet++) were trained on datasets collected under academic research terms. Please review respective licenses and terms in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) if deploying in commercial environments.

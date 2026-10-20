@@ -19,6 +19,7 @@ from ..utils.hdr_models import (
     ARCH_AGCM,
     ARCH_ENSEMBLE,
     ARCH_HDRTVDM,
+    ARCH_HG,
     ARCH_ITMLUT,
     ARCH_LE,
     ARCH_LE_PLUS,
@@ -49,21 +50,20 @@ class LoadSDRtoHDRModel(io.ComfyNode):
             is_experimental=True,
             description=(
                 f"[BETA] Loads an inverse tone mapping model from 'models/{MODEL_FOLDER_NAME}'. "
-                "Supports Ensemble_AGCM_LE.pth (recommended for anime/video), "
-                "HDRTVDM_params.pth (CVPR 2023 Restormer/Transformer standard baseline), "
-                "HDRTVDM_params_3DM.pth (CVPR 2023 Restormer for heavily compressed real-world SDR), or "
-                "ITMLUT_params.pth (ultra-fast Neural 3D-LUT for real-time video). "
-                "Default models are downloaded automatically on first run if not present "
-                "(see THIRD_PARTY_LICENSES.md for upstream model credits & licenses)."
+                "Default recommended models (downloaded automatically if missing):\n"
+                "- HR.pth: Highest visual quality (HDRTVNet++, MIT License). GAN-refined highlights & vivid BT.2020 color (best for anime/CG/art).\n"
+                "- HDRTVDM_params_3DM.pth: Robust Transformer-UNet (HDRTVDM, MPL-2.0 License). Suppresses real-world compression artifacts (best for live-action/video).\n"
+                "- ITMLUT_params.pth: Ultra-fast 3D-LUT (ITMLUT, MPL-2.0 License). Real-time inference (best for long videos/low VRAM)."
             ),
             inputs=[
                 io.Combo.Input(
                     "model_name",
                     options=files,
-                    default="Ensemble_AGCM_LE.pth" if "Ensemble_AGCM_LE.pth" in files else files[0],
+                    default="HR.pth" if "HR.pth" in files else files[0],
                     tooltip=(
-                        "Model file (Ensemble_AGCM_LE.pth, HDRTVDM_params.pth, HDRTVDM_params_3DM.pth, ITMLUT_params.pth). "
-                        "Automatically downloaded if missing."
+                        "Model file: 'HR.pth' (highest quality / anime / CG), "
+                        "'HDRTVDM_params_3DM.pth' (live-action / video / artifact restoration), "
+                        "'ITMLUT_params.pth' (ultra-fast real-time 3D-LUT). Automatically downloaded if missing."
                     ),
                 ),
             ],
@@ -86,12 +86,12 @@ class LoadSDRtoHDRModel(io.ComfyNode):
             le = None
             is_ensemble = False
             bundle = SDRtoHDRModelBundle(agcm=agcm, le=le, arch=arch, names=[model_name], is_ensemble=is_ensemble)
-        elif arch in (ARCH_HDRTVDM, ARCH_ITMLUT):
+        elif arch in (ARCH_HDRTVDM, ARCH_ITMLUT, ARCH_HG):
             bundle = SDRtoHDRModelBundle(model=model, arch=arch, names=[model_name])
         else:
             raise ValueError(
                 f"[XENodes.LoadSDRtoHDRModel] '{model_name}' is {arch}, "
-                f"expected {ARCH_AGCM}, {ARCH_ENSEMBLE}, {ARCH_HDRTVDM}, or {ARCH_ITMLUT}."
+                f"expected {ARCH_AGCM}, {ARCH_ENSEMBLE}, {ARCH_HDRTVDM}, {ARCH_ITMLUT}, or {ARCH_HG}."
             )
 
         bundle.to(mm.unet_offload_device())
