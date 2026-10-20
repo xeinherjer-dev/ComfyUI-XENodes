@@ -3,10 +3,10 @@ AI-based Inverse Tone Mapping (SDR -> HDR) model architectures and loading helpe
 
 Supported architectures (auto-detected from the state_dict):
   1. HDRTVNet-AGCM:
-     - Adaptive Global Color Mapping (ConditionNet) from ICCV 2021
+     - Adaptive Global Color Mapping (ConditionNet) from ICCV 2021 (MIT License, Copyright 2021 XyChen)
      - E.g. AGCM.pth / AGCM_G.pth
   2. HDRTVNet-Plus-Ensemble:
-     - End-to-end AGCM + Local Enhancement (HDRUNet3T1) from HDRTVNet++
+     - End-to-end AGCM + Local Enhancement (HDRUNet3T1) from HDRTVNet++ (MIT License, Copyright 2023 Hoven Li)
      - E.g. Ensemble_AGCM_LE.pth / HR.pth (single file with both global & local models)
   3. HDRTVNet-Plus-LE:
      - Standalone Local Enhancement (HDRUNet3T1 with Spatial Feature Transform)
@@ -14,9 +14,17 @@ Supported architectures (auto-detected from the state_dict):
   4. HDRTVNet-LE:
      - Original modified SRResNet Local Enhancement from ICCV 2021
      - E.g. LE_weights.pth
+  5. HDRTVDM:
+     - Luminance Segmented Network (LSN w. Restormer) from CVPR 2023 (MPL-2.0, Copyright 2023 Cheng Guo et al.)
+     - E.g. HDRTVDM_params.pth / HDRTVDM_params_3DM.pth
+  6. ITMLUT:
+     - Adaptive Interval 3D-LUT Inverse Tone Mapping from ACM CVMP 2023 (MPL-2.0, Copyright 2023 Cheng Guo et al.)
+     - E.g. ITMLUT_params.pth / ITMLUT_params_TV1K.pth
 
 Both static images and arbitrary-resolution video frames are supported.
 Spatial dimensions for LE are automatically padded to multiples of 8 and unpadded on output.
+
+See THIRD_PARTY_LICENSES.md for full license texts and credits.
 """
 from __future__ import annotations
 
@@ -488,6 +496,7 @@ class EnsembleAGCMLE(nn.Module):
 
 # --------------------------------------------------------------------------------------
 # HDRTVDM (CVPR 2023): Luminance Segmented Network (TriSegNet w. Restormer)
+# Adapted from https://github.com/AndreGuo/HDRTVDM (MPL-2.0 License)
 # --------------------------------------------------------------------------------------
 def _which_act(act_type: str) -> nn.Module:
     if act_type == "relu":
@@ -837,6 +846,7 @@ class TriSegNet(nn.Module):
 
 # --------------------------------------------------------------------------------------
 # ITMLUT (Adaptive Interval 3D-LUT / Pure PyTorch)
+# Adapted from https://github.com/AndreGuo/ITMLUT (MPL-2.0 License)
 # --------------------------------------------------------------------------------------
 def pure_ailut_transform(img: torch.Tensor, lut: torch.Tensor, vertices: torch.Tensor) -> torch.Tensor:
     """

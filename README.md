@@ -72,8 +72,13 @@ Expands SDR images, video frames, or video into 10-bit HDR using Inverse Tone Ma
 Expands SDR images or video to HDR using learned Inverse Tone Mapping neural models (HDRTVNet, HDRTVNet++, HDRTVDM, ITMLUT).
 
 - **Learned Inverse Tone Mapping**: Semantic-aware HDR reconstruction preserving natural midtones while boosting highlights.
+- **Supported Models**:
+  - `Ensemble_AGCM_LE.pth`: End-to-end AGCM + Local Enhancement (HDRTVNet++, MIT License). Recommended default.
+  - `HDRTVDM_params.pth` / `HDRTVDM_params_3DM.pth`: TriSegNet Transformer-UNet (HDRTVDM, MPL-2.0 License).
+  - `ITMLUT_params.pth`: Ultra-fast Adaptive Interval 3D-LUT (ITMLUT, MPL-2.0 License).
 - **Luminance Fine-Tuning**: Linear HDR luminance controls (`exposure` for EV stops, `lift` for shadow/midtone floor boost) with strict color/hue preservation.
 - **HDR Transfer Functions**: Outputs native **HDR PQ** or **HDR (HLG)** formats compatible with `Save Image` and `Save Video`.
+- **Note on Commercial vs. Academic Use**: Pretrained weights are downloaded automatically on-demand from upstream open-source repositories. Note that some models (such as HDRTVNet++) were trained on datasets collected under academic research terms. Please review respective licenses and terms in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) if deploying in commercial environments.
 
 ### Save Image
 
@@ -153,3 +158,13 @@ A powerful, subgraph-aware progress bar and node navigator for ComfyUI.
 ## License
 
 This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+
+### Third-Party Licenses & Attributions
+
+This repository incorporates model architectures adapted from open-source research projects:
+
+- **HDRTVNet / HDRTVNet++**: Licensed under the MIT License (Copyright (c) 2021 XyChen / 2023 Hoven Li).
+- **HDRTVDM**: Licensed under Mozilla Public License 2.0 (MPL-2.0, Copyright (c) 2023 Cheng Guo et al.).
+- **ITMLUT**: Licensed under Mozilla Public License 2.0 (MPL-2.0, Copyright (c) 2023 Cheng Guo et al.).
+
+Full details and license texts are documented in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

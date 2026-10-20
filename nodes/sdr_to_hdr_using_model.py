@@ -53,7 +53,8 @@ class LoadSDRtoHDRModel(io.ComfyNode):
                 "HDRTVDM_params.pth (CVPR 2023 Restormer/Transformer standard baseline), "
                 "HDRTVDM_params_3DM.pth (CVPR 2023 Restormer for heavily compressed real-world SDR), or "
                 "ITMLUT_params.pth (ultra-fast Neural 3D-LUT for real-time video). "
-                "Default models are downloaded automatically on first run if not present."
+                "Default models are downloaded automatically on first run if not present "
+                "(see THIRD_PARTY_LICENSES.md for upstream model credits & licenses)."
             ),
             inputs=[
                 io.Combo.Input(
