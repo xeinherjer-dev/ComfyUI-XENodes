@@ -1,7 +1,7 @@
 [project]
 name = "xenodes"
 description = "A collection of custom nodes and UI extensions for ComfyUI, featuring Multi-Switch, Multi-Pipe, Slider, Slider 2D, SDR to HDR, Save Image, Save Video, Save Audio, Combo Selector, Show Any, Load Image From Folder nodes, and UI extensions (Node Execution Time, Progress Bar)."
-version = "1.8.4"
+version = "1.9.0"
 readme = "README.md"
 license = { file = "LICENSE" }
 # classifiers = [
