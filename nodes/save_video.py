@@ -571,24 +571,34 @@ class SaveVideo(io.ComfyNode):
                 "-color_range", "tv",
             ])
 
+            # Standard HDR10 static metadata (D65 White Point, DCI-P3 primaries, 1000 nits peak, 0.0001 min)
+            x265_mdcv = "master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):max-cll=1000,400"
+            svt_mdcv = "mastering-display=G(0.265,0.69)B(0.15,0.06)R(0.68,0.32)WP(0.3127,0.329)L(1000.0,0.0001):content-light=1000,400"
+
             if av_codec == "libx264":
+                x264_params = f"colorprim=bt2020:transfer={x264_transfer}:colormatrix=bt2020nc:range=limited"
+                if color_space != "HDR":  # PQ HDR10
+                    x264_params += f":{x265_mdcv}"
                 cmd.extend([
-                    "-x264-params",
-                    f"colorprim=bt2020:transfer={x264_transfer}:colormatrix=bt2020nc:range=limited",
+                    "-x264-params", x264_params,
                     "-bsf:v",
                     f"h264_metadata=colour_primaries=9:transfer_characteristics={bsf_trc}:matrix_coefficients=9:video_full_range_flag=0",
                 ])
             elif av_codec == "libx265":
+                x265_params = f"colorprim=bt2020:transfer={x265_transfer}:colormatrix=bt2020nc:range=limited"
+                if color_space != "HDR":
+                    x265_params += f":{x265_mdcv}:hdr10=1"
                 cmd.extend([
-                    "-x265-params",
-                    f"colorprim=bt2020:transfer={x265_transfer}:colormatrix=bt2020nc:range=limited",
+                    "-x265-params", x265_params,
                     "-bsf:v",
                     f"hevc_metadata=colour_primaries=9:transfer_characteristics={bsf_trc}:matrix_coefficients=9:video_full_range_flag=0",
                 ])
             elif av_codec == "libsvtav1":
+                svt_params = f"enable-hdr=1:color-primaries=9:transfer-characteristics={svt_trc}:matrix-coefficients=9:color-range=0"
+                if color_space != "HDR":
+                    svt_params += f":{svt_mdcv}"
                 cmd.extend([
-                    "-svtav1-params",
-                    f"enable-hdr=1:color-primaries=9:transfer-characteristics={svt_trc}:matrix-coefficients=9:color-range=0",
+                    "-svtav1-params", svt_params,
                     "-bsf:v",
                     f"av1_metadata=color_primaries=9:transfer_characteristics={bsf_trc}:matrix_coefficients=9:color_range=tv",
                 ])
