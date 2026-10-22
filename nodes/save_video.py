@@ -210,18 +210,19 @@ def _parse_options(format_input: dict | str, kwargs: dict) -> tuple[str, str, fl
         if "format" in src and isinstance(src["format"], str):
             format_str = src["format"]
         
-        if "codec" in src:
-            c_val = src["codec"]
-            if isinstance(c_val, dict):
-                if "codec" in c_val and isinstance(c_val["codec"], str):
-                    codec_str = c_val["codec"]
-                if "crf" in c_val and c_val["crf"] is not None:
-                    try:
-                        crf = float(c_val["crf"])
-                    except (ValueError, TypeError):
-                        pass
-            elif isinstance(c_val, str):
-                codec_str = c_val
+        for k in ("codec", "format.codec"):
+            if k in src:
+                c_val = src[k]
+                if isinstance(c_val, dict):
+                    if "codec" in c_val and isinstance(c_val["codec"], str):
+                        codec_str = c_val["codec"]
+                    if "crf" in c_val and c_val["crf"] is not None:
+                        try:
+                            crf = float(c_val["crf"])
+                        except (ValueError, TypeError):
+                            pass
+                elif isinstance(c_val, str):
+                    codec_str = c_val
 
         if "crf" in src and src["crf"] is not None:
             try:
@@ -229,18 +230,23 @@ def _parse_options(format_input: dict | str, kwargs: dict) -> tuple[str, str, fl
             except (ValueError, TypeError):
                 pass
 
-        if "audio_codec" in src:
-            ac_val = src["audio_codec"]
-            if isinstance(ac_val, dict):
-                if "audio_codec" in ac_val and isinstance(ac_val["audio_codec"], str):
-                    audio_codec_str = ac_val["audio_codec"]
-                if "audio_bitrate" in ac_val and ac_val["audio_bitrate"] is not None:
-                    audio_bitrate = str(ac_val["audio_bitrate"])
-            elif isinstance(ac_val, str):
-                audio_codec_str = ac_val
+        for k in ("audio_codec", "format.audio_codec"):
+            if k in src:
+                ac_val = src[k]
+                if isinstance(ac_val, dict):
+                    if "audio_codec" in ac_val and isinstance(ac_val["audio_codec"], str):
+                        audio_codec_str = ac_val["audio_codec"]
+                    if "audio_bitrate" in ac_val and ac_val["audio_bitrate"] is not None:
+                        audio_bitrate = str(ac_val["audio_bitrate"])
+                elif isinstance(ac_val, str):
+                    audio_codec_str = ac_val
 
-        if "audio_bitrate" in src and src["audio_bitrate"] is not None:
-            audio_bitrate = str(src["audio_bitrate"])
+        for k in ("audio_bitrate", "format.audio_codec.audio_bitrate"):
+            if k in src and src[k] is not None:
+                audio_bitrate = str(src[k])
+
+    if codec_str == "auto":
+        codec_str = "av1" if format_str == "webm" else "h264"
 
     return format_str, codec_str, crf, audio_codec_str, audio_bitrate
 
@@ -455,13 +461,18 @@ class SaveVideo(io.ComfyNode):
             }
             crf = crf_defaults.get(codec, 23.0)
 
+        # h264_nvenc does not support 10-bit YUV in hardware; fall back to libx264 for HDR.
+        if is_hdr and codec == 'h264_nvenc':
+            print("[XENodes] SaveVideo: h264_nvenc does not support 10-bit HDR; falling back to libx264.")
+            codec = 'h264'
+
         codec_config = {
             'h264': {'codec': 'libx264', 'pix_fmt': 'yuv420p10le' if is_hdr else 'yuv420p', 'options': ['-preset', 'slow']},
             'h265': {'codec': 'libx265', 'pix_fmt': 'yuv420p10le', 'options': ['-preset', 'slow']},
             'av1':  {'codec': 'libsvtav1', 'pix_fmt': 'yuv420p10le', 'options': ['-preset', '6']},
-            'h264_nvenc': {'codec': 'h264_nvenc', 'pix_fmt': 'yuv420p10le' if is_hdr else 'yuv420p', 'options': ['-preset', 'p7']},
-            'hevc_nvenc': {'codec': 'hevc_nvenc', 'pix_fmt': 'p010le', 'options': ['-preset', 'p7']},
-            'av1_nvenc':  {'codec': 'av1_nvenc', 'pix_fmt': 'p010le', 'options': ['-preset', 'p7']}
+            'h264_nvenc': {'codec': 'h264_nvenc', 'pix_fmt': 'yuv420p', 'options': ['-preset', 'p7']},
+            'hevc_nvenc': {'codec': 'hevc_nvenc', 'pix_fmt': 'p010le' if is_hdr else 'yuv420p', 'options': ['-preset', 'p7']},
+            'av1_nvenc':  {'codec': 'av1_nvenc', 'pix_fmt': 'p010le' if is_hdr else 'yuv420p', 'options': ['-preset', 'p7']}
         }
 
         config = codec_config.get(codec, codec_config['h264'])
@@ -515,7 +526,10 @@ class SaveVideo(io.ComfyNode):
             cmd.extend(["-map_metadata", meta_map])
 
         # Video filter for color matrix conversion (RGB to YUV)
-        vf_filter = "scale=out_color_matrix=bt2020:out_range=tv" if is_hdr else "scale=out_color_matrix=bt709:out_range=tv"
+        if is_hdr:
+            vf_filter = "scale=in_color_matrix=bt2020:out_color_matrix=bt2020:in_range=full:out_range=tv:flags=bicubic"
+        else:
+            vf_filter = "scale=out_color_matrix=bt709:out_range=tv:flags=bicubic"
         cmd.extend(["-vf", vf_filter])
 
         cmd.extend(["-c:v", av_codec, "-pix_fmt", pix_fmt])
@@ -538,13 +552,17 @@ class SaveVideo(io.ComfyNode):
                 color_trc = "arib-std-b67"
                 colorspace = "bt2020nc"
                 svt_trc = "18"  # ARIB STD-B67
+                x264_transfer = "arib-std-b67"
                 x265_transfer = "arib-std-b67"
+                bsf_trc = "18"
             else:  # HDR PQ
                 color_primaries = "bt2020"
                 color_trc = "smpte2084"
                 colorspace = "bt2020nc"
                 svt_trc = "16"  # SMPTE ST 2084
+                x264_transfer = "smpte2084"
                 x265_transfer = "smpte2084"
+                bsf_trc = "16"
 
             cmd.extend([
                 "-color_primaries", color_primaries,
@@ -553,15 +571,36 @@ class SaveVideo(io.ComfyNode):
                 "-color_range", "tv",
             ])
 
-            if av_codec == "libsvtav1":
+            if av_codec == "libx264":
                 cmd.extend([
-                    "-svtav1-params",
-                    f"enable-hdr=1:color-primaries=9:transfer-characteristics={svt_trc}:matrix-coefficients=9:color-range=0",
+                    "-x264-params",
+                    f"colorprim=bt2020:transfer={x264_transfer}:colormatrix=bt2020nc:range=limited",
+                    "-bsf:v",
+                    f"h264_metadata=colour_primaries=9:transfer_characteristics={bsf_trc}:matrix_coefficients=9:video_full_range_flag=0",
                 ])
             elif av_codec == "libx265":
                 cmd.extend([
                     "-x265-params",
                     f"colorprim=bt2020:transfer={x265_transfer}:colormatrix=bt2020nc:range=limited",
+                    "-bsf:v",
+                    f"hevc_metadata=colour_primaries=9:transfer_characteristics={bsf_trc}:matrix_coefficients=9:video_full_range_flag=0",
+                ])
+            elif av_codec == "libsvtav1":
+                cmd.extend([
+                    "-svtav1-params",
+                    f"enable-hdr=1:color-primaries=9:transfer-characteristics={svt_trc}:matrix-coefficients=9:color-range=0",
+                    "-bsf:v",
+                    f"av1_metadata=color_primaries=9:transfer_characteristics={bsf_trc}:matrix_coefficients=9:color_range=tv",
+                ])
+            elif av_codec == "hevc_nvenc":
+                cmd.extend([
+                    "-bsf:v",
+                    f"hevc_metadata=colour_primaries=9:transfer_characteristics={bsf_trc}:matrix_coefficients=9:video_full_range_flag=0",
+                ])
+            elif av_codec == "av1_nvenc":
+                cmd.extend([
+                    "-bsf:v",
+                    f"av1_metadata=color_primaries=9:transfer_characteristics={bsf_trc}:matrix_coefficients=9:color_range=tv",
                 ])
         else:
             cmd.extend([
