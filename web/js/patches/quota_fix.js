@@ -7,6 +7,7 @@
  * to continue functioning.
  */
 (function() {
+    console.log("[XENodes/QuotaFix] QuotaExceededError fix patch loaded.");
     const V1_DRAFT_KEY = 'Comfy.Workflow.Drafts';
     const V1_ORDER_KEY = 'Comfy.Workflow.DraftOrder';
 

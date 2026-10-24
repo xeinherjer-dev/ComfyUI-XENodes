@@ -16,6 +16,8 @@
 
 import { app } from '../../../../scripts/app.js'
 
+console.log('[XENodes/ogg_patch] OGG metadata patch loaded')
+
 // ---------------------------------------------------------------------------
 // Inlined utilities from ComfyUI_frontend (@/utils/fileUtil, @/utils/jsonUtil)
 // ---------------------------------------------------------------------------
