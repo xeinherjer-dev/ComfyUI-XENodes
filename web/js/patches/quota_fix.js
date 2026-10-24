@@ -11,21 +11,36 @@
     const V1_ORDER_KEY = 'Comfy.Workflow.DraftOrder';
 
     const originalSetItem = localStorage.setItem;
-    const reportedErrors = new Set();
+    let hasWarnedStorageFull = false;
+    let hasLoggedV1Skip = false;
+
+    function isQuotaExceededError(e) {
+        return Boolean(
+            e &&
+            (e.name === 'QuotaExceededError' ||
+             e.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+             e.code === 22 ||
+             e.code === 1014 ||
+             (typeof e.message === 'string' && e.message.toLowerCase().includes('quota')))
+        );
+    }
 
     localStorage.setItem = function(key, value) {
         // Intercept and ignore V1 storage keys
-        if (key === V1_DRAFT_KEY || key === V1_ORDER_KEY || key.startsWith(V1_DRAFT_KEY + ':')) {
+        if (key === V1_DRAFT_KEY || key === V1_ORDER_KEY || (key && key.startsWith(V1_DRAFT_KEY + ':'))) {
             // Silently skip the write to avoid QuotaExceededError
             // V2 persistence (Comfy.Workflow.DraftPayload:*) remains unaffected.
-            console.log("[XENodes/QuotaFix] skip the write V1 storage keys.");
+            if (!hasLoggedV1Skip) {
+                console.log("[XENodes/QuotaFix] Skipping writes to V1 storage keys (subsequent notices suppressed).");
+                hasLoggedV1Skip = true;
+            }
             return;
         }
 
         try {
             return originalSetItem.apply(this, arguments);
         } catch (e) {
-            if (e.name === 'QuotaExceededError' || e.code === 22) {
+            if (isQuotaExceededError(e)) {
                 // Emergency Garbage Collection to save the current data
                 let freedSpace = false;
 
@@ -40,7 +55,7 @@
                 const keysToRemove = [];
                 for (let i = 0; i < localStorage.length; i++) {
                     const k = localStorage.key(i);
-                    if (k === V1_DRAFT_KEY || k === V1_ORDER_KEY || k && k.startsWith(V1_DRAFT_KEY + ':')) {
+                    if (k === V1_DRAFT_KEY || k === V1_ORDER_KEY || (k && k.startsWith(V1_DRAFT_KEY + ':'))) {
                         keysToRemove.push(k);
                     }
                 }
@@ -50,13 +65,23 @@
                 for (let i = 0; i < localStorage.length; i++) {
                     const k = localStorage.key(i);
                     if (k && k.startsWith('Comfy.Workflow.DraftIndex.v2:')) {
+                        const workspaceId = k.slice('Comfy.Workflow.DraftIndex.v2:'.length);
                         try {
-                            const indexData = JSON.parse(localStorage.getItem(k) || '[]');
-                            indexData.forEach(entry => {
-                                if (entry && entry.id) {
-                                    activeDrafts.add(`Comfy.Workflow.Draft.v2:${entry.id}`);
+                            const indexData = JSON.parse(localStorage.getItem(k) || '{}');
+                            if (Array.isArray(indexData)) {
+                                indexData.forEach(entry => {
+                                    if (entry && entry.id) {
+                                        activeDrafts.add(`Comfy.Workflow.Draft.v2:${entry.id}`);
+                                    }
+                                });
+                            } else if (indexData && typeof indexData === 'object') {
+                                const keys = Array.isArray(indexData.order)
+                                    ? indexData.order
+                                    : (indexData.entries ? Object.keys(indexData.entries) : []);
+                                for (const draftKey of keys) {
+                                    activeDrafts.add(`Comfy.Workflow.Draft.v2:${workspaceId}:${draftKey}`);
                                 }
-                            });
+                            }
                         } catch(err) {}
                     }
                 }
@@ -106,11 +131,10 @@
                 }
 
                 // 6. If we deleted EVERYTHING and it STILL fails (e.g. the single draft is > 5MB)
-                // Use a generic prefix for reporting so we don't spam the console when the UUID changes
-                const prefix = key.substring(0, key.lastIndexOf(':')) || key; 
-                if (!reportedErrors.has(prefix)) {
-                    console.warn(`[XENodes/QuotaFix] Storage full for key: ${key}. Write skipped to prevent crash. (Subsequent warnings for ${prefix} suppressed)`);
-                    reportedErrors.add(prefix);
+                // Report warning only ONCE across the entire session to prevent console spam
+                if (!hasWarnedStorageFull) {
+                    console.warn(`[XENodes/QuotaFix] Storage full for key: ${key}. Write skipped to prevent crash. (Subsequent quota warnings suppressed)`);
+                    hasWarnedStorageFull = true;
                 }
                 return;
             }
