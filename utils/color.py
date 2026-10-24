@@ -156,7 +156,7 @@ def adjust_hdr_luminance(
     lift: float = 0.0,
 ) -> torch.Tensor:
     """
-    Adjusts linear BT.2020 HDR luminance (exposure and shadow lift) while strictly preserving color/hue.
+    Adjusts linear BT.2020 HDR luminance (exposure compensation and shadow lift).
 
     Args:
         linear_2020 (torch.Tensor): Linear BT.2020 HDR tensor (where 1.0 = 100 nits).
@@ -164,6 +164,7 @@ def adjust_hdr_luminance(
                           0.0 = unchanged.
         lift (float): Shadow and midtone brightness lift (floor boost). 0.0 = off.
                       Smoothly raises darker areas while tapering off as luminance reaches highlight levels.
+                      Applied as an achromatic pedestal to avoid amplifying chroma noise in near-black pixels.
 
     Returns:
         torch.Tensor: Adjusted linear BT.2020 tensor.
@@ -171,19 +172,17 @@ def adjust_hdr_luminance(
     if exposure == 0.0 and lift == 0.0:
         return linear_2020
 
-    luma_weights = torch.tensor(_BT2020_LUMA_WEIGHTS, device=linear_2020.device, dtype=linear_2020.dtype)
-    luma = torch.sum(linear_2020 * luma_weights, dim=-1, keepdim=True)
-
-    new_luma = luma
+    out = linear_2020
     if exposure != 0.0:
-        new_luma = new_luma * (2.0 ** exposure)
+        out = out * (2.0 ** exposure)
 
     if lift > 0.0:
-        boost = lift * torch.exp(-torch.clamp(new_luma, min=0.0) / 2.0)
-        new_luma = new_luma + boost
+        luma_weights = torch.tensor(_BT2020_LUMA_WEIGHTS, device=linear_2020.device, dtype=linear_2020.dtype)
+        luma = torch.sum(out * luma_weights, dim=-1, keepdim=True)
+        boost = lift * torch.exp(-torch.clamp(luma, min=0.0) / 2.0)
+        out = out + boost
 
-    ratio = torch.clamp((new_luma + 1e-6) / (luma + 1e-6), min=0.0)
-    return linear_2020 * ratio
+    return out
 
 def pq_to_hdr_output(
     pq_2020: torch.Tensor,

@@ -20,9 +20,9 @@ ComfyUI-XENodes incorporates and adapts model architectures from several open-so
   - `AGCM.pth`
   - `LE.pth`
 
-### License Text (MIT):
+### HDRTVNet MIT License Text
 
-```
+```text
 MIT License
 
 Copyright (c) 2023 Hoven Li
@@ -60,7 +60,7 @@ SOFTWARE.
   - `HDRTVDM_params_3DM.pth`
   - `HDRTVDM_params_DaVinci.pth`
 
-The neural network implementation (LSN / Transformer-UNet) adapted from HDRTVDM is governed by the Mozilla Public License 2.0 (MPL-2.0). Under Section 3.3 of MPL-2.0, this code is combined as part of a Larger Work licensed under GNU General Public License v3.0 (GPL-3.0). A copy of the MPL-2.0 license is available at [https://www.mozilla.org/MPL/2.0/](https://www.mozilla.org/MPL/2.0/).
+The neural network implementation (LSN / Transformer-UNet) adapted from HDRTVDM is governed by the Mozilla Public License 2.0 (MPL-2.0). Components derived from Restormer within HDRTVDM are also governed by the MIT License (see Section 4). Under Section 3.3 of MPL-2.0, this code is combined as part of a Larger Work licensed under GNU General Public License v3.0 (GPL-3.0). A copy of the MPL-2.0 license is available at [https://www.mozilla.org/MPL/2.0/](https://www.mozilla.org/MPL/2.0/).
 
 ---
 
@@ -74,7 +74,55 @@ The neural network implementation (LSN / Transformer-UNet) adapted from HDRTVDM 
   - `ITMLUT_params.pth`
   - `ITMLUT_params_TV1K.pth`
 
-The 3D-LUT based inverse tone mapping implementation adapted from ITMLUT is governed by the Mozilla Public License 2.0 (MPL-2.0). Under Section 3.3 of MPL-2.0, this code is combined as part of a Larger Work licensed under GNU General Public License v3.0 (GPL-3.0). A copy of the MPL-2.0 license is available at [https://www.mozilla.org/MPL/2.0/](https://www.mozilla.org/MPL/2.0/).
+The 3D-LUT based inverse tone mapping implementation adapted from ITMLUT is governed by the Mozilla Public License 2.0 (MPL-2.0). The adaptive vertex interpolation algorithm (`pure_ailut_transform`) is adapted from the AiLUT operator in AdaInt under Apache License 2.0 (see Section 5). Under Section 3.3 of MPL-2.0, this code is combined as part of a Larger Work licensed under GNU General Public License v3.0 (GPL-3.0). A copy of the MPL-2.0 license is available at [https://www.mozilla.org/MPL/2.0/](https://www.mozilla.org/MPL/2.0/).
+
+---
+
+## 4. Restormer
+
+- **Original Repository**: [https://github.com/swz30/Restormer](https://github.com/swz30/Restormer)
+- **Paper**: *Restormer: Efficient Transformer for High-Resolution Image Restoration* (CVPR 2022)
+- **Authors**: Syed Waqas Zamir, Aditya Arora, Salman Khan, Munawar Hayat, Fahad Shahbaz Khan, Ming-Hsuan Yang
+- **License**: MIT License
+- **Usage**: Used in HDRTVDM Transformer-UNet blocks (`RestormerAttention`, `RestormerTransformerBlock`, `RestormerLayerNorm`, `BiasFree_LayerNorm`).
+
+### Restormer MIT License Text
+
+```text
+MIT License
+
+Copyright (c) 2022 Syed Waqas Zamir and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## 5. AdaInt
+
+- **Original Repository**: [https://github.com/ImCharlesY/AdaInt](https://github.com/ImCharlesY/AdaInt)
+- **Paper**: *AdaInt: Learning Adaptive Intervals for 3D Lookup Tables on Real-Time Image Enhancement* (CVPR 2022)
+- **Authors**: Canqian Yang, Meiguang Jin, Xu Jia, Yi Xu, Ying Chen
+- **License**: Apache License 2.0
+- **Usage**: The trilinear interpolation over non-uniform 3D LUT vertices in `pure_ailut_transform` is a pure PyTorch re-implementation of the AiLUT transform operator from AdaInt.
+
+A copy of the Apache License 2.0 is available at [https://www.apache.org/licenses/LICENSE-2.0](https://www.apache.org/licenses/LICENSE-2.0).
 
 ---
 

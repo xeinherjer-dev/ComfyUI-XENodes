@@ -40,6 +40,23 @@ class TestSaveVideo(unittest.TestCase):
         self.assertEqual(crf, 30.0)
         self.assertEqual(a_codec, "opus")
 
+        # Flat keys from dynamic combos
+        fmt, codec, crf, a_codec, a_bitrate = _parse_options(
+            {}, {"format": "mp4", "format.codec.crf": 26.0, "format.audio_codec.audio_bitrate": "192k"}
+        )
+        self.assertEqual(crf, 26.0)
+        self.assertEqual(a_bitrate, "192k")
+
+    def test_compute_hdr10_light_levels(self):
+        from custom_nodes.xenodes.nodes.save_video import _compute_hdr10_light_levels
+        # Create dummy PQ frames (shape B, H, W, 3)
+        dummy = torch.full((2, 8, 8, 3), 0.5, dtype=torch.float32)
+        max_cll, max_fall = _compute_hdr10_light_levels(dummy, [0, 1])
+        self.assertIsInstance(max_cll, int)
+        self.assertIsInstance(max_fall, int)
+        self.assertGreater(max_cll, 0)
+        self.assertLessEqual(max_fall, max_cll)
+
     def test_can_passthrough_video_guard(self):
         # When loop_count != 0 or pingpong is True, passthrough must return False
         can_pass, _, _, _, _ = _can_passthrough_video(

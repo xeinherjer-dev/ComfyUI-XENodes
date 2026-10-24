@@ -166,5 +166,7 @@ This repository incorporates model architectures adapted from open-source resear
 - **HDRTVNet / HDRTVNet++**: Licensed under the MIT License (Copyright (c) 2021 XyChen / 2023 Hoven Li).
 - **HDRTVDM**: Licensed under Mozilla Public License 2.0 (MPL-2.0, Copyright (c) 2023 Cheng Guo et al.).
 - **ITMLUT**: Licensed under Mozilla Public License 2.0 (MPL-2.0, Copyright (c) 2023 Cheng Guo et al.).
+- **Restormer**: Licensed under the MIT License (Copyright (c) 2022 Syed Waqas Zamir and contributors).
+- **AdaInt**: Licensed under Apache License 2.0 (Copyright (c) 2022 Canqian Yang et al. / MMEditing Authors).
 
 Full details and license texts are documented in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

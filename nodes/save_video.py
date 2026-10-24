@@ -18,9 +18,36 @@ import folder_paths
 from ..utils.audio import expand_audio_waveform
 from ..utils.video import generate_frame_indices
 from ..utils.metadata import get_saved_metadata
+from ..utils.color import pq_to_linear
 
 _MAX_RAW_FRAME_CHUNK_BYTES = 64 * 1024 * 1024
 DEFAULT_AUDIO_BITRATE = "128k"
+
+# HDR10 mastering display: P3-D65 primaries (Display P3 gamut inside BT.2020 container).
+_MDCV_PRIMARIES_X265 = "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)"
+_MDCV_PRIMARIES_SVT = "G(0.2650,0.6900)B(0.1500,0.0600)R(0.6800,0.3200)WP(0.3127,0.3290)"
+_MDCV_MIN_NITS = 0.0001
+_MDCV_DEFAULT_MAX_NITS = 1000
+_HDR10_STATS_CHUNK_FRAMES = 16
+
+
+def _compute_hdr10_light_levels(images: torch.Tensor, frame_indices: list[int]) -> tuple[int, int]:
+    """
+    Computes HDR10 content light levels (MaxCLL, MaxFALL) in nits from PQ-encoded BT.2020 frames.
+    MaxCLL  = brightest max(R,G,B) of any pixel; MaxFALL = highest frame-average of max(R,G,B).
+    """
+    unique_indices = sorted(set(frame_indices))
+    max_cll = 0.0
+    max_fall = 0.0
+    for start in range(0, len(unique_indices), _HDR10_STATS_CHUNK_FRAMES):
+        idx = unique_indices[start : start + _HDR10_STATS_CHUNK_FRAMES]
+        chunk = images[idx, ..., :3].detach().to(dtype=torch.float32)
+        nits = pq_to_linear(chunk, nits_scale=1.0).amax(dim=-1)  # (B, H, W)
+        max_cll = max(max_cll, float(nits.amax()))
+        max_fall = max(max_fall, float(nits.mean(dim=(1, 2)).amax()))
+    max_cll_i = int(min(10000, math.ceil(max_cll)))
+    max_fall_i = int(min(max_cll_i, math.ceil(max_fall)))
+    return max_cll_i, max_fall_i
 
 
 def _can_passthrough_video(
@@ -224,11 +251,12 @@ def _parse_options(format_input: dict | str, kwargs: dict) -> tuple[str, str, fl
                 elif isinstance(c_val, str):
                     codec_str = c_val
 
-        if "crf" in src and src["crf"] is not None:
-            try:
-                crf = float(src["crf"])
-            except (ValueError, TypeError):
-                pass
+        for k in ("crf", "format.codec.crf"):
+            if k in src and src[k] is not None:
+                try:
+                    crf = float(src[k])
+                except (ValueError, TypeError):
+                    pass
 
         for k in ("audio_codec", "format.audio_codec"):
             if k in src:
@@ -351,7 +379,9 @@ class SaveVideo(io.ComfyNode):
 
         color_space = video.get_color_space()
         bit_depth = video.get_bit_depth()
-        is_hdr = (color_space in ("HDR PQ", "HDR")) or (bit_depth >= 10)
+        # HDR is determined by the transfer characteristic only. A 10-bit SDR (BT.709) source must not be
+        # tagged as PQ/BT.2020; its bit depth is still honoured by encoding with a 10-bit pipeline.
+        is_hdr = color_space in ("HDR PQ", "HDR")
 
         print(f"[XENodes] SaveVideo parsed: format={format!r}, codec={codec!r}, crf={crf!r}, color_space={color_space!r}, bit_depth={bit_depth!r}, is_hdr={is_hdr}")
 
@@ -466,19 +496,23 @@ class SaveVideo(io.ComfyNode):
             print("[XENodes] SaveVideo: h264_nvenc does not support 10-bit HDR; falling back to libx264.")
             codec = 'h264'
 
+        # HEVC/AV1 always use 10-bit (also for SDR) to minimise banding, matching libx265/libsvtav1.
+        # H.264 stays 8-bit for SDR because 10-bit H.264 has poor hardware decoder support.
         codec_config = {
             'h264': {'codec': 'libx264', 'pix_fmt': 'yuv420p10le' if is_hdr else 'yuv420p', 'options': ['-preset', 'slow']},
             'h265': {'codec': 'libx265', 'pix_fmt': 'yuv420p10le', 'options': ['-preset', 'slow']},
             'av1':  {'codec': 'libsvtav1', 'pix_fmt': 'yuv420p10le', 'options': ['-preset', '6']},
             'h264_nvenc': {'codec': 'h264_nvenc', 'pix_fmt': 'yuv420p', 'options': ['-preset', 'p7']},
-            'hevc_nvenc': {'codec': 'hevc_nvenc', 'pix_fmt': 'p010le' if is_hdr else 'yuv420p', 'options': ['-preset', 'p7']},
-            'av1_nvenc':  {'codec': 'av1_nvenc', 'pix_fmt': 'p010le' if is_hdr else 'yuv420p', 'options': ['-preset', 'p7']}
+            'hevc_nvenc': {'codec': 'hevc_nvenc', 'pix_fmt': 'p010le', 'options': ['-preset', 'p7']},
+            'av1_nvenc':  {'codec': 'av1_nvenc', 'pix_fmt': 'p010le', 'options': ['-preset', 'p7']}
         }
 
         config = codec_config.get(codec, codec_config['h264'])
         av_codec = config['codec']
         pix_fmt = config['pix_fmt']
         base_options = config['options']
+        # Feed 16-bit RGB whenever the encoder output is 10-bit to avoid 8-bit quantisation before encoding.
+        is_10bit_pipe = pix_fmt in ('yuv420p10le', 'p010le')
 
         metadata_file = _create_ffmetadata_file(saved_metadata)
         # Pass the dynamic input audio_sample_rate to _prepare_audio_file (same pattern as DaSiWa)
@@ -487,7 +521,7 @@ class SaveVideo(io.ComfyNode):
 
         cmd = [ffmpeg_exe, "-y", "-v", "error"]
 
-        input_pix_fmt = "rgb48le" if is_hdr else "rgb24"
+        input_pix_fmt = "rgb48le" if is_10bit_pipe else "rgb24"
         cmd.extend([
             "-f", "rawvideo",
             "-pix_fmt", input_pix_fmt,
@@ -571,14 +605,27 @@ class SaveVideo(io.ComfyNode):
                 "-color_range", "tv",
             ])
 
-            # Standard HDR10 static metadata (D65 White Point, DCI-P3 primaries, 1000 nits peak, 0.0001 min)
-            x265_mdcv = "master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):max-cll=1000,400"
-            svt_mdcv = "mastering-display=G(0.265,0.69)B(0.15,0.06)R(0.68,0.32)WP(0.3127,0.329)L(1000.0,0.0001):content-light=1000,400"
+            # HDR10 static metadata (PQ only): P3-D65 mastering primaries, content light levels measured
+            # from the actual frames so that displays tone-map according to the real content peak.
+            is_pq = color_space != "HDR"
+            if is_pq:
+                max_cll, max_fall = _compute_hdr10_light_levels(images, frame_indices)
+                mdcv_max = max(_MDCV_DEFAULT_MAX_NITS, max_cll)
+                print(f"[XENodes] SaveVideo: HDR10 MaxCLL={max_cll} MaxFALL={max_fall} mastering_max={mdcv_max} nits")
+                # x264/x265 units: chromaticity 0.00002, luminance 0.0001 cd/m2
+                xl_lum = f"L({mdcv_max * 10000},{round(_MDCV_MIN_NITS * 10000)})"
+                x264_mdcv = f"mastering-display={_MDCV_PRIMARIES_X265}{xl_lum}:cll={max_cll},{max_fall}"
+                x265_mdcv = f"master-display={_MDCV_PRIMARIES_X265}{xl_lum}:max-cll={max_cll},{max_fall}"
+                svt_mdcv = (
+                    f"mastering-display={_MDCV_PRIMARIES_SVT}L({mdcv_max:.1f},{_MDCV_MIN_NITS})"
+                    f":content-light={max_cll},{max_fall}"
+                )
 
             if av_codec == "libx264":
-                x264_params = f"colorprim=bt2020:transfer={x264_transfer}:colormatrix=bt2020nc:range=limited"
-                if color_space != "HDR":  # PQ HDR10
-                    x264_params += f":{x265_mdcv}"
+                # NOTE: x264 option names differ from x265 (range=tv, mastering-display, cll).
+                x264_params = f"colorprim=bt2020:transfer={x264_transfer}:colormatrix=bt2020nc:range=tv"
+                if is_pq:
+                    x264_params += f":{x264_mdcv}"
                 cmd.extend([
                     "-x264-params", x264_params,
                     "-bsf:v",
@@ -586,7 +633,7 @@ class SaveVideo(io.ComfyNode):
                 ])
             elif av_codec == "libx265":
                 x265_params = f"colorprim=bt2020:transfer={x265_transfer}:colormatrix=bt2020nc:range=limited"
-                if color_space != "HDR":
+                if is_pq:
                     x265_params += f":{x265_mdcv}:hdr10=1"
                 cmd.extend([
                     "-x265-params", x265_params,
@@ -595,7 +642,7 @@ class SaveVideo(io.ComfyNode):
                 ])
             elif av_codec == "libsvtav1":
                 svt_params = f"enable-hdr=1:color-primaries=9:transfer-characteristics={svt_trc}:matrix-coefficients=9:color-range=0"
-                if color_space != "HDR":
+                if is_pq:
                     svt_params += f":{svt_mdcv}"
                 cmd.extend([
                     "-svtav1-params", svt_params,
@@ -648,7 +695,7 @@ class SaveVideo(io.ComfyNode):
         )
 
         try:
-            for chunk in _iter_frame_byte_chunks(images, frame_indices, total_plays, is_10bit=is_hdr):
+            for chunk in _iter_frame_byte_chunks(images, frame_indices, total_plays, is_10bit=is_10bit_pipe):
                 process.stdin.write(chunk)
             process.stdin.close()
             retcode = process.wait()
