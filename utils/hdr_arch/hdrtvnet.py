@@ -295,7 +295,7 @@ class HDRUNet3T1(nn.Module):
 
 
 # --------------------------------------------------------------------------------------
-# HDRTVNet++ Ensemble_AGCM_LE (AGCM + LE integrated model)
+# HDRTVNet++ Integrated Model (AGCM + LE, e.g. HR.pth)
 # --------------------------------------------------------------------------------------
 class EnsembleAGCMLE(nn.Module):
     """Integrated AGCM + HDRUNet3T1 network from HDRTVNet++."""

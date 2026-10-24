@@ -47,9 +47,6 @@ def register_model_folder() -> None:
 # Model auto-download support
 # --------------------------------------------------------------------------------------
 MODEL_DOWNLOAD_URLS: dict[str, str] = {
-    "Ensemble_AGCM_LE.pth": (
-        "https://github.com/xiaom233/HDRTVNet-plus/raw/main/pretrained_models/Ensemble_AGCM_LE.pth"
-    ),
     "HR.pth": (
         "https://github.com/xiaom233/HDRTVNet-plus/raw/main/pretrained_models/HR.pth"
     ),

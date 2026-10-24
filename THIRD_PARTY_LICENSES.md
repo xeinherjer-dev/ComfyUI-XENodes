@@ -15,7 +15,6 @@ ComfyUI-XENodes incorporates and adapts model architectures from several open-so
 - **Authors**: Xiangyu Chen, Zheyuan Li, Zhengwen Zhang, Jimmy S. Ren, Yihao Liu, Jingwen He, Yu Qiao, Jiantao Zhou, Chao Dong
 - **License**: MIT License
 - **Models using this architecture**:
-  - `Ensemble_AGCM_LE.pth`
   - `HR.pth` (Highlight Refinement)
   - `AGCM.pth`
   - `LE.pth`
