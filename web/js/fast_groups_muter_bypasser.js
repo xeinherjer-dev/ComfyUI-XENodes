@@ -28,15 +28,51 @@ const ROW_HEIGHT = 36; // px per group row
 // Utility helpers
 // ------------------------------------------------------------------
 
+/** Check if an object is an actionable regular LGraphNode (excluding subgraphs and reroutes). */
+function isActionableNode(c) {
+    if (!c || typeof c !== "object") return false;
+    // Exclude subgraphs and reroutes
+    if (c.is_subgraph || c.type === "Subgraph" || c.type?.includes("Subgraph") || c.type === "Reroute") return false;
+    // Check if it's an LGraphNode (instanceof with fallback duck-typing)
+    const LGraphNodeClass = globalThis.LGraphNode || (globalThis.LiteGraph && globalThis.LiteGraph.LGraphNode);
+    if (LGraphNodeClass && c instanceof LGraphNodeClass) return true;
+    return typeof c.id !== "undefined" && typeof c.mode !== "undefined";
+}
+
 /** All direct-child LGraphNodes of a group (flat, no recursion into Subgraphs). */
 function getGroupNodes(group) {
-    if (!group._children) return [];
-    return Array.from(group._children).filter((c) => {
-        if (!(c instanceof LGraphNode)) return false;
-        // Exclude subgraph nodes to prevent muting/bypassing inner workflows
-        if (c.is_subgraph || c.type === "Subgraph" || c.type?.includes("Subgraph")) return false;
-        return true;
-    });
+    if (!group) return [];
+    
+    // 1. Check official public API (group.children or group.nodes)
+    const rawChildren = group.children || group.nodes || group._children || group._nodes;
+    if (rawChildren) {
+        const list = Array.isArray(rawChildren) ? rawChildren : Array.from(rawChildren);
+        const filtered = list.filter(isActionableNode);
+        if (filtered.length > 0 || group._xe_children_recomputed) return filtered;
+    }
+
+    // 2. Fallback: calculate dynamically based on group bounds if children collection is not yet populated
+    if (group.graph) {
+        const bounds = group.getBounding ? group.getBounding() : (group.boundingRect || group._bounding);
+        if (bounds) {
+            const allNodes = group.graph.nodes ?? group.graph._nodes ?? [];
+            const result = [];
+            for (const node of allNodes) {
+                if (!isActionableNode(node)) continue;
+                const b = node.getBounding ? node.getBounding() : (node.boundingRect || node._bounding);
+                if (!b) continue;
+                const cx = b[0] + b[2] * 0.5;
+                const cy = b[1] + b[3] * 0.5;
+                if (cx >= bounds[0] && cx < bounds[0] + bounds[2] &&
+                    cy >= bounds[1] && cy < bounds[1] + bounds[3]) {
+                    result.push(node);
+                }
+            }
+            return result;
+        }
+    }
+
+    return [];
 }
 
 /** Apply mode to a flat node list (no recursion). */
@@ -51,8 +87,9 @@ function getAllGroups(node) {
 
     if (!showAll) {
         // Only groups in the graph where this node resides
-        if (node.graph && node.graph._groups) {
-            for (const g of node.graph._groups) groups.add(g);
+        const grpList = node.graph?.groups || node.graph?._groups;
+        if (grpList) {
+            for (const g of grpList) groups.add(g);
         }
     } else {
         // All groups in the root graph and any subgraphs
@@ -66,13 +103,17 @@ function getAllGroups(node) {
             if (!g || processed.has(g)) continue;
             processed.add(g);
 
-            if (g._groups) {
-                for (const grp of g._groups) groups.add(grp);
+            const grpList = g.groups || g._groups;
+            if (grpList) {
+                for (const grp of grpList) groups.add(grp);
             }
 
-            if (g.subgraphs && typeof g.subgraphs.values === 'function') {
-                for (const sub of g.subgraphs.values()) {
-                    graphsToProcess.push(sub);
+            if (g.subgraphs) {
+                const subValues = typeof g.subgraphs.values === "function"
+                    ? Array.from(g.subgraphs.values())
+                    : (Array.isArray(g.subgraphs) ? g.subgraphs : Object.values(g.subgraphs));
+                for (const sub of subValues) {
+                    if (sub) graphsToProcess.push(sub);
                 }
             }
         }
@@ -81,30 +122,40 @@ function getAllGroups(node) {
 }
 
 /**
- * Re-detect which nodes lie inside a group.
- * Only updates _children (Set). Does NOT write to group.nodes (getter-only).
+ * Re-detect which nodes lie inside a group using official API with safe fallback.
  */
 function recomputeGroupChildren(group) {
+    if (!group) return;
+
+    // 1. Prefer official LiteGraph method if available
+    if (typeof group.recomputeInsideNodes === "function") {
+        try {
+            group.recomputeInsideNodes();
+            group._xe_children_recomputed = true;
+            return;
+        } catch (e) {}
+    }
+
+    // 2. Fallback: manual calculation for older LiteGraph versions
     if (!group.graph) return;
     if (!group._children) group._children = new Set();
     group._children.clear();
 
-    const gb = group._bounding
-        ?? (group._pos && group._size
-            ? [group._pos[0], group._pos[1], group._size[0], group._size[1]]
-            : null);
-    if (!gb) return;
+    const bounds = group.getBounding ? group.getBounding() : (group.boundingRect || group._bounding);
+    if (!bounds) return;
 
-    for (const node of (group.graph.nodes ?? [])) {
-        const b = node.getBounding?.();
+    const allNodes = group.graph.nodes ?? group.graph._nodes ?? [];
+    for (const node of allNodes) {
+        const b = node.getBounding ? node.getBounding() : (node.boundingRect || node._bounding);
         if (!b) continue;
         const cx = b[0] + b[2] * 0.5;
         const cy = b[1] + b[3] * 0.5;
-        if (cx >= gb[0] && cx < gb[0] + gb[2] &&
-            cy >= gb[1] && cy < gb[1] + gb[3]) {
+        if (cx >= bounds[0] && cx < bounds[0] + bounds[2] &&
+            cy >= bounds[1] && cy < bounds[1] + bounds[3]) {
             group._children.add(node);
         }
     }
+    group._xe_children_recomputed = true;
 }
 
 // ------------------------------------------------------------------
@@ -270,8 +321,10 @@ function createRow(row, showNav, node) {
             if (!canvas) return;
             canvas.centerOnNode?.(row.group);
             const scale = canvas.ds?.scale ?? 1;
-            const zx = canvas.canvas.width  / (row.group._size?.[0] ?? 200) - 0.02;
-            const zy = canvas.canvas.height / (row.group._size?.[1] ?? 200) - 0.02;
+            const gw = row.group.size?.[0] ?? row.group._size?.[0] ?? 200;
+            const gh = row.group.size?.[1] ?? row.group._size?.[1] ?? 200;
+            const zx = canvas.canvas.width  / gw - 0.02;
+            const zy = canvas.canvas.height / gh - 0.02;
             canvas.setZoom?.(Math.min(scale, zx, zy),
                 [canvas.canvas.width * 0.5, canvas.canvas.height * 0.5]);
             canvas.setDirty?.(true, true);
@@ -358,11 +411,11 @@ app.registerExtension({
                         });
                     })
                     .sort((a, b) => {
-                        const ay = Math.floor((a._pos?.[1] ?? a._bounding?.[1] ?? 0) / 30);
-                        const by_ = Math.floor((b._pos?.[1] ?? b._bounding?.[1] ?? 0) / 30);
+                        const ay = Math.floor((a.pos?.[1] ?? a._pos?.[1] ?? a.boundingRect?.[1] ?? a._bounding?.[1] ?? 0) / 30);
+                        const by_ = Math.floor((b.pos?.[1] ?? b._pos?.[1] ?? b.boundingRect?.[1] ?? b._bounding?.[1] ?? 0) / 30);
                         if (ay !== by_) return ay - by_;
-                        return Math.floor((a._pos?.[0] ?? a._bounding?.[0] ?? 0) / 30)
-                             - Math.floor((b._pos?.[0] ?? b._bounding?.[0] ?? 0) / 30);
+                        return Math.floor((a.pos?.[0] ?? a._pos?.[0] ?? a.boundingRect?.[0] ?? a._bounding?.[0] ?? 0) / 30)
+                             - Math.floor((b.pos?.[0] ?? b._pos?.[0] ?? b.boundingRect?.[0] ?? b._bounding?.[0] ?? 0) / 30);
                     });
 
                 // Sync toggled state from actual node modes

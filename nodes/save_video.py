@@ -380,7 +380,7 @@ class SaveVideo(io.ComfyNode):
         color_space = video.get_color_space()
         bit_depth = video.get_bit_depth()
         # HDR is determined by the transfer characteristic only. A 10-bit SDR (BT.709) source must not be
-        # tagged as PQ/BT.2020; its bit depth is still honoured by encoding with a 10-bit pipeline.
+        # tagged as PQ/BT.2020.
         is_hdr = color_space in ("HDR PQ", "HDR")
 
         print(f"[XENodes] SaveVideo parsed: format={format!r}, codec={codec!r}, crf={crf!r}, color_space={color_space!r}, bit_depth={bit_depth!r}, is_hdr={is_hdr}")
@@ -484,17 +484,17 @@ class SaveVideo(io.ComfyNode):
         waveform, audio_sample_rate, layout = expand_audio_waveform(components, float(frame_rate), n_orig, total_plays)
         t_expand_audio = time.perf_counter()
 
+        # h264_nvenc does not support 10-bit YUV in hardware; fall back to libx264 for HDR.
+        if is_hdr and codec == 'h264_nvenc':
+            print("[XENodes] SaveVideo: h264_nvenc does not support 10-bit HDR; falling back to libx264.")
+            codec = 'h264'
+
         if crf is None:
             crf_defaults = {
                 'h264': 23.0, 'h265': 28.0, 'av1': 42.0,
                 'h264_nvenc': 30.0, 'hevc_nvenc': 35.0, 'av1_nvenc': 42.0,
             }
             crf = crf_defaults.get(codec, 23.0)
-
-        # h264_nvenc does not support 10-bit YUV in hardware; fall back to libx264 for HDR.
-        if is_hdr and codec == 'h264_nvenc':
-            print("[XENodes] SaveVideo: h264_nvenc does not support 10-bit HDR; falling back to libx264.")
-            codec = 'h264'
 
         # HEVC/AV1 always use 10-bit (also for SDR) to minimise banding, matching libx265/libsvtav1.
         # H.264 stays 8-bit for SDR because 10-bit H.264 has poor hardware decoder support.

@@ -51,48 +51,54 @@ function sortFolderList(folders, sort_by = "newest_first") {
     return copy;
 }
 
-let isContextMenuHooked = false;
+let isContextMenuAutoScrollSetup = false;
 function setupContextMenuAutoScroll() {
-    if (isContextMenuHooked || typeof LiteGraph === "undefined" || !LiteGraph.ContextMenu) return;
-    isContextMenuHooked = true;
+    if (isContextMenuAutoScrollSetup || typeof document === "undefined" || !document.body) return;
+    isContextMenuAutoScrollSetup = true;
 
-    const origContextMenu = LiteGraph.ContextMenu;
-    LiteGraph.ContextMenu = function (values, options) {
-        const ctx = new origContextMenu(values, options);
-        if (ctx && ctx.root) {
-            // Auto-scroll to selected entry when dropdown is opened, only if needed
-            requestAnimationFrame(() => {
-                setTimeout(() => {
-                    if (!ctx.root) return;
-                    const selected = ctx.root.querySelector('.litemenu-entry[style*="background-color"]')
-                        || ctx.root.querySelector('.litemenu-entry.selected');
-                    if (selected) {
-                        const rect = selected.getBoundingClientRect();
-                        const rootRect = ctx.root.getBoundingClientRect();
-                        // Scroll only if out of visible bounds
-                        if (rect.top < rootRect.top + 32 || rect.bottom > rootRect.bottom) {
-                            selected.scrollIntoView({ block: "nearest", behavior: "instant" });
-                        }
-                    }
-                }, 30);
-            });
-
-            // Follow-through scrolling when using arrow keys
-            ctx.root.addEventListener("keydown", (e) => {
-                if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-                    setTimeout(() => {
-                        if (!ctx.root) return;
-                        const cur = ctx.root.querySelector('.litemenu-entry[style*="background-color"]');
-                        if (cur) {
-                            cur.scrollIntoView({ block: "nearest", behavior: "instant" });
-                        }
-                    }, 10);
+    // Auto-scroll to selected entry when dropdown is opened, without monkey-patching LiteGraph.ContextMenu
+    const observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+            for (const node of mutation.addedNodes) {
+                if (node.nodeType === 1 && (node.classList?.contains("litecontextmenu") || node.querySelector?.(".litecontextmenu"))) {
+                    const menu = node.classList?.contains("litecontextmenu") ? node : node.querySelector(".litecontextmenu");
+                    if (!menu) continue;
+                    requestAnimationFrame(() => {
+                        setTimeout(() => {
+                            const selected = menu.querySelector('.litemenu-entry[style*="background-color"]')
+                                || menu.querySelector('.litemenu-entry.selected');
+                            if (selected) {
+                                const rect = selected.getBoundingClientRect();
+                                const rootRect = menu.getBoundingClientRect();
+                                // Scroll only if out of visible bounds
+                                if (rect.top < rootRect.top + 32 || rect.bottom > rootRect.bottom) {
+                                    selected.scrollIntoView({ block: "nearest", behavior: "instant" });
+                                }
+                            }
+                        }, 30);
+                    });
                 }
-            }, true);
+            }
         }
-        return ctx;
-    };
-    LiteGraph.ContextMenu.prototype = origContextMenu.prototype;
+    });
+
+    observer.observe(document.body, { childList: true, subtree: false });
+
+    // Follow-through scrolling when using arrow keys inside context menu
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+            const menus = document.querySelectorAll(".litecontextmenu");
+            const menu = menus[menus.length - 1];
+            if (menu) {
+                setTimeout(() => {
+                    const cur = menu.querySelector('.litemenu-entry[style*="background-color"]');
+                    if (cur) {
+                        cur.scrollIntoView({ block: "nearest", behavior: "instant" });
+                    }
+                }, 10);
+            }
+        }
+    }, true);
 }
 
 app.registerExtension({

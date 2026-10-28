@@ -4,7 +4,7 @@
  * - Deeply tracks executing nodes across complex subgraph hierarchies (Nodes 2.0 Subgraphs & GroupNodes).
  * - Multi-Workflow Tab Aware: Automatically switches to the executing workflow tab if another tab is focused.
  * - Multi-Queue Robust: Isolates job progress per prompt_id so progress never resets when queuing new runs.
- * - Click to smoothly jump/drill-down into executing subgraphs and highlight nodes with an animated glow.
+ * - Click to smoothly jump/drill-down into executing subgraphs and focus on the active node.
  * - Right-click to quickly return to the root graph.
  * - Cleanly enabled/disabled via Settings -> XENodes -> Progress Bar.
  */
@@ -141,11 +141,8 @@ function findNodeAndHierarchy(rootGraph, nodeId, currentPath = []) {
 }
 
 // ============================================================================
-// 2. Pulse Highlight & Multi-Tab Navigation Logic
+// 2. Multi-Tab Navigation & Node Focus Logic
 // ============================================================================
-
-let activeHighlightNode = null;
-let activeHighlightEnd = 0;
 
 function simulateFullClick(el) {
     if (!el) return;
@@ -255,13 +252,6 @@ function switchTabToExecutingWorkflow(targetTabName) {
     return false;
 }
 
-function pulseHighlightNode(node) {
-    if (!node) return;
-    activeHighlightNode = node;
-    activeHighlightEnd = performance.now() + 2000;
-    if (app.canvas) app.canvas.setDirty(true, true);
-}
-
 async function navigateAndFocusNode(targetGraph, targetNode) {
     const canvas = app.canvas;
     if (!canvas || !targetNode) return;
@@ -283,49 +273,6 @@ async function navigateAndFocusNode(targetGraph, targetNode) {
     if (typeof canvas.selectNode === "function") {
         canvas.selectNode(targetNode, false);
     }
-    pulseHighlightNode(targetNode);
-}
-
-function setupPulseDrawHook() {
-    const LGraphCanvas = globalThis.LGraphCanvas || (globalThis.LiteGraph && globalThis.LiteGraph.LGraphCanvas);
-    if (!LGraphCanvas?.prototype || LGraphCanvas.prototype.__xenodes_pulse_hooked) return;
-
-    LGraphCanvas.prototype.__xenodes_pulse_hooked = true;
-    const originalDrawNode = LGraphCanvas.prototype.drawNode;
-
-    LGraphCanvas.prototype.drawNode = function (node, ctx) {
-        originalDrawNode.apply(this, arguments);
-
-        if (activeHighlightNode && node === activeHighlightNode) {
-            const now = performance.now();
-            if (now < activeHighlightEnd) {
-                const remaining = (activeHighlightEnd - now) / 2000;
-                const pulse = Math.sin((1 - remaining) * Math.PI * 4) * 0.3 + 0.7;
-
-                ctx.save();
-                const pad = 8 + (1 - remaining) * 6;
-                const x = -pad;
-                const y = -pad;
-                const w = node.size[0] + pad * 2;
-                const h = node.size[1] + pad * 2;
-
-                ctx.lineWidth = 3.5;
-                ctx.strokeStyle = `rgba(16, 185, 129, ${(remaining * pulse * 0.9).toFixed(2)})`;
-                ctx.shadowColor = "rgba(52, 211, 153, 0.8)";
-                ctx.shadowBlur = 16 * pulse;
-
-                ctx.beginPath();
-                if (ctx.roundRect) ctx.roundRect(x, y, w, h, 10);
-                else ctx.rect(x, y, w, h);
-                ctx.stroke();
-                ctx.restore();
-
-                this.setDirty(true, true);
-            } else {
-                activeHighlightNode = null;
-            }
-        }
-    };
 }
 
 // ============================================================================
@@ -778,7 +725,6 @@ app.registerExtension({
             onChange: (newValue) => syncProgressBarDOM(newValue)
         });
 
-        setupPulseDrawHook();
         syncProgressBarDOM();
 
         // Hook queuePrompt to capture per-job prompt structure and tab name
