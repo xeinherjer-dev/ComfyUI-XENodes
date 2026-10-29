@@ -503,10 +503,10 @@ class SaveVideo(io.ComfyNode):
                                     options=[
                                         io.DynamicCombo.Option("h264", [io.Float.Input("crf", default=23.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CRF for H.264 (lower = higher quality).")]),
                                         io.DynamicCombo.Option("h265", [io.Float.Input("crf", default=28.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CRF for H.265 (lower = higher quality).")]),
-                                        io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=42.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CRF for AV1 (lower = higher quality).")]),
+                                        io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=36.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CRF for AV1 (lower = higher quality).")]),
                                         io.DynamicCombo.Option("h264_nvenc", [io.Float.Input("crf", default=30.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for NVENC H.264.")]),
                                         io.DynamicCombo.Option("hevc_nvenc", [io.Float.Input("crf", default=35.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for NVENC HEVC.")]),
-                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=42.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for NVENC AV1.")]),
+                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=36.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for NVENC AV1.")]),
                                     ],
                                     tooltip="The video codec.",
                                 ),
@@ -533,8 +533,8 @@ class SaveVideo(io.ComfyNode):
                                 io.DynamicCombo.Input(
                                     "codec",
                                     options=[
-                                        io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=42.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CRF for AV1 (lower = higher quality).")]),
-                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=42.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for NVENC AV1.")]),
+                                        io.DynamicCombo.Option("av1", [io.Float.Input("crf", default=36.0, min=0.0, max=63.0, step=1.0, optional=True, tooltip="CRF for AV1 (lower = higher quality).")]),
+                                        io.DynamicCombo.Option("av1_nvenc", [io.Float.Input("crf", default=36.0, min=0.0, max=51.0, step=1.0, optional=True, tooltip="CQ for NVENC AV1.")]),
                                     ],
                                     tooltip="The video codec.",
                                 ),
@@ -694,8 +694,8 @@ class SaveVideo(io.ComfyNode):
 
         if crf is None:
             crf_defaults = {
-                'h264': 23.0, 'h265': 28.0, 'av1': 42.0,
-                'h264_nvenc': 30.0, 'hevc_nvenc': 35.0, 'av1_nvenc': 42.0,
+                'h264': 23.0, 'h265': 28.0, 'av1': 36.0,
+                'h264_nvenc': 30.0, 'hevc_nvenc': 35.0, 'av1_nvenc': 36.0,
             }
             crf = crf_defaults.get(codec, 23.0)
 
