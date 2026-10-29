@@ -59,11 +59,11 @@ def _prepare_audio_file(waveform: torch.Tensor | None, sample_rate: int) -> tupl
         return None, sample_rate, 2
     
     channels = waveform.shape[0]
-    interleaved = waveform.t().contiguous().clamp(-1.0, 1.0).cpu().numpy().astype("float32")
+    interleaved = waveform.detach().t().to(device="cpu", dtype=torch.float32).contiguous().clamp_(-1.0, 1.0)
     
     handle = tempfile.NamedTemporaryFile(suffix=".f32le", delete=False)
     try:
-        handle.write(interleaved.tobytes())
+        handle.write(memoryview(interleaved.numpy()).cast("B"))
     finally:
         handle.close()
     return handle.name, sample_rate, channels
@@ -77,6 +77,7 @@ def _iter_hdr_frame_byte_chunks(
     itm_exponent: float,
     max_chunk_bytes: int = _MAX_RAW_FRAME_CHUNK_BYTES,
 ):
+    compute_device = torch.device("cuda") if torch.cuda.is_available() else images.device
     bytes_per_frame = images.shape[1] * images.shape[2] * 3 * 4  # float32
     frames_per_chunk = max(1, min(16, max_chunk_bytes // bytes_per_frame))
     
@@ -84,14 +85,20 @@ def _iter_hdr_frame_byte_chunks(
     for _ in range(total_plays):
         full_indices.extend(frame_indices)
         
-    for start in range(0, len(full_indices), frames_per_chunk):
-        chunk_indices = full_indices[start : start + frames_per_chunk]
-        chunk_tensors = images[chunk_indices]  # (K, H, W, 3)
-        
-        linear_hdr, _, _ = apply_inverse_tone_mapping(chunk_tensors, peak_nits, itm_knee, itm_exponent)
-        gbr_planar = linear_hdr[..., [1, 2, 0]].permute(0, 3, 1, 2).contiguous()
-        chunk_bytes = gbr_planar.cpu().numpy().astype(np.float32).tobytes()
-        yield chunk_bytes
+    with torch.no_grad():
+        for start in range(0, len(full_indices), frames_per_chunk):
+            chunk_indices = full_indices[start : start + frames_per_chunk]
+            n = len(chunk_indices)
+            first = chunk_indices[0]
+            if n == 1 or (chunk_indices[-1] == first + n - 1 and all(chunk_indices[i] == first + i for i in range(n))):
+                chunk_view = images[first : first + n, ..., :3]
+            else:
+                chunk_view = images[chunk_indices, ..., :3]
+            chunk_tensors = chunk_view.detach().to(device=compute_device, dtype=torch.float32, non_blocking=True)
+            
+            linear_hdr, _, _ = apply_inverse_tone_mapping(chunk_tensors, peak_nits, itm_knee, itm_exponent)
+            gbr_planar = linear_hdr[..., [1, 2, 0]].permute(0, 3, 1, 2).contiguous().cpu()
+            yield memoryview(gbr_planar.numpy()).cast("B")
 
 def _parse_options(format_input: dict | str, kwargs: dict) -> tuple[str, str, float | None, str, str | None]:
     sources = []
@@ -368,35 +375,35 @@ class SaveHDRVideo(io.ComfyNode):
 
         print(f"[XENodes] SaveHDRVideo (FFmpeg): running command: {' '.join(cmd)}")
 
-        stderr_tmp = tempfile.TemporaryFile()
-        process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=stderr_tmp,
-        )
+        with tempfile.TemporaryFile() as stderr_tmp:
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr_tmp,
+            )
 
-        try:
-            for chunk in _iter_hdr_frame_byte_chunks(
-                images, frame_indices, total_plays, peak_nits, itm_knee, itm_exponent
-            ):
-                process.stdin.write(chunk)
-            process.stdin.close()
-            retcode = process.wait()
-        except Exception as e:
-            process.kill()
-            process.wait()
-            raise e
-        finally:
-            if metadata_file and os.path.exists(metadata_file):
-                os.unlink(metadata_file)
-            if audio_file and os.path.exists(audio_file):
-                os.unlink(audio_file)
+            try:
+                for chunk in _iter_hdr_frame_byte_chunks(
+                    images, frame_indices, total_plays, peak_nits, itm_knee, itm_exponent
+                ):
+                    process.stdin.write(chunk)
+                process.stdin.close()
+                retcode = process.wait()
+            except Exception as e:
+                process.kill()
+                process.wait()
+                raise e
+            finally:
+                if metadata_file and os.path.exists(metadata_file):
+                    os.unlink(metadata_file)
+                if audio_file and os.path.exists(audio_file):
+                    os.unlink(audio_file)
 
-        if retcode != 0:
-            stderr_tmp.seek(0)
-            stderr_out = stderr_tmp.read().decode(errors="replace")
-            raise RuntimeError(f"FFmpeg HDR encoding failed (exit code {retcode}): {stderr_out}")
+            if retcode != 0:
+                stderr_tmp.seek(0)
+                stderr_out = stderr_tmp.read().decode(errors="replace")
+                raise RuntimeError(f"FFmpeg HDR encoding failed (exit code {retcode}): {stderr_out}")
 
         return io.NodeOutput(video, ui=ui.PreviewVideo([ui.SavedResult(file_name, subfolder, io.FolderType.output)]))
 

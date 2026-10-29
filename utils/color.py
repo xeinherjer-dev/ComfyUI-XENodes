@@ -1,3 +1,4 @@
+import functools
 import math
 import torch
 
@@ -6,6 +7,24 @@ _BT709_TO_BT2020_MATRIX = [
     [0.0690972331, 0.9195403953, 0.0113623716],
     [0.0163914389, 0.0880133075, 0.8955952536],
 ]
+
+_BT709_LUMA_WEIGHTS = [0.2126, 0.7152, 0.0722]
+_BT2020_LUMA_WEIGHTS = [0.2627, 0.6780, 0.0593]
+
+
+@functools.lru_cache(maxsize=16)
+def _get_bt709_luma_weights(device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    return torch.tensor(_BT709_LUMA_WEIGHTS, device=device, dtype=dtype)
+
+
+@functools.lru_cache(maxsize=16)
+def _get_bt2020_luma_weights(device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    return torch.tensor(_BT2020_LUMA_WEIGHTS, device=device, dtype=dtype)
+
+
+@functools.lru_cache(maxsize=16)
+def _get_bt709_to_bt2020_matrix_t(device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    return torch.tensor(_BT709_TO_BT2020_MATRIX, device=device, dtype=dtype).t().contiguous()
 
 def apply_inverse_tone_mapping(frame_tensor: torch.Tensor, peak_nits: float, itm_knee: float, itm_exponent: float) -> tuple[torch.Tensor, torch.Tensor, float]:
     """
@@ -28,7 +47,7 @@ def apply_inverse_tone_mapping(frame_tensor: torch.Tensor, peak_nits: float, itm
     
     # Apply Soft-Knee Inverse Tone Mapping (Power Curve)
     # We calculate expansion based on luminance to preserve color (hue)
-    luma_weights = torch.tensor([0.2126, 0.7152, 0.0722], device=linear.device, dtype=linear.dtype)
+    luma_weights = _get_bt709_luma_weights(linear.device, linear.dtype)
     luma = torch.sum(linear * luma_weights, dim=-1, keepdim=True)
     
     scale = peak_nits / 100.0
@@ -52,8 +71,8 @@ def convert_bt709_to_bt2020(linear_tensor: torch.Tensor) -> torch.Tensor:
     """
     Converts linear RGB from BT.709 primaries to BT.2020 primaries (D65 white point).
     """
-    matrix = torch.tensor(_BT709_TO_BT2020_MATRIX, device=linear_tensor.device, dtype=linear_tensor.dtype)
-    converted = torch.matmul(linear_tensor, matrix.t())
+    matrix_t = _get_bt709_to_bt2020_matrix_t(linear_tensor.device, linear_tensor.dtype)
+    converted = torch.matmul(linear_tensor, matrix_t)
     return torch.clamp(converted, min=0.0)
 
 def linear_to_pq(linear_hdr: torch.Tensor, nits_scale: float = 100.0) -> torch.Tensor:
@@ -148,8 +167,6 @@ def encode_linear_bt2020(linear_2020: torch.Tensor, color_space: str, peak_nits:
         return linear_to_hlg(linear_2020, peak_nits=peak_nits)
     return linear_to_pq(linear_2020, nits_scale=100.0)
 
-_BT2020_LUMA_WEIGHTS = [0.2627, 0.6780, 0.0593]
-
 def adjust_hdr_luminance(
     linear_2020: torch.Tensor,
     exposure: float = 0.0,
@@ -177,12 +194,26 @@ def adjust_hdr_luminance(
         out = out * (2.0 ** exposure)
 
     if lift > 0.0:
-        luma_weights = torch.tensor(_BT2020_LUMA_WEIGHTS, device=linear_2020.device, dtype=linear_2020.dtype)
+        luma_weights = _get_bt2020_luma_weights(linear_2020.device, linear_2020.dtype)
         luma = torch.sum(out * luma_weights, dim=-1, keepdim=True)
         boost = lift * torch.exp(-torch.clamp(luma, min=0.0) / 2.0)
         out = out + boost
 
     return out
+
+def _scalar_linear_to_pq(nits: float) -> float:
+    """Fast scalar SMPTE ST 2084 (PQ) OETF for peak luminance clamping."""
+    if nits <= 0.0:
+        return 0.0
+    if nits >= 10000.0:
+        return 1.0
+    m1 = 0.1593017578125
+    m2 = 78.84375
+    c1 = 0.8359375
+    c2 = 18.8515625
+    c3 = 18.6875
+    y_m1 = (nits / 10000.0) ** m1
+    return min(1.0, max(0.0, ((c1 + c2 * y_m1) / (1.0 + c3 * y_m1)) ** m2))
 
 def pq_to_hdr_output(
     pq_2020: torch.Tensor,
@@ -196,6 +227,12 @@ def pq_to_hdr_output(
     Optionally applies linear HDR luminance adjustments (exposure, shadow lift).
     Luminance is clipped to peak_nits so that the result respects the requested display peak.
     """
+    # Fast path: when target is PQ and no linear luminance adjustments are requested,
+    # pq_to_linear -> clamp -> linear_to_pq reduces to a direct clamp in the monotonic PQ domain.
+    if exposure == 0.0 and lift == 0.0 and not is_hlg_color_space(color_space):
+        max_pq = _scalar_linear_to_pq(peak_nits)
+        return torch.clamp(pq_2020, 0.0, max_pq)
+
     linear_2020 = pq_to_linear(pq_2020, nits_scale=100.0)
     if exposure != 0.0 or lift != 0.0:
         linear_2020 = adjust_hdr_luminance(linear_2020, exposure=exposure, lift=lift)
@@ -228,34 +265,43 @@ def sdr_to_hdr_tensor(
     if is_single_image:
         images = images.unsqueeze(0)
 
-    # Process RGB channels only (keep alpha untouched if present)
     has_alpha = images.shape[-1] == 4
-    rgb_images = images[..., :3].contiguous()
-    alpha = images[..., 3:] if has_alpha else None
+    total_frames = images.shape[0]
+    out_device = images.device
+    compute_device = torch.device("cuda") if torch.cuda.is_available() else out_device
 
-    output_chunks = []
-    total_frames = rgb_images.shape[0]
+    # Pre-allocate output tensor on the original device to avoid double-memory peak and torch.cat copy
+    result = torch.empty_like(images)
+    if has_alpha:
+        result[..., 3:].copy_(images[..., 3:])
 
-    for start in range(0, total_frames, chunk_size):
-        chunk = rgb_images[start : start + chunk_size]
-        
-        # 1. sRGB -> Linear & Soft-Knee ITM (1.0 = 100 nits)
-        linear_hdr, _, _ = apply_inverse_tone_mapping(chunk, peak_nits, itm_knee, itm_exponent)
-        
-        # 2. BT.709 Linear -> BT.2020 Linear
-        linear_2020 = convert_bt709_to_bt2020(linear_hdr)
-        
-        # 3. Linear -> PQ or HLG OETF
-        hdr_chunk = encode_linear_bt2020(linear_2020, color_space, peak_nits)
+    use_pinned_stage = (out_device.type == "cpu" and compute_device.type == "cuda")
+    stage_len = min(chunk_size, total_frames)
+    pinned_stage = (
+        torch.empty((stage_len, images.shape[1], images.shape[2], 3), dtype=result.dtype, pin_memory=True)
+        if use_pinned_stage else None
+    )
 
-        output_chunks.append(hdr_chunk)
+    with torch.no_grad():
+        for start in range(0, total_frames, chunk_size):
+            end = min(start + chunk_size, total_frames)
+            chunk = images[start:end, ..., :3].to(device=compute_device, dtype=torch.float32, non_blocking=True)
 
-    hdr_rgb = torch.cat(output_chunks, dim=0)
+            # 1. sRGB -> Linear & Soft-Knee ITM (1.0 = 100 nits)
+            linear_hdr, _, _ = apply_inverse_tone_mapping(chunk, peak_nits, itm_knee, itm_exponent)
 
-    if has_alpha and alpha is not None:
-        result = torch.cat([hdr_rgb, alpha], dim=-1)
-    else:
-        result = hdr_rgb
+            # 2. BT.709 Linear -> BT.2020 Linear
+            linear_2020 = convert_bt709_to_bt2020(linear_hdr)
+
+            # 3. Linear -> PQ or HLG OETF
+            hdr_chunk = encode_linear_bt2020(linear_2020, color_space, peak_nits)
+
+            if pinned_stage is not None:
+                st = pinned_stage[: end - start]
+                st.copy_(hdr_chunk, non_blocking=False)
+                result[start:end, ..., :3].copy_(st)
+            else:
+                result[start:end, ..., :3].copy_(hdr_chunk, non_blocking=False)
 
     if is_single_image:
         result = result.squeeze(0)

@@ -244,35 +244,24 @@ class ITMLUTNet(nn.Module):
         LUTs_m = self.lut_gen_m(weights_m)
         LUTs_d = self.lut_gen_d(weights_d)
 
-        u_vertices = torch.linspace(0.0, 1.0, self.n_dim, device=device).unsqueeze(0).unsqueeze(0).repeat(b, 1, 1)
+        u_vertices = torch.linspace(0.0, 1.0, self.n_dim, device=device, dtype=img.dtype).view(1, 1, self.n_dim)
 
-        avg_r = torch.mean(img[:, 0, :, :], dim=(-2, -1), keepdim=True)
-        avg_g = torch.mean(img[:, 1, :, :], dim=(-2, -1), keepdim=True)
-        avg_b = torch.mean(img[:, 2, :, :], dim=(-2, -1), keepdim=True)
+        avg_rgb = torch.mean(img, dim=(-2, -1), keepdim=False).unsqueeze(-1)  # (B, 3, 1)
+        exp_b = 1.4 + 0.8 * avg_rgb
+        vertices_b = u_vertices ** (1.0 / exp_b)
 
-        exp_r_b = 1.4 + 0.8 * avg_r
-        exp_g_b = 1.4 + 0.8 * avg_g
-        exp_b_b = 1.4 + 0.8 * avg_b
-        vertices_b = torch.cat([
-            u_vertices ** (1.0 / exp_r_b.unsqueeze(-1)),
-            u_vertices ** (1.0 / exp_g_b.unsqueeze(-1)),
-            u_vertices ** (1.0 / exp_b_b.unsqueeze(-1)),
-        ], dim=1)
+        exp_d = 2.2 - 0.8 * avg_rgb
+        vertices_d = u_vertices ** exp_d
 
-        exp_r_d = 2.2 - 0.8 * avg_r
-        exp_g_d = 2.2 - 0.8 * avg_g
-        exp_b_d = 2.2 - 0.8 * avg_b
-        vertices_d = torch.cat([
-            u_vertices ** exp_r_d.unsqueeze(-1),
-            u_vertices ** exp_g_d.unsqueeze(-1),
-            u_vertices ** exp_b_d.unsqueeze(-1),
-        ], dim=1)
+        vertices_m = _itmlut_mid_curve(u_vertices).expand(b, self.nc, self.n_dim)
 
-        vertices_m = _itmlut_mid_curve(u_vertices.repeat(1, self.nc, 1))
+        prob_b = self.bright_prob(img)
+        prob_d = self.dark_prob(img)
+        prob_m = torch.clamp(1.0 - prob_d - prob_b, min=0.0, max=1.0)
 
         out = (
-            pure_ailut_transform(img, LUTs_b, vertices_b) * self.bright_prob(img) +
-            pure_ailut_transform(img, LUTs_m, vertices_m) * self.mid_prob(img) +
-            pure_ailut_transform(img, LUTs_d, vertices_d) * self.dark_prob(img)
+            pure_ailut_transform(img, LUTs_b, vertices_b) * prob_b +
+            pure_ailut_transform(img, LUTs_m, vertices_m) * prob_m +
+            pure_ailut_transform(img, LUTs_d, vertices_d) * prob_d
         )
         return out

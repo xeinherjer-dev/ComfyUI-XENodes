@@ -142,11 +142,44 @@ class TestSDRtoHDRNodes(unittest.TestCase):
         # When mask is 0, output must equal input (out = mask * out + img)
         torch.testing.assert_close(out, dummy_in)
 
-        # 4. run_sdr_to_hdr_frame with ARCH_HG
+        # 4.Run_sdr_to_hdr_frame with ARCH_HG
         bundle = SDRtoHDRModelBundle(model=hg_net, arch=ARCH_HG, names=["HG_test.pth"])
         res, fea = run_sdr_to_hdr_frame(bundle, dummy_in)
         self.assertEqual(res.shape, dummy_in.shape)
         self.assertIsNone(fea)
+
+    def test_pq_fast_clamp_equivalence_and_throughput(self):
+        """Verifies that pq_to_hdr_output fast path matches full EOTF/OETF roundtrip and runs fast."""
+        import time
+        from custom_nodes.xenodes.utils.color import (
+            pq_to_hdr_output,
+            pq_to_linear,
+            linear_to_pq,
+            sdr_to_hdr_tensor,
+            apply_inverse_tone_mapping,
+            convert_bt709_to_bt2020,
+            encode_linear_bt2020,
+        )
+
+        # 1. Direct PQ clamp vs full roundtrip accuracy
+        pq_in = torch.linspace(0.0, 1.0, 4096, dtype=torch.float32).view(1, 64, 64, 1).expand(1, 64, 64, 3)
+        for peak in (400.0, 1000.0, 4000.0, 10000.0):
+            fast_out = pq_to_hdr_output(pq_in, color_space="HDR PQ", peak_nits=peak, exposure=0.0, lift=0.0)
+            ref_out = linear_to_pq(torch.clamp(pq_to_linear(pq_in, 100.0), 0.0, peak / 100.0), 100.0)
+            torch.testing.assert_close(fast_out, ref_out, rtol=1e-5, atol=1e-5)
+
+        # 2. sdr_to_hdr_tensor numerical equivalence against single-chunk CPU reference & speed check
+        torch.manual_seed(42)
+        frames = torch.rand((8, 256, 256, 3), dtype=torch.float32)
+        lin_hdr, _, _ = apply_inverse_tone_mapping(frames, 1000.0, 0.5, 1.5)
+        ref_hdr = encode_linear_bt2020(convert_bt709_to_bt2020(lin_hdr), "HDR PQ", 1000.0)
+
+        t0 = time.perf_counter()
+        out_hdr = sdr_to_hdr_tensor(frames, peak_nits=1000.0, itm_knee=0.5, itm_exponent=1.5, color_space="HDR PQ", chunk_size=4)
+        elapsed = time.perf_counter() - t0
+
+        torch.testing.assert_close(out_hdr, ref_hdr, rtol=1e-5, atol=1e-5)
+        self.assertLess(elapsed, 1.0, f"sdr_to_hdr_tensor took too long: {elapsed:.3f}s")
 
 
 if __name__ == "__main__":

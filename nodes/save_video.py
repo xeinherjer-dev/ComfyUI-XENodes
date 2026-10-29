@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import queue
 import shutil
 import subprocess
 import tempfile
+import threading
 import json
 import time
 import math
@@ -21,6 +23,7 @@ from ..utils.metadata import get_saved_metadata
 from ..utils.color import pq_to_linear
 
 _MAX_RAW_FRAME_CHUNK_BYTES = 64 * 1024 * 1024
+_MAX_LOOP_CACHE_BYTES = 256 * 1024 * 1024
 DEFAULT_AUDIO_BITRATE = "128k"
 
 # HDR10 mastering display: P3-D65 primaries (Display P3 gamut inside BT.2020 container).
@@ -31,20 +34,48 @@ _MDCV_DEFAULT_MAX_NITS = 1000
 _HDR10_STATS_CHUNK_FRAMES = 16
 
 
+def _slice_or_index_frames(images: torch.Tensor, indices: list[int]) -> torch.Tensor:
+    """
+    Returns a zero-copy slice view when `indices` is a contiguous ascending range,
+    falling back to list indexing only when non-contiguous (e.g. pingpong reversal boundary).
+    """
+    n = len(indices)
+    if n == 0:
+        return images[:0, ..., :3]
+    first = indices[0]
+    if n == 1 or (indices[-1] == first + n - 1 and all(indices[i] == first + i for i in range(n))):
+        return images[first : first + n, ..., :3]
+    return images[indices, ..., :3]
+
+
 def _compute_hdr10_light_levels(images: torch.Tensor, frame_indices: list[int]) -> tuple[int, int]:
     """
     Computes HDR10 content light levels (MaxCLL, MaxFALL) in nits from PQ-encoded BT.2020 frames.
     MaxCLL  = brightest max(R,G,B) of any pixel; MaxFALL = highest frame-average of max(R,G,B).
     """
     unique_indices = sorted(set(frame_indices))
-    max_cll = 0.0
-    max_fall = 0.0
-    for start in range(0, len(unique_indices), _HDR10_STATS_CHUNK_FRAMES):
-        idx = unique_indices[start : start + _HDR10_STATS_CHUNK_FRAMES]
-        chunk = images[idx, ..., :3].detach().to(dtype=torch.float32)
-        nits = pq_to_linear(chunk, nits_scale=1.0).amax(dim=-1)  # (B, H, W)
-        max_cll = max(max_cll, float(nits.amax()))
-        max_fall = max(max_fall, float(nits.mean(dim=(1, 2)).amax()))
+    if not unique_indices:
+        return 0, 0
+
+    compute_device = torch.device("cuda") if torch.cuda.is_available() else images.device
+    cll_tensors: list[torch.Tensor] = []
+    fall_tensors: list[torch.Tensor] = []
+
+    with torch.no_grad():
+        for start in range(0, len(unique_indices), _HDR10_STATS_CHUNK_FRAMES):
+            idx = unique_indices[start : start + _HDR10_STATS_CHUNK_FRAMES]
+            chunk_view = _slice_or_index_frames(images, idx)
+            chunk = chunk_view.detach().to(device=compute_device, dtype=torch.float32, non_blocking=True)
+            # pq_to_linear is strictly monotonic on [0, 1], so taking max(R,G,B) in PQ domain first
+            # is mathematically identical and reduces expensive power operations by 3x.
+            max_rgb_pq = chunk.amax(dim=-1)  # (B, H, W)
+            nits = pq_to_linear(max_rgb_pq, nits_scale=1.0)
+            cll_tensors.append(nits.amax())
+            fall_tensors.append(nits.mean(dim=(1, 2)).amax())
+
+        max_cll = float(torch.stack(cll_tensors).amax().cpu())
+        max_fall = float(torch.stack(fall_tensors).amax().cpu())
+
     max_cll_i = int(min(10000, math.ceil(max_cll)))
     max_fall_i = int(min(max_cll_i, math.ceil(max_fall)))
     return max_cll_i, max_fall_i
@@ -177,14 +208,15 @@ def _prepare_audio_file(waveform: torch.Tensor | None, sample_rate: int) -> tupl
         return None, sample_rate, 2
     
     channels = waveform.shape[0]
-    interleaved = waveform.t().contiguous().clamp(-1.0, 1.0).cpu().numpy().astype("float32")
+    interleaved = waveform.detach().t().to(device="cpu", dtype=torch.float32).contiguous().clamp_(-1.0, 1.0)
     
     handle = tempfile.NamedTemporaryFile(suffix=".f32le", delete=False)
     try:
-        handle.write(interleaved.tobytes())
+        handle.write(memoryview(interleaved.numpy()).cast("B"))
     finally:
         handle.close()
     return handle.name, sample_rate, channels
+
 
 def _iter_frame_byte_chunks(
     images: torch.Tensor,
@@ -193,30 +225,201 @@ def _iter_frame_byte_chunks(
     is_10bit: bool = False,
     max_chunk_bytes: int = _MAX_RAW_FRAME_CHUNK_BYTES,
 ):
-    if is_10bit:
-        bytes_per_frame = images.shape[1] * images.shape[2] * 3 * 2  # 16-bit uint (rgb48le)
-        frames_per_chunk = max(1, min(16, max_chunk_bytes // bytes_per_frame))
-        
-        full_indices = []
-        for _ in range(total_plays):
-            full_indices.extend(frame_indices)
-            
-        for start in range(0, len(full_indices), frames_per_chunk):
-            chunk_indices = full_indices[start : start + frames_per_chunk]
-            chunk = images[chunk_indices, ..., :3].detach().to(device="cpu", dtype=torch.float32).clamp_(0.0, 1.0)
-            yield (chunk * 65535.0).round_().to(torch.int32).clamp_(0, 65535).to(torch.uint16).numpy().tobytes()
+    """
+    Yields zero-copy memoryviews of raw RGB24 or RGB48LE frame chunks.
+    Uses slice views when indices are contiguous and offloads float->uint conversion to GPU when available.
+    """
+    compute_device = torch.device("cuda") if torch.cuda.is_available() else images.device
+    bytes_per_frame = images.shape[1] * images.shape[2] * 3 * (2 if is_10bit else 1)
+    max_frames_cap = 16 if is_10bit else 32
+    frames_per_chunk = max(1, min(max_frames_cap, max_chunk_bytes // max(1, bytes_per_frame)))
+
+    single_play_bytes = len(frame_indices) * bytes_per_frame
+    can_cache_loop = total_plays > 1 and single_play_bytes <= _MAX_LOOP_CACHE_BYTES
+    cached_chunks: list[memoryview] = []
+
+    def _convert_single_play():
+        with torch.no_grad():
+            for start in range(0, len(frame_indices), frames_per_chunk):
+                chunk_indices = frame_indices[start : start + frames_per_chunk]
+                chunk_view = _slice_or_index_frames(images, chunk_indices)
+                chunk = chunk_view.detach().to(device=compute_device, dtype=torch.float32, non_blocking=True).clamp_(0.0, 1.0)
+                if is_10bit:
+                    out = (chunk * 65535.0).round_().to(torch.uint16).cpu()
+                else:
+                    out = (chunk * 255.0).round_().to(torch.uint8).cpu()
+                yield memoryview(out.numpy()).cast("B")
+
+    if can_cache_loop:
+        for mv in _convert_single_play():
+            cached_chunks.append(mv)
+            yield mv
+        for _ in range(total_plays - 1):
+            for mv in cached_chunks:
+                yield mv
     else:
-        bytes_per_frame = images.shape[1] * images.shape[2] * 3
-        frames_per_chunk = max(1, min(32, max_chunk_bytes // bytes_per_frame))
-        
-        full_indices = []
         for _ in range(total_plays):
-            full_indices.extend(frame_indices)
-            
-        for start in range(0, len(full_indices), frames_per_chunk):
-            chunk_indices = full_indices[start : start + frames_per_chunk]
-            chunk = images[chunk_indices, ..., :3].detach().to(device="cpu", dtype=torch.float32).clamp_(0.0, 1.0)
-            yield (chunk * 255.0).round_().to(torch.uint8).numpy().tobytes()
+            yield from _convert_single_play()
+
+
+def _iter_yuv420_byte_chunks(
+    images: torch.Tensor,
+    frame_indices: list[int],
+    total_plays: int,
+    pix_fmt: str,
+    is_hdr: bool,
+    max_chunk_bytes: int = _MAX_RAW_FRAME_CHUNK_BYTES,
+    use_pinned_ring: bool = False,
+):
+    """
+    Converts RGB float32 [0, 1] frames directly to ITU-R BT.709 / BT.2020 Limited Range YUV 4:2:0
+    (yuv420p, yuv420p10le, or p010le) on GPU/CPU.
+    Halves pipe transfer bandwidth vs RGB24/RGB48LE and eliminates FFmpeg's CPU swscale bottleneck.
+    """
+    compute_device = torch.device("cuda") if torch.cuda.is_available() else images.device
+    H, W = int(images.shape[1]), int(images.shape[2])
+    is_10bit = pix_fmt in ("yuv420p10le", "p010le")
+    bytes_per_frame = (H * W * 3) if is_10bit else ((H * W * 3) // 2)
+    max_frames_cap = 16 if is_10bit else 32
+    frames_per_chunk = max(1, min(max_frames_cap, max_chunk_bytes // max(1, bytes_per_frame)))
+
+    if is_hdr:
+        # ITU-R BT.2020 non-constant luminance (bt2020nc)
+        kr, kg, kb = 0.2627, 0.6780, 0.0593
+    else:
+        # ITU-R BT.709
+        kr, kg, kb = 0.2126, 0.7152, 0.0722
+
+    inv_cb_scale = 1.0 / (2.0 * (1.0 - kb))
+    inv_cr_scale = 1.0 / (2.0 * (1.0 - kr))
+
+    single_play_bytes = len(frame_indices) * bytes_per_frame
+    can_cache_loop = total_plays > 1 and single_play_bytes <= _MAX_LOOP_CACHE_BYTES
+    cached_chunks: list[memoryview] = []
+
+    out_dtype = torch.uint16 if is_10bit else torch.uint8
+    elems_per_frame = (H * W * 3) // 2
+    enable_ring = use_pinned_ring and (not can_cache_loop) and compute_device.type == "cuda"
+    # 4 slots safely cover the producer + 2 queued items + 1 active consumer write in _write_chunks_pipelined
+    pinned_ring = (
+        [torch.empty((frames_per_chunk, elems_per_frame), dtype=out_dtype, pin_memory=True) for _ in range(4)]
+        if enable_ring else None
+    )
+    ring_idx = 0
+
+    def _convert_single_play():
+        nonlocal ring_idx
+        with torch.no_grad():
+            for start in range(0, len(frame_indices), frames_per_chunk):
+                chunk_indices = frame_indices[start : start + frames_per_chunk]
+                chunk_view = _slice_or_index_frames(images, chunk_indices)
+                x = chunk_view.detach().to(device=compute_device, dtype=torch.float32, non_blocking=True).clamp_(0.0, 1.0)
+                B = x.shape[0]
+
+                # Luma plane Y' in [0, 1] at full resolution (B, H, W)
+                y_f = kr * x[..., 0] + kg * x[..., 1] + kb * x[..., 2]
+
+                # Chroma 2x2 subsampling: since matrix transform is linear, averaging 2x2 RGB blocks first
+                # is mathematically identical to averaging Y, Cb, Cr and reduces chroma matrix math by 4x.
+                x_sub = x.view(B, H // 2, 2, W // 2, 2, 3).mean(dim=(2, 4))
+                r_s = x_sub[..., 0]
+                g_s = x_sub[..., 1]
+                b_s = x_sub[..., 2]
+                y_s = kr * r_s + kg * g_s + kb * b_s
+                cb_f = (b_s - y_s) * inv_cb_scale
+                cr_f = (r_s - y_s) * inv_cr_scale
+
+                if pix_fmt == "yuv420p":
+                    y_q = (y_f * 219.0 + 16.5).floor_().clamp_(16.0, 235.0).to(torch.uint8)
+                    u_q = (cb_f * 224.0 + 128.5).floor_().clamp_(16.0, 240.0).to(torch.uint8)
+                    v_q = (cr_f * 224.0 + 128.5).floor_().clamp_(16.0, 240.0).to(torch.uint8)
+                    out_gpu = torch.cat([
+                        y_q.view(B, H * W),
+                        u_q.view(B, (H // 2) * (W // 2)),
+                        v_q.view(B, (H // 2) * (W // 2)),
+                    ], dim=1)
+                elif pix_fmt == "yuv420p10le":
+                    y_q = (y_f * 876.0 + 64.5).floor_().clamp_(64.0, 940.0).to(torch.uint16)
+                    u_q = (cb_f * 896.0 + 512.5).floor_().clamp_(64.0, 960.0).to(torch.uint16)
+                    v_q = (cr_f * 896.0 + 512.5).floor_().clamp_(64.0, 960.0).to(torch.uint16)
+                    out_gpu = torch.cat([
+                        y_q.view(B, H * W),
+                        u_q.view(B, (H // 2) * (W // 2)),
+                        v_q.view(B, (H // 2) * (W // 2)),
+                    ], dim=1)
+                else:  # p010le (semi-planar, 10-bit values stored in upper 10 bits: * 64)
+                    y_10 = (y_f * 876.0 + 64.5).floor_().clamp_(64.0, 940.0)
+                    u_10 = (cb_f * 896.0 + 512.5).floor_().clamp_(64.0, 960.0)
+                    v_10 = (cr_f * 896.0 + 512.5).floor_().clamp_(64.0, 960.0)
+                    uv_10 = torch.stack([u_10, v_10], dim=-1)
+                    out_gpu = (torch.cat([
+                        y_10.view(B, H * W),
+                        uv_10.view(B, (H // 2) * (W // 2) * 2),
+                    ], dim=1) * 64.0).to(torch.uint16)
+
+                if pinned_ring is not None:
+                    slot = pinned_ring[ring_idx % 4][:B]
+                    ring_idx += 1
+                    slot.copy_(out_gpu, non_blocking=False)
+                    out_cpu = slot
+                else:
+                    out_cpu = out_gpu.cpu()
+
+                yield memoryview(out_cpu.numpy()).cast("B")
+
+    if can_cache_loop:
+        for mv in _convert_single_play():
+            cached_chunks.append(mv)
+            yield mv
+        for _ in range(total_plays - 1):
+            for mv in cached_chunks:
+                yield mv
+    else:
+        for _ in range(total_plays):
+            yield from _convert_single_play()
+
+
+def _write_chunks_pipelined(stdin_pipe, chunk_iter) -> None:
+    """
+    Overlaps GPU/CPU chunk conversion on the main thread with blocking pipe writes to FFmpeg
+    on a dedicated I/O worker thread (double-buffered queue).
+    """
+    q: queue.Queue[memoryview | bytes | None] = queue.Queue(maxsize=2)
+    writer_error: list[BaseException] = []
+
+    def _writer():
+        try:
+            while True:
+                item = q.get()
+                if item is None:
+                    break
+                stdin_pipe.write(item)
+        except BaseException as exc:
+            writer_error.append(exc)
+            # Drain remaining items so producer never blocks on q.put()
+            while True:
+                try:
+                    if q.get_nowait() is None:
+                        break
+                except queue.Empty:
+                    break
+
+    t = threading.Thread(target=_writer, daemon=True)
+    t.start()
+    try:
+        for chunk in chunk_iter:
+            if writer_error:
+                break
+            q.put(chunk)
+    finally:
+        q.put(None)
+        t.join()
+        try:
+            stdin_pipe.close()
+        except BrokenPipeError:
+            pass
+    if writer_error and not isinstance(writer_error[0], BrokenPipeError):
+        raise writer_error[0]
 
 def _parse_options(format_input: dict | str, kwargs: dict) -> tuple[str, str, float | None, str, str | None]:
     sources = []
@@ -511,8 +714,10 @@ class SaveVideo(io.ComfyNode):
         av_codec = config['codec']
         pix_fmt = config['pix_fmt']
         base_options = config['options']
-        # Feed 16-bit RGB whenever the encoder output is 10-bit to avoid 8-bit quantisation before encoding.
         is_10bit_pipe = pix_fmt in ('yuv420p10le', 'p010le')
+        # When dimensions are even, convert RGB->YUV420 directly in PyTorch (GPU/CPU) to halve pipe
+        # bandwidth and eliminate FFmpeg's single-threaded CPU swscale bottleneck.
+        use_direct_yuv420 = (width % 2 == 0 and height % 2 == 0)
 
         metadata_file = _create_ffmetadata_file(saved_metadata)
         # Pass the dynamic input audio_sample_rate to _prepare_audio_file (same pattern as DaSiWa)
@@ -521,14 +726,28 @@ class SaveVideo(io.ComfyNode):
 
         cmd = [ffmpeg_exe, "-y", "-v", "error"]
 
-        input_pix_fmt = "rgb48le" if is_10bit_pipe else "rgb24"
-        cmd.extend([
-            "-f", "rawvideo",
-            "-pix_fmt", input_pix_fmt,
-            "-s", f"{width}x{height}",
-            "-framerate", str(float(frame_rate)),
-            "-i", "-",
-        ])
+        if use_direct_yuv420:
+            input_pix_fmt = pix_fmt
+            cmd.extend([
+                "-f", "rawvideo",
+                "-pix_fmt", input_pix_fmt,
+                "-s", f"{width}x{height}",
+                "-framerate", str(float(frame_rate)),
+                "-color_range", "tv",
+                "-colorspace", "bt2020nc" if is_hdr else "bt709",
+                "-color_primaries", "bt2020" if is_hdr else "bt709",
+                "-color_trc", ("arib-std-b67" if color_space == "HDR" else "smpte2084") if is_hdr else "bt709",
+                "-i", "-",
+            ])
+        else:
+            input_pix_fmt = "rgb48le" if is_10bit_pipe else "rgb24"
+            cmd.extend([
+                "-f", "rawvideo",
+                "-pix_fmt", input_pix_fmt,
+                "-s", f"{width}x{height}",
+                "-framerate", str(float(frame_rate)),
+                "-i", "-",
+            ])
 
         input_idx = 1
         video_map = "0:v:0"
@@ -559,12 +778,13 @@ class SaveVideo(io.ComfyNode):
         if meta_map:
             cmd.extend(["-map_metadata", meta_map])
 
-        # Video filter for color matrix conversion (RGB to YUV)
-        if is_hdr:
-            vf_filter = "scale=in_color_matrix=bt2020:out_color_matrix=bt2020:in_range=full:out_range=tv:flags=bicubic"
-        else:
-            vf_filter = "scale=out_color_matrix=bt709:out_range=tv:flags=bicubic"
-        cmd.extend(["-vf", vf_filter])
+        # Video filter for color matrix conversion and even-dimension alignment (only needed for odd-dimension RGB fallback)
+        if not use_direct_yuv420:
+            if is_hdr:
+                vf_filter = "scale=w=trunc(iw/2)*2:h=trunc(ih/2)*2:in_color_matrix=bt2020:out_color_matrix=bt2020:in_range=full:out_range=tv:flags=bicubic"
+            else:
+                vf_filter = "scale=w=trunc(iw/2)*2:h=trunc(ih/2)*2:in_color_matrix=bt709:out_color_matrix=bt709:in_range=full:out_range=tv:flags=bicubic"
+            cmd.extend(["-vf", vf_filter])
 
         cmd.extend(["-c:v", av_codec, "-pix_fmt", pix_fmt])
         cmd.extend(base_options)
@@ -686,35 +906,41 @@ class SaveVideo(io.ComfyNode):
 
         t_encode_start = time.perf_counter()
 
-        stderr_tmp = tempfile.TemporaryFile()
-        process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=stderr_tmp,
-        )
+        with tempfile.TemporaryFile() as stderr_tmp:
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr_tmp,
+            )
 
-        try:
-            for chunk in _iter_frame_byte_chunks(images, frame_indices, total_plays, is_10bit=is_10bit_pipe):
-                process.stdin.write(chunk)
-            process.stdin.close()
-            retcode = process.wait()
-        except Exception as e:
-            process.kill()
-            process.wait()
-            raise e
-        finally:
-            if metadata_file and os.path.exists(metadata_file):
-                os.unlink(metadata_file)
-            if audio_file and os.path.exists(audio_file):
-                os.unlink(audio_file)
+            try:
+                if use_direct_yuv420:
+                    chunk_iter = _iter_yuv420_byte_chunks(
+                        images, frame_indices, total_plays, pix_fmt=pix_fmt, is_hdr=is_hdr, use_pinned_ring=True
+                    )
+                else:
+                    chunk_iter = _iter_frame_byte_chunks(
+                        images, frame_indices, total_plays, is_10bit=is_10bit_pipe
+                    )
+                _write_chunks_pipelined(process.stdin, chunk_iter)
+                retcode = process.wait()
+            except Exception as e:
+                process.kill()
+                process.wait()
+                raise e
+            finally:
+                if metadata_file and os.path.exists(metadata_file):
+                    os.unlink(metadata_file)
+                if audio_file and os.path.exists(audio_file):
+                    os.unlink(audio_file)
 
-        t_encode_end = time.perf_counter()
+            t_encode_end = time.perf_counter()
 
-        if retcode != 0:
-            stderr_tmp.seek(0)
-            stderr_out = stderr_tmp.read().decode(errors="replace")
-            raise RuntimeError(f"FFmpeg encoding failed (exit code {retcode}): {stderr_out}")
+            if retcode != 0:
+                stderr_tmp.seek(0)
+                stderr_out = stderr_tmp.read().decode(errors="replace")
+                raise RuntimeError(f"FFmpeg encoding failed (exit code {retcode}): {stderr_out}")
 
         print(
             f"[XENodes] SaveVideo breakdown:\n"

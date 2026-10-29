@@ -178,38 +178,50 @@ class SDRtoHDRUsingModel(io.ComfyNode):
         out_device = frames.device
         device = mm.get_torch_device()
 
+        # Pre-allocate output tensor on the source device to avoid 2x RAM peak and torch.cat copy
+        hdr_images = torch.empty_like(frames)
+        if has_alpha:
+            hdr_images[..., 3:].copy_(frames[..., 3:])
+
+        use_pinned_stage = (out_device.type == "cpu" and device.type == "cuda")
+        pinned_stage = (
+            torch.empty((1, frames.shape[1], frames.shape[2], 3), dtype=hdr_images.dtype, pin_memory=True)
+            if use_pinned_stage else None
+        )
+
         model.to(device, dtype=torch.float32)
         pbar = comfy.utils.ProgressBar(frames.shape[0])
-        outputs: list[torch.Tensor] = []
         prev_fea = None
         try:
-            for i in range(frames.shape[0]):
-                mm.throw_exception_if_processing_interrupted()
-                rgb = frames[i : i + 1, ..., :3].to(device=device, dtype=torch.float32)
-                pq, prev_fea = run_sdr_to_hdr_frame(
-                    model,
-                    rgb.permute(0, 3, 1, 2).contiguous(),
-                    condition_scale=condition_scale,
-                    use_refine=use_refine,
-                    prev_condition=prev_fea,
-                    condition_smoothing=condition_smoothing,
-                )
-                hdr = pq_to_hdr_output(
-                    pq.permute(0, 2, 3, 1),
-                    internal_algo,
-                    peak_nits,
-                    exposure=exposure,
-                    lift=lift,
-                )
-                outputs.append(hdr.to(out_device))
-                pbar.update(1)
+            with torch.no_grad():
+                for i in range(frames.shape[0]):
+                    mm.throw_exception_if_processing_interrupted()
+                    rgb = frames[i : i + 1, ..., :3].to(device=device, dtype=torch.float32, non_blocking=True)
+                    pq, prev_fea = run_sdr_to_hdr_frame(
+                        model,
+                        rgb.permute(0, 3, 1, 2).contiguous(),
+                        condition_scale=condition_scale,
+                        use_refine=use_refine,
+                        prev_condition=prev_fea,
+                        condition_smoothing=condition_smoothing,
+                    )
+                    hdr = pq_to_hdr_output(
+                        pq.permute(0, 2, 3, 1),
+                        internal_algo,
+                        peak_nits,
+                        exposure=exposure,
+                        lift=lift,
+                    )
+                    if pinned_stage is not None:
+                        pinned_stage.copy_(hdr, non_blocking=False)
+                        hdr_images[i : i + 1, ..., :3].copy_(pinned_stage)
+                    else:
+                        hdr_images[i : i + 1, ..., :3].copy_(hdr, non_blocking=False)
+                    pbar.update(1)
         finally:
             model.to(mm.unet_offload_device())
             mm.soft_empty_cache()
 
-        hdr_images = torch.cat(outputs, dim=0)
-        if has_alpha:
-            hdr_images = torch.cat([hdr_images, frames[..., 3:].to(hdr_images)], dim=-1)
         if is_single_image:
             hdr_images = hdr_images.squeeze(0)
 
