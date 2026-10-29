@@ -17,17 +17,7 @@ import folder_paths
 
 from ..utils.color import apply_inverse_tone_mapping
 from ..utils.metadata import get_saved_metadata
-
-
-def find_ffmpeg() -> str | None:
-    path_ffmpeg = shutil.which("ffmpeg")
-    if path_ffmpeg:
-        return path_ffmpeg
-    try:
-        import imageio_ffmpeg
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except ImportError:
-        return None
+from .save_image import find_ffmpeg, _write_avif_metadata_batch
 
 
 def _parse_hdr_image_options(codec_input: dict | str, crf_input: float, kwargs: dict) -> tuple[str, float]:
@@ -112,21 +102,22 @@ class SaveHDRImage(io.ComfyNode):
         )
 
         saved_metadata = get_saved_metadata(cls)
+        ffmpeg_exe = find_ffmpeg()
+        if not ffmpeg_exe:
+            raise RuntimeError("FFmpeg executable not found. Please install ffmpeg or imageio-ffmpeg.")
 
         results = []
         gainmaps = []
+        created_paths: list[str] = []
         for i in range(images.shape[0]):
             frame_tensor = images[i]
             current_file_name = f"{filename}_{counter + i:05}_.{format}"
             current_file_path = os.path.join(full_output_folder, current_file_name)
-
-            ffmpeg_exe = find_ffmpeg()
-            if not ffmpeg_exe:
-                raise RuntimeError("FFmpeg executable not found. Please install ffmpeg or imageio-ffmpeg.")
+            created_paths.append(current_file_path)
 
             cmd = [ffmpeg_exe, "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "gbrpf32le", "-s", f"{width}x{height}", "-r", "25", "-i", "-"]
             codec_config = {
-                "av1": {"codec": "libsvtav1", "options": ["-preset", "6"]},
+                "av1": {"codec": "libsvtav1", "options": ["-preset", "6", "-svtav1-params", "lp=4:lookahead=0:tune=0:enable-hdr=1"]},
                 "av1_nvenc": {"codec": "av1_nvenc", "options": ["-preset", "p7"]}
             }
             config = codec_config.get(codec, codec_config["av1"])
@@ -144,9 +135,6 @@ class SaveHDRImage(io.ComfyNode):
 
             cmd += ["-frames:v", "1", current_file_path]
 
-            stderr_tmp = tempfile.TemporaryFile()
-            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=stderr_tmp)
-
             try:
                 linear_hdr, ratio, scale = apply_inverse_tone_mapping(frame_tensor, peak_nits, itm_knee, itm_exponent)
 
@@ -160,58 +148,20 @@ class SaveHDRImage(io.ComfyNode):
                 gainmap_rgb = gainmap_luma.repeat(1, 1, 3)
                 gainmaps.append(gainmap_rgb.clone())
 
-                gbr_planar = linear_hdr[..., [1, 2, 0]].permute(2, 0, 1).contiguous()
-                img_bytes = gbr_planar.cpu().numpy().astype(np.float32).tobytes()
-                
-                proc.stdin.write(img_bytes)
-                proc.stdin.close()
-                return_code = proc.wait()
-                if return_code != 0:
-                    stderr_tmp.seek(0)
-                    stderr_output = stderr_tmp.read().decode('utf-8', errors='replace')
-                    print(f"[XENodes] FFmpeg failed with return code {return_code}")
+                gbr_planar = linear_hdr[..., [1, 2, 0]].permute(2, 0, 1).detach().to(device="cpu", dtype=torch.float32).contiguous()
+                res = subprocess.run(cmd, input=memoryview(gbr_planar.numpy()).cast("B"), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                if res.returncode != 0:
+                    stderr_output = res.stderr.decode('utf-8', errors='replace')
+                    print(f"[XENodes] FFmpeg failed with return code {res.returncode}")
                     if stderr_output:
                         print(f"[XENodes] FFmpeg error output:\n{stderr_output}")
             except Exception as e:
-                proc.kill()
-                proc.wait()
                 print(f"[XENodes] Error encoding HDR AVIF for frame {i}: {e}")
 
-            if saved_metadata:
-                try:
-                    exif_cmd = ["exiftool", "-overwrite_original"]
-                    temp_files = []
-                    
-                    try:
-                        if "workflow" in saved_metadata:
-                            workflow_json = json.dumps(saved_metadata["workflow"])
-                            fd, path = tempfile.mkstemp(suffix=".txt")
-                            temp_files.append(path)
-                            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                                f.write(f"workflow:{workflow_json}")
-                            exif_cmd.append(f"-Make<={path}")
-                            
-                        if "prompt" in saved_metadata:
-                            prompt_json = json.dumps(saved_metadata["prompt"])
-                            fd, path = tempfile.mkstemp(suffix=".txt")
-                            temp_files.append(path)
-                            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                                f.write(f"prompt:{prompt_json}")
-                            exif_cmd.append(f"-Model<={path}")
-                            
-                        exif_cmd.append(current_file_path)
-                        subprocess.run(exif_cmd, check=True, capture_output=True)
-                    finally:
-                        for f_path in temp_files:
-                            try:
-                                if os.path.exists(f_path):
-                                    os.remove(f_path)
-                            except:
-                                pass
-                except Exception as e:
-                    print(f"[XENodes] Warning: Failed to write metadata with exiftool for frame {i}: {e}")
-
             results.append(SavedResult(current_file_name, subfolder, io.FolderType.output))
+
+        if saved_metadata and created_paths:
+            _write_avif_metadata_batch(created_paths, saved_metadata)
 
         output_gainmaps = torch.stack(gainmaps, dim=0)
         return io.NodeOutput(output_gainmaps, ui=SavedImages(results))

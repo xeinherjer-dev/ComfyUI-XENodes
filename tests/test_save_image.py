@@ -10,10 +10,12 @@ except ImportError:
     except ImportError:
         import conftest_base
 import folder_paths
+import torch
 from custom_nodes.xenodes.nodes.save_image import (
     SaveImage,
     SaveImageExtension,
     _parse_image_options,
+    _rgb_batch_to_full_range_yuv420,
     comfy_entrypoint,
 )
 
@@ -79,6 +81,42 @@ class TestSaveImage(unittest.TestCase):
         out = SaveImage.execute(images=None, filename_prefix="tests/none")
         self.assertIsNone(out.result[0])
         self.assertEqual(len(out.ui.results), 0)
+
+    def test_execute_save_batch_webp_and_avif(self):
+        y = torch.linspace(0.0, 1.0, 64).view(1, 64, 1, 1)
+        x = torch.linspace(0.0, 1.0, 64).view(1, 1, 64, 1)
+        batch_img = (0.5 * y + 0.5 * x).expand(3, 64, 64, 3).contiguous()
+
+        for fmt in ("png", "webp", "avif"):
+            prefix = f"tests/test_batch_{fmt}"
+            out = SaveImage.execute(
+                images=batch_img,
+                filename_prefix=prefix,
+                format=fmt,
+            )
+            self.assertEqual(len(out.ui.results), 3)
+            out_dir = folder_paths.get_output_directory()
+            matched = glob.glob(os.path.join(out_dir, "tests", f"test_batch_{fmt}*"))
+            self.created_files.extend(matched)
+            for p in matched:
+                self.assertGreater(os.path.getsize(p), 0)
+
+        # Verify odd resolution AVIF fallback does not crash
+        odd_img = torch.full((1, 65, 67, 3), 0.5, dtype=torch.float32)
+        out_odd = SaveImage.execute(
+            images=odd_img,
+            filename_prefix="tests/test_odd_avif",
+            format="avif",
+        )
+        self.assertEqual(len(out_odd.ui.results), 1)
+        out_dir = folder_paths.get_output_directory()
+        self.created_files.extend(glob.glob(os.path.join(out_dir, "tests", "test_odd_avif*")))
+
+        # Verify full-range YUV420 conversion accuracy on pure white and pure black
+        bw = torch.tensor([[[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]]], dtype=torch.float32)
+        yuv10 = _rgb_batch_to_full_range_yuv420(bw, is_10bit=True, is_bt2020=True)
+        self.assertEqual(int(yuv10[0, 0]), 0)
+        self.assertEqual(int(yuv10[0, 2]), 1023)
 
     def test_extension_entrypoint(self):
         ext = asyncio.run(comfy_entrypoint())
