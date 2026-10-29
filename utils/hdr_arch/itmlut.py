@@ -21,14 +21,24 @@ See THIRD_PARTY_LICENSES.md for full license texts.
 """
 from __future__ import annotations
 
+import functools
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+
+@functools.lru_cache(maxsize=16)
+def _get_u_vertices_and_mid(n_dim: int, device: torch.device, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
+    u = torch.linspace(0.0, 1.0, n_dim, device=device, dtype=dtype).view(1, 1, n_dim)
+    mid = ((3.0 * torch.pi * u) - torch.cos(3.0 * torch.pi * u) + 1.0) / (3.0 * torch.pi + 2.0)
+    return u, mid
 
 
 def pure_ailut_transform(img: torch.Tensor, lut: torch.Tensor, vertices: torch.Tensor) -> torch.Tensor:
     """
     Pure PyTorch implementation of AiLUT-Transform (Trilinear interpolation on 3D LUT with non-uniform vertices).
-    Runs efficiently on CPU and CUDA without custom C++/CUDA extension compilation.
+    Uses adaptive interval search via `torch.bucketize` followed by hardware-accelerated 5D `F.grid_sample`
+    (3D trilinear interpolation in a single fused kernel).
 
     Args:
         img: [B, 3, H, W] in [0, 1]
@@ -40,76 +50,28 @@ def pure_ailut_transform(img: torch.Tensor, lut: torch.Tensor, vertices: torch.T
     B, C, H, W = img.shape
     D = lut.shape[2]
     eps = 1e-10
+    scale = 2.0 / (D - 1)
 
-    img = img.clamp(0.0, 1.0)
-    out = []
+    img_c = img.clamp(0.0, 1.0)
+    grids: list[torch.Tensor] = []
 
     for b in range(B):
-        img_b = img[b]
-        lut_b = lut[b]
+        img_b = img_c[b]
         vert_b = vertices[b]
+        coords: list[torch.Tensor] = []
+        for c in range(3):
+            ch = img_b[c].contiguous().view(-1)
+            v = vert_b[c].contiguous().view(-1)
+            idx = (torch.bucketize(ch, v) - 1).clamp(0, D - 2)
+            v0 = v[idx]
+            v1 = v[idx + 1]
+            d = (ch - v0) / (v1 - v0 + eps)
+            coords.append(((idx.to(img.dtype) + d) * scale - 1.0).view(H, W))
+        grids.append(torch.stack(coords, dim=-1))
 
-        r = img_b[0].contiguous().view(-1)
-        g = img_b[1].contiguous().view(-1)
-        b_ch = img_b[2].contiguous().view(-1)
-
-        v_r = vert_b[0].contiguous().view(-1)
-        v_g = vert_b[1].contiguous().view(-1)
-        v_b = vert_b[2].contiguous().view(-1)
-
-        rid = (torch.bucketize(r, v_r) - 1).clamp(0, D - 2)
-        gid = (torch.bucketize(g, v_g) - 1).clamp(0, D - 2)
-        bid = (torch.bucketize(b_ch, v_b) - 1).clamp(0, D - 2)
-
-        r0 = v_r[rid]
-        r1 = v_r[rid + 1]
-        g0 = v_g[gid]
-        g1 = v_g[gid + 1]
-        b0 = v_b[bid]
-        b1 = v_b[bid + 1]
-
-        rd = (r - r0) / (r1 - r0 + eps)
-        gd = (g - g0) / (g1 - g0 + eps)
-        bd = (b_ch - b0) / (b1 - b0 + eps)
-
-        w000 = (1.0 - rd) * (1.0 - gd) * (1.0 - bd)
-        w100 = rd * (1.0 - gd) * (1.0 - bd)
-        w010 = (1.0 - rd) * gd * (1.0 - bd)
-        w110 = rd * gd * (1.0 - bd)
-        w001 = (1.0 - rd) * (1.0 - gd) * bd
-        w101 = rd * (1.0 - gd) * bd
-        w011 = (1.0 - rd) * gd * bd
-        w111 = rd * gd * bd
-
-        lut_flat = lut_b.view(3, -1)
-        stride_g = D
-        stride_b = D * D
-
-        idx000 = rid + gid * stride_g + bid * stride_b
-        idx100 = (rid + 1) + gid * stride_g + bid * stride_b
-        idx010 = rid + (gid + 1) * stride_g + bid * stride_b
-        idx110 = (rid + 1) + (gid + 1) * stride_g + bid * stride_b
-        idx001 = rid + gid * stride_g + (bid + 1) * stride_b
-        idx101 = (rid + 1) + gid * stride_g + (bid + 1) * stride_b
-        idx011 = rid + (gid + 1) * stride_g + (bid + 1) * stride_b
-        idx111 = (rid + 1) + (gid + 1) * stride_g + (bid + 1) * stride_b
-
-        c000 = lut_flat[:, idx000]
-        c100 = lut_flat[:, idx100]
-        c010 = lut_flat[:, idx010]
-        c110 = lut_flat[:, idx110]
-        c001 = lut_flat[:, idx001]
-        c101 = lut_flat[:, idx101]
-        c011 = lut_flat[:, idx011]
-        c111 = lut_flat[:, idx111]
-
-        res = (
-            c000 * w000 + c100 * w100 + c010 * w010 + c110 * w110 +
-            c001 * w001 + c101 * w101 + c011 * w011 + c111 * w111
-        )
-        out.append(res.view(3, H, W))
-
-    return torch.stack(out, dim=0)
+    grid_batch = torch.stack(grids, dim=0).unsqueeze(1)  # (B, 1, H, W, 3)
+    sampled = F.grid_sample(lut, grid_batch, mode="bilinear", padding_mode="border", align_corners=True)
+    return sampled.squeeze(2)
 
 
 class ITMLUT_BrightProb(nn.Module):
@@ -244,7 +206,7 @@ class ITMLUTNet(nn.Module):
         LUTs_m = self.lut_gen_m(weights_m)
         LUTs_d = self.lut_gen_d(weights_d)
 
-        u_vertices = torch.linspace(0.0, 1.0, self.n_dim, device=device, dtype=img.dtype).view(1, 1, self.n_dim)
+        u_vertices, mid_curve = _get_u_vertices_and_mid(self.n_dim, device, img.dtype)
 
         avg_rgb = torch.mean(img, dim=(-2, -1), keepdim=False).unsqueeze(-1)  # (B, 3, 1)
         exp_b = 1.4 + 0.8 * avg_rgb
@@ -253,15 +215,19 @@ class ITMLUTNet(nn.Module):
         exp_d = 2.2 - 0.8 * avg_rgb
         vertices_d = u_vertices ** exp_d
 
-        vertices_m = _itmlut_mid_curve(u_vertices).expand(b, self.nc, self.n_dim)
+        vertices_m = mid_curve.expand(b, self.nc, self.n_dim)
 
         prob_b = self.bright_prob(img)
         prob_d = self.dark_prob(img)
         prob_m = torch.clamp(1.0 - prob_d - prob_b, min=0.0, max=1.0)
 
-        out = (
-            pure_ailut_transform(img, LUTs_b, vertices_b) * prob_b +
-            pure_ailut_transform(img, LUTs_m, vertices_m) * prob_m +
-            pure_ailut_transform(img, LUTs_d, vertices_d) * prob_d
-        )
+        # Batch all 3 LUT transforms (Bright, Mid, Dark) into a single 5D grid_sample call
+        all_luts = torch.cat([LUTs_b, LUTs_m, LUTs_d], dim=0)
+        all_verts = torch.cat([vertices_b, vertices_m, vertices_d], dim=0)
+        all_imgs = img.expand(3, -1, -1, -1, -1).reshape(3 * b, *img.shape[1:]) if b == 1 else img.repeat(3, 1, 1, 1)
+        out_b, out_m, out_d = pure_ailut_transform(all_imgs, all_luts, all_verts).chunk(3, dim=0)
+
+        out = out_b * prob_b
+        out.addcmul_(out_m, prob_m)
+        out.addcmul_(out_d, prob_d)
         return out

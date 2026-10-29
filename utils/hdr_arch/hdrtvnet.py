@@ -73,16 +73,30 @@ class AGCMNet(nn.Module):
 
     def forward_with_condition(self, content: torch.Tensor, fea: torch.Tensor) -> torch.Tensor:
         nf = self.nf
+        if content.shape[0] == 1:
+            # Fuse channel-wise affine modulation (scale + 1.0, shift) directly into 1x1 conv weights & biases
+            s1 = (self.cond_scale_first(fea) + 1.0).view(nf, 1, 1, 1)
+            b1 = self.conv_first.bias * s1.view(-1) + self.cond_shift_first(fea).view(-1)
+            out = self.act(F.conv2d(content, self.conv_first.weight * s1, b1))
+
+            s2 = (self.cond_scale_HR(fea) + 1.0).view(nf, 1, 1, 1)
+            b2 = self.HRconv.bias * s2.view(-1) + self.cond_shift_HR(fea).view(-1)
+            out = self.act(F.conv2d(out, self.HRconv.weight * s2, b2))
+
+            s3 = (self.cond_scale_last(fea) + 1.0).view(3, 1, 1, 1)
+            b3 = self.conv_last.bias * s3.view(-1) + self.cond_shift_last(fea).view(-1)
+            return F.conv2d(out, self.conv_last.weight * s3, b3)
+
         out = self.conv_first(content)
-        out = out * self.cond_scale_first(fea).view(-1, nf, 1, 1) + self.cond_shift_first(fea).view(-1, nf, 1, 1) + out
+        out = out.mul_((self.cond_scale_first(fea) + 1.0).view(-1, nf, 1, 1)).add_(self.cond_shift_first(fea).view(-1, nf, 1, 1))
         out = self.act(out)
 
         out = self.HRconv(out)
-        out = out * self.cond_scale_HR(fea).view(-1, nf, 1, 1) + self.cond_shift_HR(fea).view(-1, nf, 1, 1) + out
+        out = out.mul_((self.cond_scale_HR(fea) + 1.0).view(-1, nf, 1, 1)).add_(self.cond_shift_HR(fea).view(-1, nf, 1, 1))
         out = self.act(out)
 
         out = self.conv_last(out)
-        out = out * self.cond_scale_last(fea).view(-1, 3, 1, 1) + self.cond_shift_last(fea).view(-1, 3, 1, 1) + out
+        out = out.mul_((self.cond_scale_last(fea) + 1.0).view(-1, 3, 1, 1)).add_(self.cond_shift_last(fea).view(-1, 3, 1, 1))
         return out
 
     def forward(self, content: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
@@ -145,9 +159,15 @@ class SFTLayer(nn.Module):
 
     def forward(self, x: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
         fea, cond = x
-        scale = self.SFT_scale_conv1(F.leaky_relu(self.SFT_scale_conv0(cond), 0.1, inplace=True))
-        shift = self.SFT_shift_conv1(F.leaky_relu(self.SFT_shift_conv0(cond), 0.1, inplace=True))
-        return fea * (scale + 1.0) + shift
+        # Fuse parallel 1x1 convolutions on the shared `cond` tensor and pre-add +1.0 to scale bias
+        w0 = torch.cat([self.SFT_scale_conv0.weight, self.SFT_shift_conv0.weight], dim=0)
+        b0 = torch.cat([self.SFT_scale_conv0.bias, self.SFT_shift_conv0.bias], dim=0)
+        w1 = torch.cat([self.SFT_scale_conv1.weight, self.SFT_shift_conv1.weight], dim=0)
+        b1 = torch.cat([self.SFT_scale_conv1.bias + 1.0, self.SFT_shift_conv1.bias], dim=0)
+        h0 = F.leaky_relu(F.conv2d(cond, w0, b0), 0.1, inplace=True)
+        h1 = F.conv2d(h0, w1, b1, groups=2)
+        scale_p1, shift = h1.chunk(2, dim=1)
+        return torch.addcmul(shift, fea, scale_p1)
 
 
 class ResBlockWithSFT(nn.Module):
@@ -164,7 +184,8 @@ class ResBlockWithSFT(nn.Module):
         out = F.relu(self.conv1(out), inplace=True)
         out = self.sft2((out, cond))
         out = self.conv2(out)
-        return (fea + out, cond)
+        out.add_(fea)
+        return (out, cond)
 
 
 def _make_res_layers(nf: int, n_layers: int) -> nn.Sequential:
@@ -252,16 +273,27 @@ class HDRUNet3T1(nn.Module):
         pad_h = (8 - h % 8) % 8
         pad_w = (8 - w % 8) % 8
         if pad_h > 0 or pad_w > 0:
+            same_input = cond_img is img
             img = F.pad(img, (0, pad_w, 0, pad_h), mode="replicate")
-            cond_img = F.pad(cond_img, (0, pad_w, 0, pad_h), mode="replicate")
+            cond_img = img if same_input else F.pad(cond_img, (0, pad_w, 0, pad_h), mode="replicate")
 
         mask_out = self.mask_est(img) * img if self.weighting_network else img
 
         cond = self.cond_first(cond_img)
         cond1 = self.CondNet1(cond)
-        cond2 = self.CondNet2(cond)
-        cond3 = self.CondNet3(cond)
-        cond4 = self.CondNet4(cond)
+        # Fuse shared stride-2 3x3 convolutions across CondNet2, CondNet3, CondNet4
+        w_s1 = torch.cat([self.CondNet2[0].weight, self.CondNet3[0].weight, self.CondNet4[0].weight], dim=0)
+        b_s1 = torch.cat([self.CondNet2[0].bias, self.CondNet3[0].bias, self.CondNet4[0].bias], dim=0)
+        w_s2 = torch.cat([self.CondNet3[2].weight, self.CondNet4[2].weight], dim=0)
+        b_s2 = torch.cat([self.CondNet3[2].bias, self.CondNet4[2].bias], dim=0)
+        h234 = F.leaky_relu(F.conv2d(cond, w_s1, b_s1, stride=2, padding=1), 0.1, inplace=True)
+        c_nf = cond.shape[1]
+        h2 = h234[:, :c_nf]
+        h34 = F.leaky_relu(F.conv2d(h234[:, c_nf:], w_s2, b_s2, stride=2, padding=1, groups=2), 0.1, inplace=True)
+        h3, h4 = h34.chunk(2, dim=1)
+        cond2 = self.CondNet2[4](F.leaky_relu(self.CondNet2[2](h2), 0.1, inplace=True))
+        cond3 = self.CondNet3[4](h3)
+        cond4 = self.CondNet4[4](h4)
 
         fea0 = self.act(self.conv_first(img))
         fea0 = self.SFT_layer1((fea0, cond1))
@@ -275,20 +307,20 @@ class HDRUNet3T1(nn.Module):
 
         fea3 = self.act(self.down_conv3(fea2))
         out, _ = self.recon_trunk3((fea3, cond4))
-        out = out + fea3
+        out.add_(fea3)
 
-        out = self.act(self.up_conv1(out)) + fea2
+        out = self.act(self.up_conv1(out)).add_(fea2)
         out, _ = self.recon_trunk4((out, cond3))
 
-        out = self.act(self.up_conv2(out)) + fea1
+        out = self.act(self.up_conv2(out)).add_(fea1)
         out, _ = self.recon_trunk5((out, cond2))
 
-        out = self.act(self.up_conv3(out)) + fea0
+        out = self.act(self.up_conv3(out)).add_(fea0)
         out = self.SFT_layer2((out, cond1))
         out = self.act(self.HR_conv2(out))
 
         out = self.conv_last(out)
-        out = mask_out + out
+        out.add_(mask_out)
 
         # Slice back to original resolution
         return out[..., :h, :w]

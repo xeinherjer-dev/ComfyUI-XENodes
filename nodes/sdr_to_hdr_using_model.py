@@ -8,7 +8,7 @@ import comfy.utils
 import folder_paths
 
 from comfy_api.latest import ComfyExtension, io, Input
-from ..utils.color import pq_to_hdr_output
+from ..utils.color import get_pinned_stage_pair, pq_to_hdr_output
 from ..utils.hdr_io import (
     COLOR_SPACE_OPTIONS,
     resolve_color_space,
@@ -175,6 +175,7 @@ class SDRtoHDRUsingModel(io.ComfyNode):
             frames = frames.unsqueeze(0)
 
         has_alpha = frames.shape[-1] == 4
+        total_frames = frames.shape[0]
         out_device = frames.device
         device = mm.get_torch_device()
 
@@ -183,20 +184,34 @@ class SDRtoHDRUsingModel(io.ComfyNode):
         if has_alpha:
             hdr_images[..., 3:].copy_(frames[..., 3:])
 
-        use_pinned_stage = (out_device.type == "cpu" and device.type == "cuda")
-        pinned_stage = (
-            torch.empty((1, frames.shape[1], frames.shape[2], 3), dtype=hdr_images.dtype, pin_memory=True)
+        # Lightweight 3D-LUT models (ITMLUT) have no temporal state and low VRAM footprint,
+        # so mini-batching 4 frames amortizes kernel launch and transfer overhead.
+        batch_size = 4 if (model.arch == ARCH_ITMLUT and condition_smoothing == 0.0) else 1
+        use_pinned_stage = (
+            out_device.type == "cpu"
+            and device.type == "cuda"
+            and frames.numel() >= 4 * 1024 * 1024
+        )
+        stage_len = min(batch_size, total_frames)
+        pinned_pair = (
+            get_pinned_stage_pair((stage_len, frames.shape[1], frames.shape[2], 3), hdr_images.dtype)
             if use_pinned_stage else None
         )
+        events = (torch.cuda.Event(), torch.cuda.Event()) if use_pinned_stage else None
+        pending: tuple[int, int, int] | None = None
 
         model.to(device, dtype=torch.float32)
-        pbar = comfy.utils.ProgressBar(frames.shape[0])
+        pbar = comfy.utils.ProgressBar(total_frames)
         prev_fea = None
         try:
             with torch.no_grad():
-                for i in range(frames.shape[0]):
+                for idx, start in enumerate(range(0, total_frames, batch_size)):
                     mm.throw_exception_if_processing_interrupted()
-                    rgb = frames[i : i + 1, ..., :3].to(device=device, dtype=torch.float32, non_blocking=True)
+                    end = min(start + batch_size, total_frames)
+                    cur_len = end - start
+                    slot = idx & 1
+
+                    rgb = frames[start:end, ..., :3].to(device=device, dtype=torch.float32, non_blocking=True)
                     pq, prev_fea = run_sdr_to_hdr_frame(
                         model,
                         rgb.permute(0, 3, 1, 2).contiguous(),
@@ -206,18 +221,31 @@ class SDRtoHDRUsingModel(io.ComfyNode):
                         condition_smoothing=condition_smoothing,
                     )
                     hdr = pq_to_hdr_output(
-                        pq.permute(0, 2, 3, 1),
+                        pq.permute(0, 2, 3, 1).contiguous(),
                         internal_algo,
                         peak_nits,
                         exposure=exposure,
                         lift=lift,
                     )
-                    if pinned_stage is not None:
-                        pinned_stage.copy_(hdr, non_blocking=False)
-                        hdr_images[i : i + 1, ..., :3].copy_(pinned_stage)
+                    if pinned_pair is not None and events is not None:
+                        st = pinned_pair[slot][:cur_len]
+                        st.copy_(hdr, non_blocking=True)
+                        events[slot].record()
+
+                        if pending is not None:
+                            p_slot, p_start, p_end = pending
+                            events[p_slot].synchronize()
+                            hdr_images[p_start:p_end, ..., :3].copy_(pinned_pair[p_slot][: p_end - p_start])
+
+                        pending = (slot, start, end)
                     else:
-                        hdr_images[i : i + 1, ..., :3].copy_(hdr, non_blocking=False)
-                    pbar.update(1)
+                        hdr_images[start:end, ..., :3].copy_(hdr, non_blocking=False)
+                    pbar.update(cur_len)
+
+                if pending is not None and pinned_pair is not None and events is not None:
+                    p_slot, p_start, p_end = pending
+                    events[p_slot].synchronize()
+                    hdr_images[p_start:p_end, ..., :3].copy_(pinned_pair[p_slot][: p_end - p_start])
         finally:
             model.to(mm.unet_offload_device())
             mm.soft_empty_cache()

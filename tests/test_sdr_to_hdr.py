@@ -181,6 +181,46 @@ class TestSDRtoHDRNodes(unittest.TestCase):
         torch.testing.assert_close(out_hdr, ref_hdr, rtol=1e-5, atol=1e-5)
         self.assertLess(elapsed, 1.0, f"sdr_to_hdr_tensor took too long: {elapsed:.3f}s")
 
+    def test_model_architectures_batch_and_pipeline_consistency(self):
+        """Verifies ITMLUT, HDRTVDM, and HDRTVNet++ optimized forward passes and E2E node execution."""
+        from custom_nodes.xenodes.utils.hdr_models import (
+            ARCH_ENSEMBLE,
+            ARCH_HDRTVDM,
+            ARCH_ITMLUT,
+            EnsembleAGCMLE,
+            ITMLUTNet,
+            SDRtoHDRModelBundle,
+            TriSegNet,
+            run_sdr_to_hdr_frame,
+        )
+
+        torch.manual_seed(123)
+        frames_cpu = torch.rand((5, 64, 64, 3), dtype=torch.float32)
+
+        # 1. ITMLUT batch=4 vs single-frame equivalence
+        itmlut = ITMLUTNet().eval().requires_grad_(False)
+        bundle_itm = SDRtoHDRModelBundle(model=itmlut, arch=ARCH_ITMLUT)
+        bchw = frames_cpu.permute(0, 3, 1, 2).contiguous()
+        out_batched, _ = run_sdr_to_hdr_frame(bundle_itm, bchw[:4])
+        out_singles = torch.cat([run_sdr_to_hdr_frame(bundle_itm, bchw[i : i + 1])[0] for i in range(4)], dim=0)
+        torch.testing.assert_close(out_batched, out_singles, rtol=1e-5, atol=1e-5)
+
+        # E2E SDRtoHDRUsingModel execution (tests batch=4 + double-buffered pinned staging)
+        node_out = SDRtoHDRUsingModel.execute(bundle_itm, images=frames_cpu, peak_nits=1000.0)
+        self.assertEqual(node_out.result[0].shape, frames_cpu.shape)
+
+        # 2. HDRTVDM (TriSegNet with Split-K RestormerAttention, 1-pass LayerNorm, fused PWConv_Cond)
+        triseg = TriSegNet().eval().requires_grad_(False)
+        bundle_dm = SDRtoHDRModelBundle(model=triseg, arch=ARCH_HDRTVDM)
+        out_dm = SDRtoHDRUsingModel.execute(bundle_dm, images=frames_cpu[:2], peak_nits=1000.0)
+        self.assertEqual(out_dm.result[0].shape, (2, 64, 64, 3))
+
+        # 3. HDRTVNet++ (EnsembleAGCMLE with fused AGCM 1x1 convs, SFTLayer, and CondNet2..4)
+        hr_net = EnsembleAGCMLE(cond_c=6, nf=32).eval().requires_grad_(False)
+        bundle_hr = SDRtoHDRModelBundle(agcm=hr_net.AGCM, le=hr_net.LE, arch=ARCH_ENSEMBLE, is_ensemble=True)
+        out_hr = SDRtoHDRUsingModel.execute(bundle_hr, images=frames_cpu[:2], peak_nits=1000.0)
+        self.assertEqual(out_hr.result[0].shape, (2, 64, 64, 3))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,27 @@ _BT709_TO_BT2020_MATRIX = [
 _BT709_LUMA_WEIGHTS = [0.2126, 0.7152, 0.0722]
 _BT2020_LUMA_WEIGHTS = [0.2627, 0.6780, 0.0593]
 
+_PINNED_STAGE_CACHE: dict[tuple[tuple[int, ...], torch.dtype], tuple[torch.Tensor, torch.Tensor]] = {}
+
+
+def get_pinned_stage_pair(shape: tuple[int, ...], dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Returns a cached pair of pinned CPU staging buffers of at least `shape[0]` frames
+    with matching spatial/channel dimensions `(shape[1], shape[2], shape[3])` and `dtype`.
+    Avoids repeated 400+ ms `cudaHostAlloc` overhead across video conversions.
+    """
+    key = (shape[1:], dtype)
+    pair = _PINNED_STAGE_CACHE.get(key)
+    if pair is None or pair[0].shape[0] < shape[0]:
+        # Keep only the most recent resolution/dtype in cache to bound pinned RAM usage
+        _PINNED_STAGE_CACHE.clear()
+        pair = (
+            torch.empty(shape, dtype=dtype, pin_memory=True),
+            torch.empty(shape, dtype=dtype, pin_memory=True),
+        )
+        _PINNED_STAGE_CACHE[key] = pair
+    return pair[0][: shape[0]], pair[1][: shape[0]]
+
 
 @functools.lru_cache(maxsize=16)
 def _get_bt709_luma_weights(device: torch.device, dtype: torch.dtype) -> torch.Tensor:
@@ -56,7 +77,12 @@ def apply_inverse_tone_mapping(frame_tensor: torch.Tensor, peak_nits: float, itm
         # a = (scale - 1.0) / (1.0 - knee)^exponent
         a = (scale - 1.0) / ((1.0 - itm_knee) ** itm_exponent)
         luma_diff = torch.clamp(luma - itm_knee, min=0.0)
-        luma_hdr = luma + a * (luma_diff ** itm_exponent)
+        if itm_exponent == 1.0:
+            luma_hdr = luma + a * luma_diff
+        elif itm_exponent == 2.0:
+            luma_hdr = luma + a * (luma_diff * luma_diff)
+        else:
+            luma_hdr = luma + a * (luma_diff ** itm_exponent)
         
         # Apply the same expansion ratio to all channels to preserve color
         ratio = (luma_hdr + 1e-6) / (luma + 1e-6)
@@ -239,13 +265,61 @@ def pq_to_hdr_output(
     linear_2020 = torch.clamp(linear_2020, 0.0, peak_nits / 100.0)
     return encode_linear_bt2020(linear_2020, color_space, peak_nits)
 
+def _sdr_to_hdr_chunk(
+    chunk: torch.Tensor,
+    luma_weights: torch.Tensor,
+    bt709_to_bt2020_t: torch.Tensor,
+    peak_nits: float,
+    itm_knee: float,
+    itm_exponent: float,
+    is_hlg: bool,
+) -> torch.Tensor:
+    """Optimized kernel for sRGB -> Linear -> Soft-Knee ITM -> BT.2020 -> PQ/HLG."""
+    linear = torch.where(chunk <= 0.04045, chunk / 12.92, torch.pow((chunk + 0.055) / 1.055, 2.4))
+    if itm_knee < 1.0:
+        luma = torch.sum(linear * luma_weights, dim=-1, keepdim=True)
+        scale = peak_nits / 100.0
+        a = (scale - 1.0) / ((1.0 - itm_knee) ** itm_exponent)
+        luma_diff = torch.clamp(luma - itm_knee, min=0.0)
+        if itm_exponent == 1.0:
+            luma_hdr = luma + a * luma_diff
+        elif itm_exponent == 2.0:
+            luma_hdr = luma + a * (luma_diff * luma_diff)
+        else:
+            luma_hdr = luma + a * torch.pow(luma_diff, itm_exponent)
+        ratio = (luma_hdr + 1e-6) / (luma + 1e-6)
+        linear.mul_(ratio)
+    linear_2020 = torch.matmul(linear, bt709_to_bt2020_t).clamp_(min=0.0)
+    if is_hlg:
+        a_h = 0.17883277
+        b_h = 1.0 - 4.0 * a_h
+        c_h = 0.5 - a_h * math.log(4.0 * a_h)
+        scale_h = max(1.0, peak_nits / 100.0)
+        E = linear_2020.div_(scale_h).clamp_(min=0.0, max=1.0)
+        hlg = torch.where(
+            E <= (1.0 / 12.0),
+            torch.sqrt(3.0 * E),
+            a_h * torch.log(torch.clamp(12.0 * E - b_h, min=1e-7)) + c_h,
+        )
+        return hlg.clamp_(0.0, 1.0)
+    else:
+        Y = (linear_2020 * 100.0) / 10000.0
+        Y_pos = torch.clamp(Y, min=0.0)
+        Y_m1 = torch.pow(Y_pos, 0.1593017578125)
+        num = 0.8359375 + 18.8515625 * Y_m1
+        den = 1.0 + 18.6875 * Y_m1
+        pq = num.div_(den).pow_(78.84375)
+        pq = torch.where(Y <= 0.0, torch.zeros_like(Y), pq)
+        return pq.clamp_(0.0, 1.0)
+
+
 def sdr_to_hdr_tensor(
     images: torch.Tensor,
     peak_nits: float = 400.0,
     itm_knee: float = 0.0,
     itm_exponent: float = 1.0,
     color_space: str = "HDR PQ",
-    chunk_size: int = 16,
+    chunk_size: int = 8,
 ) -> torch.Tensor:
     """
     Full pipeline to expand SDR sRGB images [0, 1] to HDR BT.2020 (PQ or HLG) images [0, 1].
@@ -269,39 +343,64 @@ def sdr_to_hdr_tensor(
     total_frames = images.shape[0]
     out_device = images.device
     compute_device = torch.device("cuda") if torch.cuda.is_available() else out_device
+    is_hlg = is_hlg_color_space(color_space)
 
     # Pre-allocate output tensor on the original device to avoid double-memory peak and torch.cat copy
     result = torch.empty_like(images)
     if has_alpha:
         result[..., 3:].copy_(images[..., 3:])
 
-    use_pinned_stage = (out_device.type == "cpu" and compute_device.type == "cuda")
-    stage_len = min(chunk_size, total_frames)
-    pinned_stage = (
-        torch.empty((stage_len, images.shape[1], images.shape[2], 3), dtype=result.dtype, pin_memory=True)
-        if use_pinned_stage else None
+    luma_weights = _get_bt709_luma_weights(compute_device, torch.float32)
+    matrix_t = _get_bt709_to_bt2020_matrix_t(compute_device, torch.float32)
+    peak_f = float(peak_nits)
+    knee_f = float(itm_knee)
+    exp_f = float(itm_exponent)
+
+    use_pinned_stage = (
+        out_device.type == "cpu"
+        and compute_device.type == "cuda"
+        and images.numel() >= 4 * 1024 * 1024
     )
+    if not use_pinned_stage:
+        with torch.no_grad():
+            for start in range(0, total_frames, chunk_size):
+                end = min(start + chunk_size, total_frames)
+                chunk = images[start:end, ..., :3].to(device=compute_device, dtype=torch.float32, non_blocking=True)
+                hdr_chunk = _sdr_to_hdr_chunk(chunk, luma_weights, matrix_t, peak_f, knee_f, exp_f, is_hlg)
+                result[start:end, ..., :3].copy_(hdr_chunk, non_blocking=False)
+        if is_single_image:
+            result = result.squeeze(0)
+        return result
+
+    stage_len = min(chunk_size, total_frames)
+    pinned_pair = get_pinned_stage_pair((stage_len, images.shape[1], images.shape[2], 3), result.dtype)
+    events = (torch.cuda.Event(), torch.cuda.Event())
+    pending: tuple[int, int, int] | None = None
 
     with torch.no_grad():
-        for start in range(0, total_frames, chunk_size):
+        for idx, start in enumerate(range(0, total_frames, chunk_size)):
             end = min(start + chunk_size, total_frames)
+            cur_len = end - start
+            slot = idx & 1
+
             chunk = images[start:end, ..., :3].to(device=compute_device, dtype=torch.float32, non_blocking=True)
+            hdr_chunk = _sdr_to_hdr_chunk(chunk, luma_weights, matrix_t, peak_f, knee_f, exp_f, is_hlg)
+            st = pinned_pair[slot][:cur_len]
+            st.copy_(hdr_chunk, non_blocking=True)
+            events[slot].record()
 
-            # 1. sRGB -> Linear & Soft-Knee ITM (1.0 = 100 nits)
-            linear_hdr, _, _ = apply_inverse_tone_mapping(chunk, peak_nits, itm_knee, itm_exponent)
+            # Overlap GPU execution & DMA of current chunk with CPU write (and OS page faults) of previous chunk
+            if pending is not None:
+                p_slot, p_start, p_end = pending
+                events[p_slot].synchronize()
+                result[p_start:p_end, ..., :3].copy_(pinned_pair[p_slot][: p_end - p_start])
 
-            # 2. BT.709 Linear -> BT.2020 Linear
-            linear_2020 = convert_bt709_to_bt2020(linear_hdr)
+            pending = (slot, start, end)
 
-            # 3. Linear -> PQ or HLG OETF
-            hdr_chunk = encode_linear_bt2020(linear_2020, color_space, peak_nits)
-
-            if pinned_stage is not None:
-                st = pinned_stage[: end - start]
-                st.copy_(hdr_chunk, non_blocking=False)
-                result[start:end, ..., :3].copy_(st)
-            else:
-                result[start:end, ..., :3].copy_(hdr_chunk, non_blocking=False)
+        if pending is not None:
+            p_slot, p_start, p_end = pending
+            events[p_slot].synchronize()
+            result[p_start:p_end, ..., :3].copy_(pinned_pair[p_slot][: p_end - p_start])
 
     if is_single_image:
         result = result.squeeze(0)

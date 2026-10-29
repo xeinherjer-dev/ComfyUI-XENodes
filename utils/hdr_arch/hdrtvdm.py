@@ -77,11 +77,23 @@ class PWConv_Cond(nn.Module):
 
     def forward(self, x: torch.Tensor, prior: torch.Tensor) -> torch.Tensor:
         cond = self.cond_net(prior)
-        scale1 = self.cond_scale1(cond).view(-1, self.nf, 1, 1)
-        scale2 = self.cond_scale2(cond).view(-1, self.nf * 2, 1, 1)
-        scale3 = self.cond_scale3(cond).view(-1, self.nf * 2, 1, 1)
-        scale4 = self.cond_scale4(cond).view(-1, self.nf, 1, 1)
-        scale5 = self.cond_scale5(cond).view(-1, self.out_nc, 1, 1)
+        if x.shape[0] == 1:
+            convs = (self.conv1, self.conv2, self.conv3, self.conv4, self.conv5)
+            scales = (self.cond_scale1, self.cond_scale2, self.cond_scale3, self.cond_scale4, self.cond_scale5)
+            shifts = (self.cond_shift1, self.cond_shift2, self.cond_shift3, self.cond_shift4, self.cond_shift5)
+            out = x
+            for conv, sc_fn, sh_fn in zip(convs, scales, shifts):
+                s = (sc_fn(cond) + 1.0).view(-1)
+                w = conv.weight * s.view(-1, 1, 1, 1)
+                b_vec = conv.bias * s + sh_fn(cond).view(-1)
+                out = self.act(F.conv2d(out, w, b_vec))
+            return out
+
+        scale1 = (self.cond_scale1(cond) + 1.0).view(-1, self.nf, 1, 1)
+        scale2 = (self.cond_scale2(cond) + 1.0).view(-1, self.nf * 2, 1, 1)
+        scale3 = (self.cond_scale3(cond) + 1.0).view(-1, self.nf * 2, 1, 1)
+        scale4 = (self.cond_scale4(cond) + 1.0).view(-1, self.nf, 1, 1)
+        scale5 = (self.cond_scale5(cond) + 1.0).view(-1, self.out_nc, 1, 1)
 
         shift1 = self.cond_shift1(cond).view(-1, self.nf, 1, 1)
         shift2 = self.cond_shift2(cond).view(-1, self.nf * 2, 1, 1)
@@ -90,15 +102,15 @@ class PWConv_Cond(nn.Module):
         shift5 = self.cond_shift5(cond).view(-1, self.out_nc, 1, 1)
 
         out = self.conv1(x)
-        out = self.act(out * scale1 + shift1 + out)
+        out = self.act(out.mul_(scale1).add_(shift1))
         out = self.conv2(out)
-        out = self.act(out * scale2 + shift2 + out)
+        out = self.act(out.mul_(scale2).add_(shift2))
         out = self.conv3(out)
-        out = self.act(out * scale3 + shift3 + out)
+        out = self.act(out.mul_(scale3).add_(shift3))
         out = self.conv4(out)
-        out = self.act(out * scale4 + shift4 + out)
+        out = self.act(out.mul_(scale4).add_(shift4))
         out = self.conv5(out)
-        out = self.act(out * scale5 + shift5 + out)
+        out = self.act(out.mul_(scale5).add_(shift5))
         return out
 
 
@@ -133,11 +145,15 @@ class RestormerLayerNorm(nn.Module):
             self.body = WithBias_LayerNorm(dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h, w = x.shape[-2:]
-        # b c h w -> b (h w) c -> norm -> b c h w
-        out = x.permute(0, 2, 3, 1).flatten(1, 2)
-        out = self.body(out)
-        return out.view(x.shape[0], h, w, -1).permute(0, 3, 1, 2)
+        # Compute channel-wise normalization directly on (B, C, H, W) in a single pass
+        # without expensive permute(0, 2, 3, 1).flatten(1, 2) full-frame memory copies.
+        w = self.body.weight.view(1, -1, 1, 1)
+        if hasattr(self.body, "bias"):
+            var, mu = torch.var_mean(x, dim=1, keepdim=True, correction=0)
+            b = self.body.bias.view(1, -1, 1, 1)
+            return (x - mu) * torch.rsqrt(var + 1e-5) * w + b
+        var = x.var(dim=1, keepdim=True, correction=0)
+        return x * torch.rsqrt(var + 1e-5) * w
 
 
 class RestormerFeedForward(nn.Module):
@@ -169,24 +185,33 @@ class RestormerAttention(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         b, c, h, w = x.shape
+        n = h * w
         qkv = self.qkv_dwconv(self.qkv(x))
         q, k, v = qkv.chunk(3, dim=1)
 
         head = self.num_heads
         head_c = c // head
 
-        q = q.view(b, head, head_c, h * w)
-        k = k.view(b, head, head_c, h * w)
-        v = v.view(b, head, head_c, h * w)
+        q = q.view(b, head, head_c, n)
+        k = k.view(b, head, head_c, n)
+        v = v.view(b, head, head_c, n)
 
-        q = F.normalize(q, dim=-1)
-        k = F.normalize(k, dim=-1)
+        # Compute L2 norms directly on contiguous (b, head, head_c, n) without allocating normalized copies of q and k
+        q_norm = torch.linalg.vector_norm(q, dim=-1, keepdim=True)
+        k_norm = torch.linalg.vector_norm(k, dim=-1, keepdim=True)
 
-        attn = (q @ k.transpose(-2, -1)) * self.temperature
+        if n >= 16384 and b * head < 16:
+            # Split-K along spatial height h so all GPU SMs participate in the inner-product reduction
+            qs = q.view(b * head, head_c, h, w).permute(0, 2, 1, 3)
+            ks = k.view(b * head, head_c, h, w).permute(0, 2, 3, 1)
+            raw_qk = torch.matmul(qs, ks).sum(dim=1).view(b, head, head_c, head_c)
+        else:
+            raw_qk = q @ k.transpose(-2, -1)
+
+        attn = (raw_qk / (q_norm * k_norm.transpose(-2, -1)).clamp(min=1e-12)) * self.temperature
         attn = attn.softmax(dim=-1)
 
-        out = attn @ v
-        out = out.view(b, head * head_c, h, w)
+        out = (attn @ v).view(b, head * head_c, h, w)
         return self.project_out(out)
 
 
@@ -355,15 +380,16 @@ class TriSegNet(nn.Module):
             x = F.pad(x, (0, pad_w, 0, pad_h), mode="replicate")
 
         prior = self.prior_downscale(x)
-        bright_part = x * self.bright_intensity(x)
-        dark_part = x * self.dark_intensity(x)
-        mid_part = x
+        # Compute BT.2020 luminance once and broadcast (B, 1, H, W) without 3-channel .repeat(1, 3, 1, 1) allocation
+        lum = 0.2627 * x[:, 0:1] + 0.6780 * x[:, 1:2] + 0.0593 * x[:, 2:3]
+        bright_part = x * torch.clamp(lum * (1.0 / self.bright_intensity.t_b), min=0.0, max=1.0)
+        dark_part = x * torch.clamp((lum - 1.0) * (1.0 / (self.dark_intensity.t_d - 1.0)), min=0.0, max=1.0)
 
+        mid_out = self.mid_branch(x, prior)
         bright_out = self.bright_branch(bright_part)
         dark_out = self.dark_branch(dark_part)
-        mid_out = self.mid_branch(mid_part, prior)
 
-        out = mid_out + bright_out + dark_out
+        out = mid_out.add_(bright_out).add_(dark_out)
         if pad_h > 0 or pad_w > 0:
             out = out[..., :h, :w]
         return out
