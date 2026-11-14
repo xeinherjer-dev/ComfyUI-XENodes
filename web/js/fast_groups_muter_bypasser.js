@@ -308,17 +308,31 @@ function createRow(row, showNav, node) {
             navBtn.style.color = "#a0a0a0";
         });
 
-        // Lucide-like Chevron Right SVG
-        navBtn.innerHTML = `
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="pointer-events: none; display: block;">
-                <polyline points="9 18 15 12 9 6"></polyline>
-            </svg>
-        `;
+        // Lucide-like Chevron Right SVG built safely without innerHTML
+        const svgNS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(svgNS, "svg");
+        svg.setAttribute("width", "12");
+        svg.setAttribute("height", "12");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("fill", "none");
+        svg.setAttribute("stroke", "currentColor");
+        svg.setAttribute("stroke-width", "2.5");
+        svg.setAttribute("stroke-linecap", "round");
+        svg.setAttribute("stroke-linejoin", "round");
+        svg.style.pointerEvents = "none";
+        svg.style.display = "block";
+        const polyline = document.createElementNS(svgNS, "polyline");
+        polyline.setAttribute("points", "9 18 15 12 9 6");
+        svg.appendChild(polyline);
+        navBtn.appendChild(svg);
 
         navBtn.addEventListener("click", (e) => {
             e.stopPropagation();
             const canvas = app.canvas;
-            if (!canvas) return;
+            if (!canvas || !row.group) return;
+            if (row.group.graph && canvas.graph !== row.group.graph && typeof canvas.setGraph === "function") {
+                canvas.setGraph(row.group.graph);
+            }
             canvas.centerOnNode?.(row.group);
             const scale = canvas.ds?.scale ?? 1;
             const gw = row.group.size?.[0] ?? row.group._size?.[0] ?? 200;
@@ -377,6 +391,7 @@ app.registerExtension({
 
             // ---- Rebuild logic ----
             this._rebuildGroups = () => {
+                if (this.flags?.collapsed) return;
                 const groups    = getAllGroups(this);
                 const matchStr  = (this.properties?.matchTitle ?? "").trim();
                 let   titleRe   = null;
@@ -449,7 +464,13 @@ app.registerExtension({
                     }
                 } else {
                     // Complete rebuild if the count or order of groups has changed
-                    container.innerHTML = "";
+                    if (typeof container.replaceChildren === "function") {
+                        container.replaceChildren();
+                    } else {
+                        while (container.firstChild) {
+                            container.removeChild(container.firstChild);
+                        }
+                    }
                     if (filtered.length === 0) {
                         container.appendChild(emptyMsg);
                     } else {

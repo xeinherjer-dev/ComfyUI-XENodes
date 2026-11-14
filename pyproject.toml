@@ -21,7 +21,7 @@ license = { file = "LICENSE" }
 #     "Environment :: GPU :: Apple Metal",    # Apple Metal support
 # ]
 
-dependencies = ["imageio-ffmpeg"]
+dependencies = ["imageio-ffmpeg", "av", "numpy", "Pillow"]
 
 [project.urls]
 Repository = "https://github.com/xeinherjer-dev/ComfyUI-XENodes"

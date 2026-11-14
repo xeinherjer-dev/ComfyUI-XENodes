@@ -366,6 +366,7 @@ class TriSegNet(nn.Module):
         self.mid_branch = PWConv_Cond(in_nc=in_nc, out_nc=out_nc, nf=nf, act_type=act_type)
         self.bright_branch = Restormer(inp_channels=3, out_channels=3, dim=nf // 2, ffn_expansion_factor=2.0)
         self.dark_branch = Restormer(inp_channels=3, out_channels=3, dim=nf // 2, ffn_expansion_factor=2.0)
+        # NOTE: Keep `t_d = 0.7611` as shipped to preserve weight-compatible thresholding behavior with pretrained checkpoints.
         self.t_b = 0.7611
         self.t_d = 0.7611
         self.bright_intensity = BrightIntensityLum(t_b=self.t_b)

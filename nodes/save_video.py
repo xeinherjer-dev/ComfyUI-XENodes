@@ -20,7 +20,18 @@ import folder_paths
 from ..utils.audio import expand_audio_waveform
 from ..utils.video import generate_frame_indices
 from ..utils.metadata import get_saved_metadata
-from ..utils.color import pq_to_linear
+from ..utils.color import pq_to_linear, get_compute_device as _get_compute_device
+
+_CRF_DEFAULTS = {
+    'h264': 23.0, 'h265': 28.0, 'av1': 36.0,
+    'h264_nvenc': 30.0, 'hevc_nvenc': 35.0, 'av1_nvenc': 36.0,
+}
+
+_VCODEC_TO_CANONICAL = {
+    'h264': 'h264', 'h264_nvenc': 'h264',
+    'h265': 'hevc', 'hevc_nvenc': 'hevc',
+    'av1': 'av1', 'av1_nvenc': 'av1',
+}
 
 _MAX_RAW_FRAME_CHUNK_BYTES = 64 * 1024 * 1024
 _MAX_LOOP_CACHE_BYTES = 256 * 1024 * 1024
@@ -57,7 +68,7 @@ def _compute_hdr10_light_levels(images: torch.Tensor, frame_indices: list[int]) 
     if not unique_indices:
         return 0, 0
 
-    compute_device = torch.device("cuda") if torch.cuda.is_available() else images.device
+    compute_device = _get_compute_device(images.device)
     cll_tensors: list[torch.Tensor] = []
     fall_tensors: list[torch.Tensor] = []
 
@@ -88,6 +99,8 @@ def _can_passthrough_video(
     target_audio_bitrate: str | None,
     loop_count: int,
     pingpong: bool,
+    target_video_codec: str | None = None,
+    target_crf: float | None = None,
 ) -> tuple[bool, str | None, str | None, bool, bool]:
     """
     Checks if the video input can be saved without re-encoding the video track.
@@ -140,6 +153,17 @@ def _can_passthrough_video(
                     return False, None, None, False, False
             else:
                 return False, None, None, False, False
+
+            # Check requested video codec and CRF so explicit user encoding choices aren't bypassed
+            if target_video_codec is not None:
+                expected_vcodec = _VCODEC_TO_CANONICAL.get(target_video_codec)
+                if expected_vcodec is not None and v_codec != expected_vcodec:
+                    return False, None, None, False, False
+
+            if target_crf is not None:
+                default_crf = _CRF_DEFAULTS.get(target_video_codec) if target_video_codec else None
+                if default_crf is None or abs(float(target_crf) - default_crf) > 1e-6:
+                    return False, None, None, False, False
 
             # Check audio streams
             has_audio = len(container.streams.audio) > 0
@@ -229,7 +253,7 @@ def _iter_frame_byte_chunks(
     Yields zero-copy memoryviews of raw RGB24 or RGB48LE frame chunks.
     Uses slice views when indices are contiguous and offloads float->uint conversion to GPU when available.
     """
-    compute_device = torch.device("cuda") if torch.cuda.is_available() else images.device
+    compute_device = _get_compute_device(images.device)
     bytes_per_frame = images.shape[1] * images.shape[2] * 3 * (2 if is_10bit else 1)
     max_frames_cap = 16 if is_10bit else 32
     frames_per_chunk = max(1, min(max_frames_cap, max_chunk_bytes // max(1, bytes_per_frame)))
@@ -276,7 +300,7 @@ def _iter_yuv420_byte_chunks(
     (yuv420p, yuv420p10le, or p010le) on GPU/CPU.
     Halves pipe transfer bandwidth vs RGB24/RGB48LE and eliminates FFmpeg's CPU swscale bottleneck.
     """
-    compute_device = torch.device("cuda") if torch.cuda.is_available() else images.device
+    compute_device = _get_compute_device(images.device)
     H, W = int(images.shape[1]), int(images.shape[2])
     is_10bit = pix_fmt in ("yuv420p10le", "p010le")
     bytes_per_frame = (H * W * 3) if is_10bit else ((H * W * 3) // 2)
@@ -610,7 +634,8 @@ class SaveVideo(io.ComfyNode):
 
         # Check if the input video can be reused without re-encoding (auto passthrough)
         can_passthrough, source_file, source_vcodec, has_audio, can_audio_copy = _can_passthrough_video(
-            video, format, audio_codec, audio_bitrate, loop_count, pingpong
+            video, format, audio_codec, audio_bitrate, loop_count, pingpong,
+            target_video_codec=codec, target_crf=crf,
         )
 
         if can_passthrough and source_file:
@@ -693,11 +718,7 @@ class SaveVideo(io.ComfyNode):
             codec = 'h264'
 
         if crf is None:
-            crf_defaults = {
-                'h264': 23.0, 'h265': 28.0, 'av1': 36.0,
-                'h264_nvenc': 30.0, 'hevc_nvenc': 35.0, 'av1_nvenc': 36.0,
-            }
-            crf = crf_defaults.get(codec, 23.0)
+            crf = _CRF_DEFAULTS.get(codec, 23.0)
 
         # HEVC/AV1 always use 10-bit (also for SDR) to minimise banding, matching libx265/libsvtav1.
         # H.264 stays 8-bit for SDR because 10-bit H.264 has poor hardware decoder support.

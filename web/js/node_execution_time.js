@@ -197,6 +197,9 @@ function addTimeBadgeToNode(node) {
     // Prevent duplicate registration of the time badge
     const hasTimeBadge = node.badges.some(b => b && b.isXENodesTimeBadge);
     if (!hasTimeBadge) {
+        let cachedBadge = null;
+        let cachedText = null;
+
         const timeBadgeGetter = () => {
             // Try to retrieve standard LGraphBadge class (might be global or on LiteGraph)
             const BadgeClass = globalThis.LGraphBadge || (globalThis.LiteGraph && globalThis.LiteGraph.LGraphBadge);
@@ -212,7 +215,11 @@ function addTimeBadgeToNode(node) {
                 ? (duration < 1 ? `${Math.round(duration * 1000)}ms` : `${duration.toFixed(2)}s`)
                 : "";
 
-            const badge = new BadgeClass({
+            if (cachedBadge && cachedText === text) {
+                return cachedBadge;
+            }
+
+            cachedBadge = new BadgeClass({
                 text: text,
                 fgColor: "rgba(148, 163, 184, 0.85)", // Subtle Slate 400 gray for non-intrusive metadata display
                 bgColor: "rgba(15, 23, 42, 0.85)",
@@ -221,10 +228,11 @@ function addTimeBadgeToNode(node) {
                 height: 20,
                 cornerRadius: 5
             });
+            cachedText = text;
             
             // Identify this badge specifically as our time badge
-            badge.isXENodesTimeBadge = true;
-            return badge;
+            cachedBadge.isXENodesTimeBadge = true;
+            return cachedBadge;
         };
         
         // Mark the getter function itself as well
@@ -256,12 +264,18 @@ app.registerExtension({
 
         console.log("[XENodes.NodeExecutionTime] Extension registered successfully. Hooking up API events.");
 
+        const resetTimerState = () => {
+            lastNodeId = null;
+            startTime = 0;
+        };
+
         // Clear execution durations recursively when a new run starts
         api.addEventListener("execution_start", () => {
             const clearRecursive = (graph) => {
                 if (!graph) return;
                 (graph._nodes || []).forEach(node => {
                     delete node.executionDuration;
+                    delete node._xeMeasured;
                     if (node.subgraph) {
                         clearRecursive(node.subgraph);
                     } else if (typeof node.getInnerNodes === "function") {
@@ -269,7 +283,10 @@ app.registerExtension({
                             const innerNodes = getInnerNodesSafely(node);
                             if (Array.isArray(innerNodes)) {
                                 innerNodes.forEach(itemNode => {
-                                    if (itemNode) delete itemNode.executionDuration;
+                                    if (itemNode) {
+                                        delete itemNode.executionDuration;
+                                        delete itemNode._xeMeasured;
+                                    }
                                 });
                             }
                         } catch (e) {}
@@ -277,17 +294,18 @@ app.registerExtension({
                 });
             };
             clearRecursive(app.graph);
-            lastNodeId = null;
-            startTime = 0;
+            resetTimerState();
         });
+
+        api.addEventListener("execution_error", resetTimerState);
+        api.addEventListener("execution_interrupted", resetTimerState);
 
         // Track executed node durations
         api.addEventListener("executing", (event) => {
             // Guard: Skip measurement if the feature is disabled in settings
             const isEnabled = app.ui.settings.getSettingValue("XENodes.NodeExecutionTime.Enabled") !== false;
             if (!isEnabled) {
-                lastNodeId = null;
-                startTime = 0;
+                resetTimerState();
                 return;
             }
 
@@ -310,11 +328,12 @@ app.registerExtension({
                 
                 const prevNode = findNodeRecursive(app.graph, lastNodeId);
                 if (prevNode) {
-                    // Guard: If another extension (like comfyui-easy-use) has already measured 
-                    // and set a duration, skip our manual calculation to prevent double counting.
-                    if (!prevNode.executionDuration) {
+                    // Guard: If another extension (like comfyui-easy-use) has already measured
+                    // and set a duration we did not create, skip our manual calculation to prevent double counting.
+                    if (prevNode._xeMeasured || !prevNode.executionDuration) {
                         const oldDuration = prevNode.executionDuration || 0;
                         prevNode.executionDuration = oldDuration + elapsed;
+                        prevNode._xeMeasured = true;
                         
                         // Trigger canvas redraw to update the dynamic badges real-time
                         prevNode.setDirtyCanvas(true, true);

@@ -174,6 +174,9 @@ class TestSDRtoHDRNodes(unittest.TestCase):
         lin_hdr, _, _ = apply_inverse_tone_mapping(frames, 1000.0, 0.5, 1.5)
         ref_hdr = encode_linear_bt2020(convert_bt709_to_bt2020(lin_hdr), "HDR PQ", 1000.0)
 
+        # Warm up CUDA allocator after previous test's mm.soft_empty_cache()
+        _ = sdr_to_hdr_tensor(frames[:1], peak_nits=1000.0, itm_knee=0.5, itm_exponent=1.5, color_space="HDR PQ", chunk_size=1)
+
         t0 = time.perf_counter()
         out_hdr = sdr_to_hdr_tensor(frames, peak_nits=1000.0, itm_knee=0.5, itm_exponent=1.5, color_space="HDR PQ", chunk_size=4)
         elapsed = time.perf_counter() - t0

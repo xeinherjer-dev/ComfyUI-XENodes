@@ -19,38 +19,6 @@ function injectContextMenuStyles() {
     document.head.appendChild(style);
 }
 
-const DATE_REGEX = /(\d{4}[-_/]\d{2}[-_/]\d{2})/;
-
-function sortFolderList(folders, sort_by = "newest_first") {
-    if (!Array.isArray(folders)) return [];
-    const copy = [...folders];
-    if (sort_by === "oldest_first") {
-        copy.sort((a, b) => {
-            const ma = DATE_REGEX.exec(a);
-            const mb = DATE_REGEX.exec(b);
-            const da = ma ? ma[1].replace(/[/_]/g, "-") : null;
-            const db = mb ? mb[1].replace(/[/_]/g, "-") : null;
-            if (da && db) return da.localeCompare(db) || a.localeCompare(b);
-            if (da) return -1;
-            if (db) return 1;
-            return a.localeCompare(b);
-        });
-    } else {
-        // newest_first
-        copy.sort((a, b) => {
-            const ma = DATE_REGEX.exec(a);
-            const mb = DATE_REGEX.exec(b);
-            const da = ma ? ma[1].replace(/[/_]/g, "-") : null;
-            const db = mb ? mb[1].replace(/[/_]/g, "-") : null;
-            if (da && db) return db.localeCompare(da) || a.localeCompare(b);
-            if (da) return -1;
-            if (db) return 1;
-            return a.localeCompare(b);
-        });
-    }
-    return copy;
-}
-
 let isContextMenuAutoScrollSetup = false;
 function setupContextMenuAutoScroll() {
     if (isContextMenuAutoScrollSetup || typeof document === "undefined" || !document.body) return;
@@ -212,24 +180,32 @@ app.registerExtension({
         function setupPreviewHooks(node) {
             // Monitor node.mode changes to restore preview when un-muted/un-bypassed
             if (!node._xe_mode_hooked) {
-                node._xe_mode_hooked = true;
-                let _mode = node.mode;
-                Object.defineProperty(node, "mode", {
-                    get() {
-                        return _mode;
-                    },
-                    set(val) {
-                        const oldMode = _mode;
-                        _mode = val;
-                        if ((oldMode === 2 || oldMode === 4) && val === 0) {
-                            requestAnimationFrame(() => {
-                                fetchAndShowPreview(node);
-                            });
-                        }
-                    },
-                    configurable: true,
-                    enumerable: true,
-                });
+                const ownDesc = Object.getOwnPropertyDescriptor(node, "mode");
+                if (!ownDesc || ownDesc.configurable) {
+                    node._xe_mode_hooked = true;
+                    const existingDesc = ownDesc || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node) || {}, "mode");
+                    let _mode = node.mode;
+                    Object.defineProperty(node, "mode", {
+                        get() {
+                            return existingDesc?.get ? existingDesc.get.call(this) : _mode;
+                        },
+                        set(val) {
+                            const oldMode = existingDesc?.get ? existingDesc.get.call(this) : _mode;
+                            if (existingDesc?.set) {
+                                existingDesc.set.call(this, val);
+                            } else {
+                                _mode = val;
+                            }
+                            if ((oldMode === 2 || oldMode === 4) && val === 0) {
+                                requestAnimationFrame(() => {
+                                    fetchAndShowPreview(node);
+                                });
+                            }
+                        },
+                        configurable: true,
+                        enumerable: true,
+                    });
+                }
             }
 
             if (!node._xe_update_preview) {

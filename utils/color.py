@@ -12,6 +12,26 @@ _BT709_LUMA_WEIGHTS = [0.2126, 0.7152, 0.0722]
 _BT2020_LUMA_WEIGHTS = [0.2627, 0.6780, 0.0593]
 
 _PINNED_STAGE_CACHE: dict[tuple[tuple[int, ...], torch.dtype], tuple[torch.Tensor, torch.Tensor]] = {}
+_MAX_PINNED_CACHE_BYTES = 128 * 1024 * 1024
+_COMFY_MM = None
+
+
+def get_compute_device(fallback_device: torch.device) -> torch.device:
+    """
+    Returns ComfyUI's active compute device (respecting --cpu, CUDA, MPS, XPU),
+    falling back to CUDA if available or `fallback_device`.
+    """
+    global _COMFY_MM
+    try:
+        if _COMFY_MM is None:
+            import comfy.model_management as model_management
+            _COMFY_MM = model_management
+        device = _COMFY_MM.get_torch_device()
+        if isinstance(device, torch.device):
+            return device
+    except Exception:
+        pass
+    return torch.device("cuda") if torch.cuda.is_available() else fallback_device
 
 
 def get_pinned_stage_pair(shape: tuple[int, ...], dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
@@ -19,7 +39,15 @@ def get_pinned_stage_pair(shape: tuple[int, ...], dtype: torch.dtype) -> tuple[t
     Returns a cached pair of pinned CPU staging buffers of at least `shape[0]` frames
     with matching spatial/channel dimensions `(shape[1], shape[2], shape[3])` and `dtype`.
     Avoids repeated 400+ ms `cudaHostAlloc` overhead across video conversions.
+    Buffers larger than `_MAX_PINNED_CACHE_BYTES` bypass caching to avoid retaining huge RAM allocations.
     """
+    pair_bytes = 2 * math.prod(shape) * torch.empty((), dtype=dtype).element_size()
+    if pair_bytes > _MAX_PINNED_CACHE_BYTES:
+        return (
+            torch.empty(shape, dtype=dtype, pin_memory=True),
+            torch.empty(shape, dtype=dtype, pin_memory=True),
+        )
+
     key = (shape[1:], dtype)
     pair = _PINNED_STAGE_CACHE.get(key)
     if pair is None or pair[0].shape[0] < shape[0]:
@@ -342,7 +370,7 @@ def sdr_to_hdr_tensor(
     has_alpha = images.shape[-1] == 4
     total_frames = images.shape[0]
     out_device = images.device
-    compute_device = torch.device("cuda") if torch.cuda.is_available() else out_device
+    compute_device = get_compute_device(out_device)
     is_hlg = is_hlg_color_space(color_space)
 
     # Pre-allocate output tensor on the original device to avoid double-memory peak and torch.cat copy

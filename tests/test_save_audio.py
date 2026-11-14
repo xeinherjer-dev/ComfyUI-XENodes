@@ -29,6 +29,12 @@ class TestSaveAudio(unittest.TestCase):
                     os.remove(path)
                 except Exception:
                     pass
+        test_subdir = os.path.join(folder_paths.get_output_directory(), "tests")
+        if os.path.isdir(test_subdir) and not os.listdir(test_subdir):
+            try:
+                os.rmdir(test_subdir)
+            except Exception:
+                pass
 
     def test_define_schema(self):
         schema = SaveAudio.define_schema()

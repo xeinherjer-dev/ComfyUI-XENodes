@@ -78,6 +78,92 @@ class TestSaveVideo(unittest.TestCase):
         )
         self.assertFalse(can_pass)
 
+    def test_can_passthrough_video_codec_and_crf_guard(self):
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as tmp:
+            class VideoFromFile:
+                def get_active_trim_window(self):
+                    return (0, 0)
+                def get_stream_source(self):
+                    return tmp.name
+
+            dummy_video = VideoFromFile()
+
+            class DummyCodec:
+                canonical_name = "h264"
+
+            class DummyStream:
+                codec = DummyCodec()
+
+            class DummyContainer:
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    return False
+                class streams:
+                    video = [DummyStream()]
+                    audio = []
+
+            with patch("custom_nodes.xenodes.nodes.save_video.av.open", return_value=DummyContainer()):
+                # Same codec (h264) & default CRF (23.0) allows passthrough
+                can_pass, _, vcodec, _, _ = _can_passthrough_video(
+                    video=dummy_video,
+                    target_format="mp4",
+                    target_audio_codec="aac",
+                    target_audio_bitrate=None,
+                    loop_count=0,
+                    pingpong=False,
+                    target_video_codec="h264",
+                    target_crf=23.0,
+                )
+                self.assertTrue(can_pass)
+                self.assertEqual(vcodec, "h264")
+
+                # Different video codec rejects passthrough
+                can_pass_diff_codec, _, _, _, _ = _can_passthrough_video(
+                    video=dummy_video,
+                    target_format="mp4",
+                    target_audio_codec="aac",
+                    target_audio_bitrate=None,
+                    loop_count=0,
+                    pingpong=False,
+                    target_video_codec="h265",
+                    target_crf=28.0,
+                )
+                self.assertFalse(can_pass_diff_codec)
+
+                # Non-default CRF rejects passthrough
+                can_pass_custom_crf, _, _, _, _ = _can_passthrough_video(
+                    video=dummy_video,
+                    target_format="mp4",
+                    target_audio_codec="aac",
+                    target_audio_bitrate=None,
+                    loop_count=0,
+                    pingpong=False,
+                    target_video_codec="h264",
+                    target_crf=18.0,
+                )
+                self.assertFalse(can_pass_custom_crf)
+
+    def test_expand_audio_waveform_dimensions(self):
+        from custom_nodes.xenodes.utils.audio import expand_audio_waveform
+
+        class DummyComponents:
+            def __init__(self, audio):
+                self.audio = audio
+
+        # Audio=None falls back to safe sample_rate=44100 (not 1)
+        wf_none, sr_none, _ = expand_audio_waveform(DummyComponents(None), fps=24.0, n_orig=10, total_plays=2)
+        self.assertIsNone(wf_none)
+        self.assertEqual(sr_none, 44100)
+
+        # Support 3D (B, C, S), 2D (C, S), and 1D (S,) waveforms
+        for shape in [(1, 2, 4410), (2, 4410), (4410,)]:
+            comp = DummyComponents({"sample_rate": 44100, "waveform": torch.zeros(shape)})
+            wf, sr, _ = expand_audio_waveform(comp, fps=30.0, n_orig=3, total_plays=2)
+            self.assertIsNotNone(wf)
+            self.assertEqual(wf.ndim, 2)
+            self.assertEqual(sr, 44100)
+
     def test_iter_raw_frame_byte_chunks(self):
         # 4 frames of 16x16 image
         frames = conftest_base.create_dummy_image(batch=4, height=16, width=16)

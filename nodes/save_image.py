@@ -17,6 +17,7 @@ from comfy_api.latest._ui import ImageSaveHelper, SavedImages, SavedResult, Fold
 from comfy.cli_args import args
 import folder_paths
 from ..utils.metadata import get_saved_metadata
+from ..utils.color import get_compute_device as _get_compute_device
 
 
 @functools.lru_cache(maxsize=1)
@@ -114,7 +115,7 @@ def _rgb_batch_to_full_range_yuv420(
     Directly converts RGB float32 [0, 1] batch (B, H, W, C) to Full-Range (PC range)
     ITU-R BT.709 or BT.2020 YUV 4:2:0 (yuv420p or yuv420p10le) on GPU/CPU.
     """
-    compute_device = torch.device("cuda") if torch.cuda.is_available() else images.device
+    compute_device = _get_compute_device(images.device)
     if is_bt2020:
         kr, kg, kb = 0.2627, 0.6780, 0.0593
     else:
@@ -249,8 +250,8 @@ def _save_avif_image(
 ):
     height, width = int(image_tensor.shape[0]), int(image_tensor.shape[1])
 
-    # Auto-detect color space from tensor metadata (set by SDR to HDR node) or fallback to HDR PQ
-    resolved_cs = getattr(image_tensor, "_color_space", getattr(parent_images, "_color_space", "HDR PQ"))
+    # Auto-detect color space from tensor metadata (set by SDR to HDR node) or fallback to sRGB
+    resolved_cs = getattr(image_tensor, "_color_space", getattr(parent_images, "_color_space", "sRGB"))
     cp_num, tc_num, mc_num, primaries, trc, csp, matrix, out_pix_fmt, hdr_flag, is_bt2020 = _resolve_avif_color_config(resolved_cs)
 
     # lp=4 caps SVT-AV1 picture control set pool (PPCS 107 -> 41) for 1-frame AVIF while keeping bitstream 100% identical
@@ -400,7 +401,7 @@ class SaveImage(io.ComfyNode):
 
         if format_str == "avif":
             saved_metadata = get_saved_metadata(cls)
-            resolved_cs = getattr(images, "_color_space", getattr(images[0], "_color_space", "HDR PQ"))
+            resolved_cs = getattr(images, "_color_space", getattr(images[0], "_color_space", "sRGB"))
             cp_num, tc_num, mc_num, primaries, trc, csp, matrix, out_pix_fmt, hdr_flag, is_bt2020 = _resolve_avif_color_config(resolved_cs)
             svtav1_params = (
                 f"lp=4:lookahead=0:tune=0:enable-hdr={hdr_flag}:"

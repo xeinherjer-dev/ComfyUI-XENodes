@@ -4,6 +4,7 @@ const PIPE_IN_NODE = "XENodes.MultiPipeIn";
 const PIPE_OUT_NODE = "XENodes.MultiPipeOut";
 const MANAGED_INPUT_PREFIX = "slots.slot";
 const CACHE_KEY = "_pipeSlotCache";
+const MAX_SLOTS = 50;
 
 // ─── Utility Functions ───────────────────────────────────────────────
 
@@ -68,6 +69,76 @@ const PENETRATION_HANDLERS = {
 
 // ─── Core Tracing Logic ──────────────────────────────────────────────
 
+const findLinkGlobal = (g, lId) => {
+    if (!g) return null;
+    // Support both bracket access (legacy) and Map.get (Nodes 2.0)
+    const directLink = g.links?.[lId] ?? g.links?.get?.(lId);
+    if (directLink) return directLink;
+    const nodes = g._nodes || g.nodes || [];
+    for (const n of nodes) {
+        const inner = n.inner_graph || n.subgraph || n.getInnerGraph?.();
+        if (inner) {
+            const found = findLinkGlobal(inner, lId);
+            if (found) return found;
+        }
+    }
+    return null;
+};
+
+const findNodeGlobal = (g, nId) => {
+    if (!g) return null;
+    const n = g.getNodeById(nId);
+    if (n) return n;
+    const nodes = g._nodes || g.nodes || [];
+    for (const nn of nodes) {
+        const inner = nn.inner_graph || nn.subgraph || nn.getInnerGraph?.();
+        if (inner) {
+            const found = findNodeGlobal(inner, nId);
+            if (found) return found;
+        }
+    }
+    return null;
+};
+
+const findParentNode = (rootG, innerG) => {
+    if (!rootG) return null;
+    const nodes = rootG._nodes || rootG.nodes || [];
+    if (!nodes.length) return null;
+    for (const n of nodes) {
+        const inner = n.inner_graph || n.subgraph || n.getInnerGraph?.();
+        if (inner === innerG) return n;
+        if (inner) {
+            const found = findParentNode(inner, innerG);
+            if (found) return found;
+        }
+    }
+    return null;
+};
+
+// Support both Object.keys (legacy) and Map iteration (Nodes 2.0)
+const iterateLinks = (links) => {
+    if (!links) return [];
+    if (links instanceof Map || typeof links.entries === "function") {
+        return [...links.values()];
+    }
+    return Object.keys(links).map(k => links[k]).filter(Boolean);
+};
+
+const findPipeInRecursive = (g) => {
+    const gNodes = g?._nodes || g?.nodes || [];
+    if (!gNodes.length) return null;
+    const direct = gNodes.find(n => n.type === PIPE_IN_NODE);
+    if (direct) return { node: direct, graph: g };
+    for (const n of gNodes) {
+        const inner = n.inner_graph || n.subgraph || n.getInnerGraph?.();
+        if (inner) {
+            const found = findPipeInRecursive(inner);
+            if (found) return found;
+        }
+    }
+    return null;
+};
+
 // Deep link tracing function (Penetrates Subgraph, Reroute, and Switches)
 const traceTrueOrigin = (contextNode, graph, linkId) => {
     if (linkId == null) {
@@ -84,22 +155,6 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
         }
         seen.add(seenKey);
 
-        const findLinkGlobal = (g, lId) => {
-            if (!g) return null;
-            // Support both bracket access (legacy) and Map.get (Nodes 2.0)
-            const directLink = g.links?.[lId] ?? g.links?.get?.(lId);
-            if (directLink) return directLink;
-            const nodes = g._nodes || g.nodes || [];
-            for (const n of nodes) {
-                const inner = n.inner_graph || n.subgraph || n.getInnerGraph?.();
-                if (inner) {
-                    const found = findLinkGlobal(inner, lId);
-                    if (found) return found;
-                }
-            }
-            return null;
-        };
-
         const link = (currentGraph.links?.[currentLinkId] ?? currentGraph.links?.get?.(currentLinkId)) || (app.graph.links?.[currentLinkId] ?? app.graph.links?.get?.(currentLinkId)) || findLinkGlobal(app.graph, currentLinkId);
         if (!link) {
             break;
@@ -109,20 +164,6 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
         
         // Subgraph Penetration (Inward)
         if (!originNode && link.origin_id > 0) {
-            const findNodeGlobal = (g, nId) => {
-                if (!g) return null;
-                const n = g.getNodeById(nId);
-                if (n) return n;
-                const nodes = g._nodes || g.nodes || [];
-                for (const nn of nodes) {
-                    const inner = nn.inner_graph || nn.subgraph || nn.getInnerGraph?.();
-                    if (inner) {
-                        const found = findNodeGlobal(inner, nId);
-                        if (found) return found;
-                    }
-                }
-                return null;
-            };
             originNode = app.graph.getNodeById(link.origin_id) || findNodeGlobal(app.graph, link.origin_id);
         }
         
@@ -135,20 +176,6 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
         // Subgraph Penetration (Upward)
         if (!originNode) {
             if (link.origin_id != null && link.origin_id < 0) {
-                const findParentNode = (rootG, innerG) => {
-                    if (!rootG) return null;
-                    const nodes = rootG._nodes || rootG.nodes || [];
-                    if (!nodes.length) return null;
-                    for (const n of nodes) {
-                        const inner = n.inner_graph || n.subgraph || n.getInnerGraph?.();
-                        if (inner === innerG) return n;
-                        if (inner) {
-                            const found = findParentNode(inner, innerG);
-                            if (found) return found;
-                        }
-                    }
-                    return null;
-                };
                 const parentNode = findParentNode(app.graph, currentGraph);
                 if (parentNode) {
                     const parentInput = parentNode.inputs?.[link.origin_slot];
@@ -199,13 +226,6 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
                     // The target_slot corresponds to the index of the subgraph's output pin.
                     let virtualOutputLink = null;
                     if (innerGraph.links) {
-                        // Support both Object.keys (legacy) and Map iteration (Nodes 2.0)
-                        const iterateLinks = (links) => {
-                            if (links instanceof Map || typeof links.entries === 'function') {
-                                return [...links.values()];
-                            }
-                            return Object.keys(links).map(k => links[k]).filter(Boolean);
-                        };
                         const allLinks = iterateLinks(innerGraph.links);
                         for (let l of allLinks) {
                             if (l && l.target_slot === originSlot && l.target_id < 0) {
@@ -253,24 +273,12 @@ const traceTrueOrigin = (contextNode, graph, linkId) => {
                     }
                 }
                 
-                // Deep recursive find
-                const findPipeInRecursive = (g) => {
-                    const gNodes = g?._nodes || g?.nodes || [];
-                    if (!gNodes.length) return null;
-                    const direct = gNodes.find(n => n.type === PIPE_IN_NODE);
-                    if (direct) return { node: direct, graph: g };
-                    for (const n of gNodes) {
-                        const inner = n.inner_graph || n.subgraph || n.getInnerGraph?.();
-                        if (inner) {
-                            const found = findPipeInRecursive(inner);
-                            if (found) return found;
-                        }
+                // Deep recursive find only when the subgraph output slot itself carries a pipe type
+                if (outSlotDef.type === "XE_MULTI_PIPE") {
+                    const innerPipeInResult = findPipeInRecursive(innerGraph);
+                    if (innerPipeInResult) {
+                        return { node: innerPipeInResult.node, slot: 0, graph: innerPipeInResult.graph };
                     }
-                    return null;
-                };
-                const innerPipeInResult = findPipeInRecursive(innerGraph);
-                if (innerPipeInResult) {
-                    return { node: innerPipeInResult.node, slot: 0, graph: innerPipeInResult.graph };
                 }
             }
         }
@@ -304,9 +312,11 @@ const getConnectedInfo = (node, inputSlot, includeTitle = false) => {
 // Builds the complete calculated state of the pipe at the given node.
 const buildPipeState = (contextNode, includeTitle) => {
     const state = new Map(); // Map<slotIndex, { type, label }>
+    const visited = new Set();
     
     const traceAndMerge = (node) => {
-        if (!node) return;
+        if (!node || visited.has(node)) return;
+        visited.add(node);
         
         // 1. Trace parent pipe to inherit state first
         const pipeInput = (node.inputs || []).find(inp => inp.name === "pipe");
@@ -366,8 +376,8 @@ app.registerExtension({
                 const activeIndices = Array.from(pipeState.keys());
                 let targetMaxIdx = activeIndices.length > 0 ? Math.max(...activeIndices) : -1;
 
-                // Add missing inputs
-                for (let i = 0; i <= targetMaxIdx + 1; i++) {
+                // Add missing inputs up to MAX_SLOTS
+                for (let i = 0; i <= targetMaxIdx + 1 && i < MAX_SLOTS; i++) {
                     const name = formatSlotName(i);
                     if (!this.inputs.find(inp => inp.name === name)) {
                         this.addInput(name, "*");
@@ -423,9 +433,10 @@ app.registerExtension({
             this.onConnectionsChange = function () {
                 const r = originalOnConnectionsChange?.apply(this, arguments);
                 // Wait 10ms to ensure LiteGraph has fully resolved the new link internally
-                setTimeout(() => {
+                if (this._xePipeInTimer) clearTimeout(this._xePipeInTimer);
+                this._xePipeInTimer = setTimeout(() => {
+                    this._xePipeInTimer = null;
                     updateLabels();
-                    triggerVueUpdate(this, 1);
                 }, 10);
                 return r;
             };
@@ -578,9 +589,10 @@ app.registerExtension({
             this.onConnectionsChange = function () {
                 const r = originalOnConnectionsChange?.apply(this, arguments);
                 // Wait 10ms to ensure LiteGraph has fully resolved the new link internally
-                setTimeout(() => {
+                if (this._xePipeOutTimer) clearTimeout(this._xePipeOutTimer);
+                this._xePipeOutTimer = setTimeout(() => {
+                    this._xePipeOutTimer = null;
                     syncOutputs();
-                    triggerVueUpdate(this, 2);
                 }, 10);
                 return r;
             };

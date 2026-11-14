@@ -6,7 +6,7 @@ def expand_audio_waveform(components, fps: float, n_orig: int, total_plays: int)
     Expands an audio waveform to match the duration of a looping video.
     Returns: (waveform, audio_sample_rate, layout)
     """
-    audio_sample_rate = 1
+    audio_sample_rate = 44100
     waveform = None
     layout = 'stereo'
 
@@ -16,7 +16,12 @@ def expand_audio_waveform(components, fps: float, n_orig: int, total_plays: int)
             raw_waveform = components.audio['waveform']
             samples_per_frame = audio_sample_rate / fps
 
-            raw_waveform = raw_waveform[0]  # shape: (channels, samples)
+            if raw_waveform.ndim == 3:
+                raw_waveform = raw_waveform[0]  # shape: (channels, samples)
+            elif raw_waveform.ndim == 1:
+                raw_waveform = raw_waveform.unsqueeze(0)  # shape: (1, samples)
+            elif raw_waveform.ndim != 2:
+                raw_waveform = raw_waveform.reshape(-1, raw_waveform.shape[-1])
             n_orig_samples = math.ceil(samples_per_frame * n_orig)
             total_samples_needed = math.ceil(samples_per_frame * (n_orig * total_plays))
 

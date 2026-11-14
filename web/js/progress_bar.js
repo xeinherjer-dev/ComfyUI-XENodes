@@ -273,6 +273,74 @@ async function navigateAndFocusNode(targetGraph, targetNode) {
     if (typeof canvas.selectNode === "function") {
         canvas.selectNode(targetNode, false);
     }
+
+    // ~1.2s Pulse Glow Effect on the focused node so the user visually spots it immediately
+    if (targetNode && typeof requestAnimationFrame === "function") {
+        if (typeof targetNode._xePulseCleanup === "function") {
+            targetNode._xePulseCleanup();
+        }
+        const PULSE_DURATION_MS = 1200;
+        const startTime = performance.now();
+        const prevOnDrawForeground = targetNode.onDrawForeground;
+        let rafId = null;
+
+        const cleanup = () => {
+            if (rafId !== null && typeof cancelAnimationFrame === "function") {
+                cancelAnimationFrame(rafId);
+                rafId = null;
+            }
+            if (targetNode.onDrawForeground === glowDraw) {
+                targetNode.onDrawForeground = prevOnDrawForeground;
+            }
+            if (targetNode._xePulseCleanup === cleanup) {
+                delete targetNode._xePulseCleanup;
+            }
+            targetNode.setDirtyCanvas?.(true, false);
+        };
+
+        const glowDraw = function (ctx) {
+            prevOnDrawForeground?.apply(this, arguments);
+            const elapsed = performance.now() - startTime;
+            if (elapsed >= PULSE_DURATION_MS) {
+                cleanup();
+                return;
+            }
+            const t = elapsed / PULSE_DURATION_MS;
+            const pulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 4);
+            const alpha = (1 - t) * (0.35 + 0.65 * pulse);
+            const w = this.size?.[0] ?? 180;
+            const h = this.size?.[1] ?? 80;
+            const pad = 6;
+            ctx.save();
+            ctx.strokeStyle = `rgba(96, 165, 250, ${alpha.toFixed(3)})`;
+            ctx.lineWidth = 4;
+            ctx.shadowColor = `rgba(59, 130, 246, ${(alpha * 0.9).toFixed(3)})`;
+            ctx.shadowBlur = 14 + 8 * pulse;
+            if (typeof ctx.roundRect === "function") {
+                ctx.beginPath();
+                ctx.roundRect(-pad, -LiteGraph.NODE_TITLE_HEIGHT - pad, w + pad * 2, h + LiteGraph.NODE_TITLE_HEIGHT + pad * 2, 10);
+                ctx.stroke();
+            } else {
+                ctx.strokeRect(-pad, -LiteGraph.NODE_TITLE_HEIGHT - pad, w + pad * 2, h + LiteGraph.NODE_TITLE_HEIGHT + pad * 2);
+            }
+            ctx.restore();
+        };
+
+        targetNode._xePulseCleanup = cleanup;
+        targetNode.onDrawForeground = glowDraw;
+        targetNode.setDirtyCanvas?.(true, false);
+
+        const tick = () => {
+            if (targetNode._xePulseCleanup !== cleanup) return;
+            if (performance.now() - startTime >= PULSE_DURATION_MS) {
+                cleanup();
+                return;
+            }
+            targetNode.setDirtyCanvas?.(true, false);
+            rafId = requestAnimationFrame(tick);
+        };
+        rafId = requestAnimationFrame(tick);
+    }
 }
 
 // ============================================================================
@@ -459,81 +527,101 @@ class XENodesProgressBarElement extends HTMLElement {
     }
 
     render() {
-        this.shadowRoot.innerHTML = `
-            <style>
-                :host {
-                    display: block;
-                    width: 100%;
-                    user-select: none;
-                    z-index: 1000;
-                    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                }
-                :host([hidden]) { display: none !important; }
-                .progress-container {
-                    position: relative;
-                    width: 100%;
-                    height: 14px;
-                    background: rgba(15, 23, 42, 0.92);
-                    backdrop-filter: blur(8px);
-                    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-                    cursor: pointer;
-                    overflow: hidden;
-                    transition: background-color 0.2s ease;
-                }
-                .progress-container:hover { background: rgba(30, 41, 59, 0.96); }
-                .bar-overall {
-                    position: absolute;
-                    top: 0;
-                    left: 0;
-                    height: 100%;
-                    width: 0%;
-                    background: linear-gradient(90deg, #059669 0%, #10b981 100%);
-                    opacity: 0.85;
-                    transition: width 0.15s ease-out, height 0.15s ease-out;
-                    pointer-events: none;
-                    z-index: 1;
-                }
-                .bar-step {
-                    position: absolute;
-                    top: 50%;
-                    left: 0;
-                    height: 50%;
-                    width: 0%;
-                    background: linear-gradient(90deg, #0284c7 0%, #38bdf8 100%);
-                    opacity: 0.85;
-                    transition: width 0.1s ease-out;
-                    pointer-events: none;
-                    z-index: 2;
-                }
-                .progress-container.-error .bar-overall {
-                    background: linear-gradient(90deg, #dc2626 0%, #ef4444 100%) !important;
-                    opacity: 0.9;
-                }
-                .progress-text {
-                    position: relative;
-                    z-index: 2;
-                    display: flex;
-                    align-items: center;
-                    justify-content: flex-start;
-                    height: 100%;
-                    padding: 0 6px;
-                    font-size: 10px;
-                    font-weight: 700;
-                    line-height: 14px;
-                    color: #ffffff;
-                    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
-                    letter-spacing: 0.2px;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                }
-            </style>
-            <div class="progress-container" title="XENodes Progress Bar&#013;Left-Click: Jump to active node&#013;Right-Click: Return to root graph">
-                <div class="bar-overall"></div>
-                <div class="bar-step"></div>
-                <div class="progress-text">Idle</div>
-            </div>
+        const styleEl = document.createElement("style");
+        styleEl.textContent = `
+            :host {
+                display: block;
+                width: 100%;
+                user-select: none;
+                z-index: 1000;
+                font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            }
+            :host([hidden]) { display: none !important; }
+            .progress-container {
+                position: relative;
+                width: 100%;
+                height: 14px;
+                background: rgba(15, 23, 42, 0.92);
+                backdrop-filter: blur(8px);
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                cursor: pointer;
+                overflow: hidden;
+                transition: background-color 0.2s ease;
+            }
+            .progress-container:hover { background: rgba(30, 41, 59, 0.96); }
+            .bar-overall {
+                position: absolute;
+                top: 0;
+                left: 0;
+                height: 100%;
+                width: 0%;
+                background: linear-gradient(90deg, #059669 0%, #10b981 100%);
+                opacity: 0.85;
+                transition: width 0.15s ease-out, height 0.15s ease-out;
+                pointer-events: none;
+                z-index: 1;
+            }
+            .bar-step {
+                position: absolute;
+                top: 50%;
+                left: 0;
+                height: 50%;
+                width: 0%;
+                background: linear-gradient(90deg, #0284c7 0%, #38bdf8 100%);
+                opacity: 0.85;
+                transition: width 0.1s ease-out;
+                pointer-events: none;
+                z-index: 2;
+            }
+            .progress-container.-error .bar-overall {
+                background: linear-gradient(90deg, #dc2626 0%, #ef4444 100%) !important;
+                opacity: 0.9;
+            }
+            .progress-text {
+                position: relative;
+                z-index: 2;
+                display: flex;
+                align-items: center;
+                justify-content: flex-start;
+                height: 100%;
+                padding: 0 6px;
+                font-size: 10px;
+                font-weight: 700;
+                line-height: 14px;
+                color: #ffffff;
+                text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+                letter-spacing: 0.2px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
         `;
+
+        const container = document.createElement("div");
+        container.className = "progress-container";
+        container.title = "XENodes Progress Bar\rLeft-Click: Jump to active node\rRight-Click: Return to root graph";
+
+        const barOverall = document.createElement("div");
+        barOverall.className = "bar-overall";
+        const barStep = document.createElement("div");
+        barStep.className = "bar-step";
+        const progressText = document.createElement("div");
+        progressText.className = "progress-text";
+        progressText.textContent = "Idle";
+
+        container.appendChild(barOverall);
+        container.appendChild(barStep);
+        container.appendChild(progressText);
+
+        if (typeof this.shadowRoot.replaceChildren === "function") {
+            this.shadowRoot.replaceChildren(styleEl, container);
+        } else {
+            while (this.shadowRoot.firstChild) {
+                this.shadowRoot.removeChild(this.shadowRoot.firstChild);
+            }
+            this.shadowRoot.appendChild(styleEl);
+            this.shadowRoot.appendChild(container);
+        }
     }
 }
 
@@ -621,8 +709,15 @@ function calculateActiveExecutionNodes(promptOutput) {
     return Math.max(1, activeNodeIds.size);
 }
 
+const MAX_TRACKED_PROMPTS = 50;
+
 function getOrInitPrompt(promptId) {
     if (!promptsMap.has(promptId)) {
+        while (promptsMap.size >= MAX_TRACKED_PROMPTS) {
+            const oldestKey = promptsMap.keys().next().value;
+            if (oldestKey === undefined) break;
+            promptsMap.delete(oldestKey);
+        }
         promptsMap.set(promptId, {
             promptApiData: null,
             totalNodes: 0,
@@ -716,15 +811,6 @@ app.registerExtension({
     ],
 
     async setup() {
-        app.ui?.settings?.addSetting({
-            id: "XENodes.ProgressBar.Enabled",
-            category: ["XENodes", "Progress Bar"],
-            name: "Display Progress Bar",
-            type: "boolean",
-            defaultValue: true,
-            onChange: (newValue) => syncProgressBarDOM(newValue)
-        });
-
         syncProgressBarDOM();
 
         // Hook queuePrompt to capture per-job prompt structure and tab name

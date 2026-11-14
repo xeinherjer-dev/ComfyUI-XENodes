@@ -27,7 +27,7 @@ app.registerExtension({
             if (!document.getElementById(styleId)) {
                 const styleEl = document.createElement("style");
                 styleEl.id = styleId;
-                styleEl.innerHTML = `
+                styleEl.textContent = `
                     .xe-slider-container {
                         display: flex;
                         align-items: center;
@@ -106,14 +106,23 @@ app.registerExtension({
             container.appendChild(numberInput);
 
             const normalizeValue = (value) => {
+                let minVal = parseFloat(this.properties.min);
+                if (Number.isNaN(minVal)) {
+                    minVal = 0;
+                }
+                let maxVal = parseFloat(this.properties.max);
+                if (Number.isNaN(maxVal)) {
+                    maxVal = 100;
+                }
+                if (maxVal < minVal) {
+                    maxVal = minVal;
+                }
+
                 let normalized = parseFloat(value);
                 if (Number.isNaN(normalized)) {
-                    normalized = parseFloat(this.properties.min);
+                    normalized = minVal;
                 }
-                if (Number.isNaN(normalized)) {
-                    normalized = 0;
-                }
-                return normalized;
+                return Math.min(maxVal, Math.max(minVal, normalized));
             };
 
             const hideDataWidgets = () => {
@@ -172,16 +181,19 @@ app.registerExtension({
 
             const updateOutputType = () => {
                 const links = this.outputs?.[0]?.links;
-                let newType = "*";
+                let newType = "INT,FLOAT";
+                const graph = this.graph || app.graph;
 
-                if (links && links.length > 0) {
-                    const link = app.graph.links[links[0]];
-                    if (link) {
-                        const targetNode = app.graph.getNodeById(link.target_id);
+                if (links && links.length > 0 && graph) {
+                    for (const linkId of links) {
+                        const link = graph.links?.[linkId] ?? graph.links?.get?.(linkId);
+                        if (!link) continue;
+                        const targetNode = graph.getNodeById(link.target_id);
                         const targetInput = targetNode?.inputs?.[link.target_slot];
                         const targetType = String(targetInput?.type).toUpperCase();
                         if (targetType === "INT" || targetType === "FLOAT" || targetType === "NUMBER") {
                             newType = targetType;
+                            break;
                         }
                     }
                 }
@@ -226,10 +238,12 @@ app.registerExtension({
             sliderInput.addEventListener("change", (e) => onValueConfirm(e.target.value));
             numberInput.addEventListener("change", (e) => onValueConfirm(e.target.value));
 
-            // Prevent panning graph
+            // Prevent panning graph and ComfyUI global keyboard shortcuts while typing
             const stopPropagation = (e) => e.stopPropagation();
             sliderInput.addEventListener("mousedown", stopPropagation);
             numberInput.addEventListener("mousedown", stopPropagation);
+            numberInput.addEventListener("keydown", stopPropagation);
+            numberInput.addEventListener("keyup", stopPropagation);
             sliderInput.addEventListener("wheel", stopPropagation, { passive: true });
             numberInput.addEventListener("wheel", stopPropagation, { passive: true });
 
@@ -283,15 +297,18 @@ app.registerExtension({
 
             // Hide input slot DOM elements but keep output slots visible.
             // Set widgets_start_y = 0 so the DOM widget starts at the title bar.
-            const slotStyleId = `xe-slider-style-${this.id}`;
             const applyHideConnections = () => {
+                this.widgets_start_y = 0;
+                if (this.id == null || this.id === -1) return;
+                const slotStyleId = `xe-slider-style-${this.id}`;
+                this._xeSlotStyleId = slotStyleId;
                 let perNodeStyle = document.getElementById(slotStyleId);
                 if (!perNodeStyle) {
                     perNodeStyle = document.createElement("style");
                     perNodeStyle.id = slotStyleId;
                     document.head.appendChild(perNodeStyle);
                 }
-                perNodeStyle.innerHTML = `
+                perNodeStyle.textContent = `
                     [data-node-id="${this.id}"] .lg-slot.lg-slot--input {
                         position: absolute !important;
                         opacity: 0 !important;
@@ -302,7 +319,6 @@ app.registerExtension({
                         padding: 0 !important;
                     }
                 `;
-                this.widgets_start_y = 0;
             };
             applyHideConnections();
 
@@ -318,11 +334,19 @@ app.registerExtension({
                 size[1] = minSize[1];
             };
 
+            const originalOnAdded = this.onAdded;
+            this.onAdded = function () {
+                const res = originalOnAdded?.apply(this, arguments);
+                applyHideConnections();
+                return res;
+            };
+
             const originalOnRemoved = this.onRemoved;
             this.onRemoved = function () {
-                const slotStyle = document.getElementById(slotStyleId);
+                const slotStyleId = this._xeSlotStyleId || (this.id != null && this.id !== -1 ? `xe-slider-style-${this.id}` : null);
+                const slotStyle = slotStyleId ? document.getElementById(slotStyleId) : null;
                 slotStyle?.remove();
-                originalOnRemoved?.apply(this, arguments);
+                return originalOnRemoved?.apply(this, arguments);
             };
 
             this.serialize_widgets = true;
@@ -345,9 +369,15 @@ app.registerExtension({
                 const configuredValue = info?.properties?.value
                     ?? info?.widgets_values?.find((value) => typeof value === "number");
 
-                if (configuredValue !== undefined) {
-                    this.properties.value = normalizeValue(configuredValue);
-                }
+                const targetValue = configuredValue !== undefined ? configuredValue : this.properties?.value;
+                const clamped = normalizeValue(targetValue);
+                this.properties.value = clamped;
+
+                if (this.properties.min != null) sliderInput.min = this.properties.min;
+                if (this.properties.max != null) sliderInput.max = this.properties.max;
+                if (this.properties.step != null) sliderInput.step = this.properties.step;
+                sliderInput.value = clamped;
+                numberInput.value = clamped;
 
                 updateInputs();
                 updateOutputType();
@@ -388,6 +418,7 @@ app.registerExtension({
                 if (originalOnConnectionsChange) {
                     originalOnConnectionsChange.apply(this, arguments);
                 }
+                updateOutputType();
             };
 
             const originalOnDrawForeground = this.onDrawForeground;

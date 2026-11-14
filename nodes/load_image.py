@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import asyncio
 import subprocess
 import shutil
@@ -199,6 +200,7 @@ def get_image_files(path: str, sort_by: str = "name", reverse: bool = False, sub
 
 import time
 
+_FOLDERS_CACHE_LOCK = threading.Lock()
 _FOLDERS_CACHE = {"time": 0.0, "data": ["output", "input"]}
 FOLDERS_CACHE_TTL = 300.0  # 5 minutes cache
 
@@ -277,26 +279,29 @@ def _sort_folders(folders: list[str], sort_by: str = "newest_first") -> list[str
     return result
 
 
-def get_available_folders(sort_by: str = "newest_first") -> list[str]:
+def get_available_folders(sort_by: str = "newest_first", force: bool = False) -> list[str]:
     """Returns a list of all folders in output and input directories that contain supported images, sorted by sort_by."""
     global _FOLDERS_CACHE
-    now = time.time()
-    if now - _FOLDERS_CACHE["time"] < FOLDERS_CACHE_TTL and _FOLDERS_CACHE["data"]:
-        raw_folders = _FOLDERS_CACHE["data"]
-    else:
-        folders = []
-        output_dir = folder_paths.get_output_directory()
-        if output_dir:
-            folders.extend(_find_image_dirs(output_dir, "output"))
+    with _FOLDERS_CACHE_LOCK:
+        if force:
+            _FOLDERS_CACHE["time"] = 0.0
+        now = time.time()
+        if now - _FOLDERS_CACHE["time"] < FOLDERS_CACHE_TTL and _FOLDERS_CACHE["data"]:
+            raw_folders = _FOLDERS_CACHE["data"]
+        else:
+            folders = []
+            output_dir = folder_paths.get_output_directory()
+            if output_dir:
+                folders.extend(_find_image_dirs(output_dir, "output"))
 
-        input_dir = folder_paths.get_input_directory()
-        if input_dir:
-            folders.extend(_find_image_dirs(input_dir, "input"))
+            input_dir = folder_paths.get_input_directory()
+            if input_dir:
+                folders.extend(_find_image_dirs(input_dir, "input"))
 
-        raw_folders = folders or ["output", "input"]
-        _FOLDERS_CACHE = {"time": now, "data": raw_folders}
+            raw_folders = folders or ["output", "input"]
+            _FOLDERS_CACHE = {"time": now, "data": raw_folders}
 
-    return _sort_folders(raw_folders, sort_by=sort_by)
+    return _sort_folders(list(raw_folders), sort_by=sort_by)
 
 
 try:
@@ -310,10 +315,7 @@ try:
             try:
                 force = request.rel_url.query.get("force", "false").lower() in ("true", "1")
                 sort_by = request.rel_url.query.get("sort_by", "newest_first")
-                if force:
-                    global _FOLDERS_CACHE
-                    _FOLDERS_CACHE["time"] = 0.0
-                folders = await asyncio.to_thread(get_available_folders, sort_by)
+                folders = await asyncio.to_thread(get_available_folders, sort_by, force)
                 return web.json_response(folders)
             except Exception:
                 return web.json_response(["output", "input"])
@@ -455,7 +457,16 @@ class LoadImageFromFolder(io.ComfyNode):
     def fingerprint_inputs(cls, path: str = "output", folder_sort: str = "newest_first", index: int = 0, sort_by: str = "name", reverse: bool = False, subfolders: bool = False) -> str:
         if sort_by == "random":
             return str(os.urandom(8))
-        return f"{path}_{index}_{sort_by}_{reverse}_{subfolders}"
+        base = f"{path}_{index}_{sort_by}_{reverse}_{subfolders}"
+        try:
+            files = get_image_files(path, sort_by=sort_by, reverse=reverse, subfolders=subfolders, index=index)
+            if not files:
+                return f"{base}_empty"
+            target = files[index % len(files)]
+            mtime = os.path.getmtime(target)
+            return f"{base}_{len(files)}_{target}_{mtime}"
+        except OSError:
+            return base
 
     @classmethod
     def execute(cls, path: str = "output", folder_sort: str = "newest_first", index: int = 0, sort_by: str = "name", reverse: bool = False, subfolders: bool = False) -> io.NodeOutput:

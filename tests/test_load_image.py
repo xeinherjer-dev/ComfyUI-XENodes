@@ -80,6 +80,24 @@ class TestLoadImage(unittest.TestCase):
         fp = LoadImageFromFolder.fingerprint_inputs(path="output", index=0)
         self.assertIn("output", fp)
 
+    def test_fingerprint_inputs_detects_changes(self):
+        fp1 = LoadImageFromFolder.fingerprint_inputs(path="output/xenodes_test_suite", index=0)
+        fp1_same = LoadImageFromFolder.fingerprint_inputs(path="output/xenodes_test_suite", index=0)
+        self.assertEqual(fp1, fp1_same)
+        self.assertIn("output/xenodes_test_suite", fp1)
+
+        # Adding another file changes file count / fingerprint
+        extra_path = os.path.join(self.test_subfolder, "sample2.png")
+        Image.new("RGB", (16, 16), color=(0, 255, 0)).save(extra_path)
+        fp2 = LoadImageFromFolder.fingerprint_inputs(path="output/xenodes_test_suite", index=0)
+        self.assertNotEqual(fp1, fp2)
+
+        # Modifying mtime of target file changes fingerprint
+        stat = os.stat(self.test_img_path)
+        os.utime(self.test_img_path, (stat.st_atime, stat.st_mtime + 10.0))
+        fp3 = LoadImageFromFolder.fingerprint_inputs(path="output/xenodes_test_suite", index=0)
+        self.assertNotEqual(fp2, fp3)
+
     def test_execute_load_image(self):
         # Execute loading our created test image from isolated subfolder
         out = LoadImageFromFolder.execute(path="output/xenodes_test_suite", index=0, sort_by="name")

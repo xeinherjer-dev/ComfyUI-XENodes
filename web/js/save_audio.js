@@ -15,7 +15,9 @@ app.registerExtension({
 				const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
 				this.previewMediaType = "audio";
 
+				const origOnResize = this.onResize;
 				this.onResize = function (size) {
+					origOnResize?.apply(this, arguments);
 					const minSize = this.computeSize ? this.computeSize() : [150, 80];
 					size[0] = Math.max(size[0], minSize[0]);
 					size[1] = Math.max(size[1], minSize[1]);

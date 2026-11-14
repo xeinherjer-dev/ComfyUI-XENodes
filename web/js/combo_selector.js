@@ -146,14 +146,35 @@ app.registerExtension({
                 const linkId = typeof link_info === "object" ? link_info.id : link_info;
                 // Use this.graph instead of app.graph so links resolve correctly inside Subgraphs
                 const activeGraph = this.graph ?? app.graph;
-                const link = isConnected ? (activeGraph.links[linkId] ?? app.graph.links[linkId]) : null;
+                const resolveLink = (id) => {
+                    if (id == null) return null;
+                    return (
+                        activeGraph?.links?.[id] ??
+                        activeGraph?.links?.get?.(id) ??
+                        app.graph?.links?.[id] ??
+                        app.graph?.links?.get?.(id) ??
+                        null
+                    );
+                };
+
+                let link = isConnected ? resolveLink(linkId) : null;
+                if (!link) {
+                    const remainingIds = (this.outputs?.[0]?.links || []).filter((id) => isConnected || id !== linkId);
+                    for (const remId of remainingIds) {
+                        const candidate = resolveLink(remId);
+                        if (candidate) {
+                            link = candidate;
+                            break;
+                        }
+                    }
+                }
 
                 if (!link) {
                     if (this.updateListPreview) this.updateListPreview([]);
                     return result;
                 }
 
-                const targetNode = activeGraph.getNodeById(link.target_id) ?? app.graph.getNodeById(link.target_id);
+                const targetNode = activeGraph?.getNodeById?.(link.target_id) ?? app.graph?.getNodeById?.(link.target_id);
                 if (!targetNode) return result;
 
                 const targetSlot = link.target_slot;

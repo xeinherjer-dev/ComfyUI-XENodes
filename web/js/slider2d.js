@@ -23,7 +23,14 @@ const roundToDecimals = (value, decimals) => {
 };
 
 const getDecimals = (step) => {
-    const normalized = String(step);
+    const num = Number(step);
+    if (!Number.isFinite(num) || Number.isInteger(num)) return 0;
+    const normalized = String(num).toLowerCase();
+    if (normalized.includes("e-")) {
+        const [mantissa, exp] = normalized.split("e-");
+        const fracLen = mantissa.includes(".") ? mantissa.split(".")[1].length : 0;
+        return fracLen + parseInt(exp, 10);
+    }
     if (!normalized.includes(".")) return 0;
     return normalized.split(".")[1].length;
 };
@@ -159,7 +166,7 @@ app.registerExtension({
             if (!document.getElementById(styleId)) {
                 const styleEl = document.createElement("style");
                 styleEl.id = styleId;
-                styleEl.innerHTML = `
+                styleEl.textContent = `
                     .xe-slider2d-container {
                         position: relative;
                         background: rgba(15, 20, 15, 0.9);
@@ -262,14 +269,22 @@ app.registerExtension({
 
             const updateOutputTypes = () => {
                 if (!this.outputs) return;
+                const graph = this.graph || app.graph;
 
                 const updateTypeForSlot = (slotIndex) => {
                     const links = this.outputs[slotIndex]?.links;
-                    let newType = "*";
-                    if (links && links.length > 0) {
-                        const link = app.graph.links[links[0]];
+                    let newType = "INT,FLOAT";
+                    if (links && links.length > 0 && graph) {
+                        let link = null;
+                        for (const lid of links) {
+                            const candidate = graph.links?.[lid] ?? graph.links?.get?.(lid);
+                            if (candidate) {
+                                link = candidate;
+                                break;
+                            }
+                        }
                         if (link) {
-                            const targetNode = app.graph.getNodeById(link.target_id);
+                            const targetNode = graph.getNodeById(link.target_id);
                             const targetInput = targetNode?.inputs?.[link.target_slot];
                             const targetType = String(targetInput?.type).toUpperCase();
                             if (targetType === "INT" || targetType === "FLOAT" || targetType === "NUMBER") {
@@ -495,14 +510,6 @@ app.registerExtension({
             const handlePointerCancel = (event) => finishPointerDrag(event.pointerId);
 
             canvas.addEventListener("pointerdown", (event) => {
-                const rect = canvas.getBoundingClientRect();
-                const x = event.clientX - rect.left;
-                const y = event.clientY - rect.top;
-
-                if (x > rect.width - 24 && y < 40) {
-                    return;
-                }
-
                 if (event.button !== 0) return;
                 isDragging = true;
                 event.preventDefault();
@@ -530,15 +537,17 @@ app.registerExtension({
 
             // Hide input slot DOM elements but keep output slots visible.
             // Set widgets_start_y = 0 so the DOM widget starts at the title bar.
-            const slotStyleId = `xe-slider2d-slot-style-${this.id}`;
             const applyHideConnections = () => {
+                if (this.id == null || this.id === -1) return;
+                const slotStyleId = `xe-slider2d-slot-style-${this.id}`;
+                this._xeSlotStyleId = slotStyleId;
                 let perNodeStyle = document.getElementById(slotStyleId);
                 if (!perNodeStyle) {
                     perNodeStyle = document.createElement("style");
                     perNodeStyle.id = slotStyleId;
                     document.head.appendChild(perNodeStyle);
                 }
-                perNodeStyle.innerHTML = `
+                perNodeStyle.textContent = `
                     [data-node-id="${this.id}"] .lg-slot.lg-slot--input {
                         position: absolute !important;
                         opacity: 0 !important;
@@ -609,9 +618,17 @@ app.registerExtension({
                 });
             };
 
+            const originalOnAdded = this.onAdded;
+            this.onAdded = function () {
+                const res = originalOnAdded?.apply(this, arguments);
+                applyHideConnections();
+                return res;
+            };
+
             const originalOnRemoved = this.onRemoved;
             this.onRemoved = function () {
-                const slotStyle = document.getElementById(slotStyleId);
+                const slotStyleId = this._xeSlotStyleId || (this.id != null && this.id !== -1 ? `xe-slider2d-slot-style-${this.id}` : null);
+                const slotStyle = slotStyleId ? document.getElementById(slotStyleId) : null;
                 slotStyle?.remove();
                 if (originalOnRemoved) {
                     originalOnRemoved.apply(this, arguments);

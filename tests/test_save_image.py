@@ -36,6 +36,12 @@ class TestSaveImage(unittest.TestCase):
                     os.remove(path)
                 except Exception:
                     pass
+        test_subdir = os.path.join(folder_paths.get_output_directory(), "tests")
+        if os.path.isdir(test_subdir) and not os.listdir(test_subdir):
+            try:
+                os.rmdir(test_subdir)
+            except Exception:
+                pass
 
     def test_define_schema(self):
         schema = SaveImage.define_schema()
@@ -117,6 +123,30 @@ class TestSaveImage(unittest.TestCase):
         yuv10 = _rgb_batch_to_full_range_yuv420(bw, is_10bit=True, is_bt2020=True)
         self.assertEqual(int(yuv10[0, 0]), 0)
         self.assertEqual(int(yuv10[0, 2]), 1023)
+
+    def test_avif_defaults_to_srgb_and_respects_hdr_pq(self):
+        from unittest.mock import patch
+        from custom_nodes.xenodes.nodes.save_image import _resolve_avif_color_config
+
+        img_sdr = conftest_base.create_dummy_image(batch=1, height=16, width=16)
+        img_hdr = conftest_base.create_dummy_image(batch=1, height=16, width=16)
+        img_hdr._color_space = "HDR PQ"
+
+        seen_color_spaces = []
+
+        def spy_resolve(cs):
+            seen_color_spaces.append(cs)
+            return _resolve_avif_color_config(cs)
+
+        with patch("custom_nodes.xenodes.nodes.save_image._resolve_avif_color_config", side_effect=spy_resolve):
+            SaveImage.execute(images=img_sdr, filename_prefix="tests/test_avif_sdr", format="avif")
+            SaveImage.execute(images=img_hdr, filename_prefix="tests/test_avif_hdr", format="avif")
+
+        out_dir = folder_paths.get_output_directory()
+        self.created_files.extend(glob.glob(os.path.join(out_dir, "tests", "test_avif_sdr*")))
+        self.created_files.extend(glob.glob(os.path.join(out_dir, "tests", "test_avif_hdr*")))
+
+        self.assertEqual(seen_color_spaces, ["sRGB", "sRGB", "HDR PQ", "HDR PQ"])
 
     def test_extension_entrypoint(self):
         ext = asyncio.run(comfy_entrypoint())

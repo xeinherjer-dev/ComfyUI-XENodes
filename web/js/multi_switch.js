@@ -3,6 +3,11 @@ import { app } from "../../../scripts/app.js";
 const EXTENSION_NAME = "XENodes.MultiSwitch";
 const NODE_NAME = "XENodes.MultiSwitch";
 const MANAGED_INPUT_PREFIX = "inputs.input";
+
+const getGraphLink = (graph, linkId) => {
+    if (!graph || linkId == null) return null;
+    return graph.links?.[linkId] ?? graph.links?.get?.(linkId) ?? null;
+};
 const BUTTON_HEIGHT = 32;
 const MIN_LABEL_WIDTH = 100;
 
@@ -169,33 +174,34 @@ app.registerExtension({
             this.addProperty("unselected_mode", "None", "enum", { values: ["None", "Mute", "Bypass"] });
             this.addProperty("allow_unselect", false, "boolean");
 
-            this.applyHideConnections = () => {
+            this.applyHideConnections = (skipResize = false) => {
                 const isHidden = this.properties.hide_connections === true;
 
-                // Manage dynamic CSS for hiding slot connections
-                const styleId = `multi-switch-style-${this.id}`;
-                let styleEl = document.getElementById(styleId);
-                if (!styleEl) {
-                    styleEl = document.createElement("style");
-                    styleEl.id = styleId;
-                    document.head.appendChild(styleEl);
-                }
-
-                if (isHidden) {
-                    let css = `
-                        [data-node-id="${this.id}"] .lg-slot {
-                            position: absolute !important;
-                            opacity: 0 !important;
-                            pointer-events: none !important;
-                            width: 10px !important;
-                            height: 32px !important;
-                            margin: 0 !important; 
-                            padding: 0 !important;
+                // Manage dynamic CSS for hiding slot connections only after LiteGraph assigns a real node ID
+                if (this.id != null && this.id !== -1) {
+                    const styleId = `multi-switch-style-${this.id}`;
+                    this._xeStyleId = styleId;
+                    let styleEl = document.getElementById(styleId);
+                    if (isHidden) {
+                        if (!styleEl) {
+                            styleEl = document.createElement("style");
+                            styleEl.id = styleId;
+                            document.head.appendChild(styleEl);
                         }
-                    `;
-                    styleEl.innerHTML = css;
-                } else {
-                    styleEl.innerHTML = "";
+                        styleEl.textContent = `
+                            [data-node-id="${this.id}"] .lg-slot {
+                                position: absolute !important;
+                                opacity: 0 !important;
+                                pointer-events: none !important;
+                                width: 10px !important;
+                                height: 32px !important;
+                                margin: 0 !important; 
+                                padding: 0 !important;
+                            }
+                        `;
+                    } else if (styleEl) {
+                        styleEl.textContent = "";
+                    }
                 }
 
                 // Handle widget visibility (Using type mutation + Vue Reactivity Hack)
@@ -227,17 +233,19 @@ app.registerExtension({
                     this.change();
                 }
 
-                // Recalculate height while preserving the user-resized width.
-                if (this.computeSize && this.setSize) {
-                    const minSize = this.computeSize();
-                    const newWidth = Math.max(this.size[0], minSize[0]);
-                    this.setSize([newWidth, minSize[1]]);
-                }
+                if (!skipResize) {
+                    // Recalculate height while preserving the user-resized width.
+                    if (this.computeSize && this.setSize) {
+                        const minSize = this.computeSize();
+                        const newWidth = Math.max(this.size[0], minSize[0]);
+                        this.setSize([newWidth, minSize[1]]);
+                    }
 
-                // Force canvas redraw
-                const graph = this.graph || app.graph;
-                if (graph) {
-                    graph.setDirtyCanvas(true, true);
+                    // Force canvas redraw
+                    const graph = this.graph || app.graph;
+                    if (graph) {
+                        graph.setDirtyCanvas(true, true);
+                    }
                 }
             };
 
@@ -282,14 +290,20 @@ app.registerExtension({
 
                 let changed = false;
                 const graph = this.graph || app.graph;
+                // Protect the origin node feeding the currently selected slot so shared upstream nodes are not muted/bypassed
+                const selectedSlot = !isNone ? inputSlots[currentValue] : null;
+                const selectedLink = selectedSlot?.link != null ? getGraphLink(graph, selectedSlot.link) : null;
+                const selectedOriginId = selectedLink ? selectedLink.origin_id : null;
+
                 for (let i = 0; i < inputSlots.length; i++) {
                     const inputSlot = inputSlots[i];
                     if (inputSlot.link == null) continue;
 
-                    const link = graph?.links?.[inputSlot.link];
+                    const link = getGraphLink(graph, inputSlot.link);
                     const originNode = link ? graph.getNodeById(link.origin_id) : null;
                     if (originNode) {
-                        const newMode = (i === currentValue || isNone) ? 0 : targetMode;
+                        const isProtected = i === currentValue || isNone || (selectedOriginId != null && originNode.id === selectedOriginId);
+                        const newMode = isProtected ? 0 : targetMode;
                         if (originNode.mode !== newMode) {
                             originNode.mode = newMode;
                             changed = true;
@@ -342,7 +356,7 @@ app.registerExtension({
 
                     maxValidIndex = Math.max(maxValidIndex, i);
 
-                    const link = graph?.links?.[inputSlot.link];
+                    const link = getGraphLink(graph, inputSlot.link);
                     const originNode = link ? graph.getNodeById(link.origin_id) : null;
                     const label = `[${i}] ${originNode?.title || originNode?.type || "(Empty)"}`;
 
@@ -362,7 +376,7 @@ app.registerExtension({
                 container.style.display = container.children.length === 0 ? "none" : "flex";
 
                 if (this.applyHideConnections) {
-                    this.applyHideConnections();
+                    this.applyHideConnections(true);
                 }
 
                 if (this.size && this.computeSize) {
@@ -458,7 +472,7 @@ app.registerExtension({
                 for (let i = 0; i < inputSlots.length; i++) {
                     const inputSlot = inputSlots[i];
                     if (inputSlot.link == null) continue;
-                    const link = graph?.links?.[inputSlot.link];
+                    const link = getGraphLink(graph, inputSlot.link);
                     const originNode = link ? graph.getNodeById(link.origin_id) : null;
                     currentFingerprint += `${i}:${originNode?.title || originNode?.type || ""}|`;
                 }
@@ -472,6 +486,13 @@ app.registerExtension({
             this.lastTitlesFingerprint = "";
             this.title_check_interval = setInterval(checkTitles, 1000);
 
+            const originalOnAdded = this.onAdded;
+            this.onAdded = function () {
+                const res = originalOnAdded?.apply(this, arguments);
+                this.applyHideConnections?.();
+                return res;
+            };
+
             const originalOnRemoved = this.onRemoved;
             this.onRemoved = function () {
                 if (this.title_check_interval) {
@@ -482,10 +503,10 @@ app.registerExtension({
                     clearInterval(this.sync_interval);
                     this.sync_interval = null;
                 }
-                const styleId = `multi-switch-style-${this.id}`;
-                const styleEl = document.getElementById(styleId);
-                if (styleEl) {
-                    styleEl.remove();
+                const styleId = this._xeStyleId || (this.id != null && this.id !== -1 ? `multi-switch-style-${this.id}` : null);
+                if (styleId) {
+                    const styleEl = document.getElementById(styleId);
+                    styleEl?.remove();
                 }
                 return originalOnRemoved?.apply(this, arguments);
             };

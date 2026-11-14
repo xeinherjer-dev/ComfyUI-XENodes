@@ -36,9 +36,11 @@ class MultiPipeInNode(io.ComfyNode):
 
         # Catch kwargs correctly since comfyui provides them
         for key, value in kwargs.items():
-            if value is not None and (key.startswith("slots.") or key.startswith("slots_")):
-                real_key = key.split(".")[-1].split("_")[-1]
-                result[real_key] = value
+            if value is not None:
+                if key.startswith("slots."):
+                    result[key[len("slots."):]] = value
+                elif key.startswith("slots_"):
+                    result[key[len("slots_"):]] = value
 
         if "slots" in kwargs and isinstance(kwargs["slots"], dict):
             for k, v in kwargs["slots"].items():

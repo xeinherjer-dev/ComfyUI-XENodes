@@ -118,6 +118,7 @@ class ITMLUT_BasicResBlock(nn.Module):
 class ITMLUT_GlobPriorEncoder(nn.Module):
     def __init__(self, in_nc: int = 3, out_nc: int = 128):
         super().__init__()
+        # NOTE: Keep typo attribute name `enocoder` to match upstream pretrained checkpoint state_dict keys.
         self.enocoder = nn.Sequential(
             nn.Conv2d(in_nc, 16, 1),
             ITMLUT_BasicResBlock(16),

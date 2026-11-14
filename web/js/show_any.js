@@ -101,11 +101,8 @@ app.registerExtension({
             nodeType.prototype.serialize = function() {
                 const data = serialize?.apply(this, arguments);
                 const hasPreview = this.widgets?.some(w => w.is_xenode_preview && w.value);
-                if (hasPreview && (!data?.widgets_values || data.widgets_values.length === 0)) {
-                    console.warn(`${TAG(this)} Preview text exists on widget but widgets_values is empty during serialize!`, {
-                        node_id: this.id,
-                        widgets: this.widgets
-                    });
+                if (data && hasPreview && (!Array.isArray(data.widgets_values) || data.widgets_values.length === 0)) {
+                    data.widgets_values = this.widgets.map(w => w.value);
                 }
                 return data;
             };
