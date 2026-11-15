@@ -5,6 +5,20 @@ import logging
 
 from comfy_api.latest import ComfyExtension, io
 
+
+def _format_value(value: object) -> str:
+    if value is None:
+        return "None"
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    try:
+        return json.dumps(value, indent=2)
+    except Exception:
+        return str(value)
+
+
 class ShowAnyNode(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -21,145 +35,98 @@ class ShowAnyNode(io.ComfyNode):
                 io.MatchType.Output(template=template, display_name="any"),
             ],
             is_output_node=True,
-            hidden=[io.Hidden.unique_id, io.Hidden.extra_pnginfo]
+            hidden=[io.Hidden.unique_id, io.Hidden.extra_pnginfo],
         )
 
     @classmethod
     def execute(cls, **kwargs) -> io.NodeOutput:
         value = kwargs.get("value")
 
-        unique_id = None
-        nodes = []
-        definitions = {}
+        hidden = getattr(cls, "hidden", None)
+        unique_id = str(hidden.unique_id) if (hidden and hidden.unique_id is not None) else None
+        workflow = (hidden.extra_pnginfo or {}).get("workflow") if (hidden and hidden.extra_pnginfo) else None
+        nodes = workflow.get("nodes", []) if isinstance(workflow, dict) else []
+        definitions = workflow.get("definitions", {}) if isinstance(workflow, dict) else {}
 
-        if hasattr(cls, "hidden") and cls.hidden:
-            unique_id = cls.hidden.unique_id
-            extra_pnginfo = cls.hidden.extra_pnginfo
-
-            if extra_pnginfo and "workflow" in extra_pnginfo:
-                workflow = extra_pnginfo["workflow"]
-                nodes = workflow.get("nodes", [])
-                definitions = workflow.get("definitions", {})
-
-        # If input is None (Muted, etc.), read the saved value from the workflow
+        # If input is None (e.g. upstream muted), fall back to the saved workflow widget value
         if value is None and unique_id:
-            cached_val = ShowAnyNode.get_workflow_widget_value(nodes, str(unique_id), definitions)
-            # Overwrite output only if value exists and is a String
+            cached_val = cls.get_workflow_widget_value(nodes, unique_id, definitions)
             if isinstance(cached_val, str):
                 value = cached_val
 
-        # Stringify for UI display
-        if value is None:
-            text_str = "None"
-        elif isinstance(value, str):
-            text_str = value
-        elif isinstance(value, (int, float, bool)):
-            text_str = str(value)
-        else:
-            try:
-                text_str = json.dumps(value, indent=2)
-            except Exception:
-                text_str = str(value)
+        text_str = _format_value(value)
 
-        # Write back to workflow data (always overwrite for the next run)
-        if unique_id:
-            if not ShowAnyNode.mutate_workflow_data(nodes, str(unique_id), text_str, definitions):
+        # Sync preview text into workflow metadata so saved images retain the latest text
+        if unique_id and nodes:
+            if not cls.mutate_workflow_data(nodes, unique_id, text_str, definitions):
                 logging.warning(f"[XENodes.ShowAny] Failed to update workflow data for node {unique_id}")
 
         return io.NodeOutput(value, ui={"text": [text_str]})
 
     @staticmethod
-    def find_target_node(nodes: list, target_id: str, definitions: dict = None) -> dict | None:
+    def find_target_node(nodes: list, target_id: str, definitions: dict | None = None) -> dict | None:
         """
         Recursively searches the workflow graph for a node by hierarchical ID (e.g., "7:1").
-        Supports legacy subgraphs, properties, and ComfyUI Group Node (V2) definitions["subgraphs"].
         """
-        id_parts = target_id.split(':', 1)
-        current_id = id_parts[0]
-        remaining_id = id_parts[1] if len(id_parts) > 1 else None
+        current_id, _, remaining_id = str(target_id).partition(":")
 
         for node in nodes:
-            if str(node.get("id")) != current_id:
+            if not isinstance(node, dict) or str(node.get("id")) != current_id:
                 continue
-
-            if remaining_id is None:
+            if not remaining_id:
                 return node
-
-            node_type = node.get("type")
-            for sub_list in ShowAnyNode._get_sub_nodes(node, node_type, definitions):
-                if sub_list:
-                    found = ShowAnyNode.find_target_node(sub_list, remaining_id, definitions)
-                    if found is not None:
-                        return found
+            for sub_nodes in ShowAnyNode._get_sub_nodes(node, node.get("type"), definitions):
+                found = ShowAnyNode.find_target_node(sub_nodes, remaining_id, definitions)
+                if found is not None:
+                    return found
         return None
 
     @staticmethod
     def get_workflow_widget_value(nodes: list, target_id: str, definitions: dict | None = None) -> str | None:
-        """
-        Retrieves the saved widget value from the workflow data.
-        """
         target_node = ShowAnyNode.find_target_node(nodes, target_id, definitions)
-        if target_node:
-            wv = target_node.get("widgets_values", [])
-            if wv and len(wv) > 0:
-                return wv[0]
-        return None
+        wv = target_node.get("widgets_values") if target_node else None
+        return wv[0] if isinstance(wv, list) and wv else None
 
     @staticmethod
     def mutate_workflow_data(nodes: list, target_id: str, new_text: str, definitions: dict | None = None) -> bool:
-        """
-        Overwrites widgets_values of the target node in the workflow data.
-        """
         target_node = ShowAnyNode.find_target_node(nodes, target_id, definitions)
-        if target_node:
-            wv = target_node.setdefault("widgets_values", [])
-            if wv:
-                wv[0] = new_text
-            else:
-                wv.append(new_text)
-            return True
-        return False
+        if not target_node:
+            return False
+        wv = target_node.get("widgets_values")
+        if isinstance(wv, list) and wv:
+            wv[0] = new_text
+        else:
+            target_node["widgets_values"] = [new_text]
+        return True
 
     @staticmethod
-    def _get_sub_nodes(node: dict, node_type: str, definitions: dict | None) -> list[list[dict]]:
-        """
-        Collects child node lists from a given node.
-        """
-        candidates = []
+    def _get_sub_nodes(node: dict, node_type: str | None, definitions: dict | None) -> list[list[dict]]:
+        candidates: list[list[dict]] = []
 
-        # 1. Direct nesting / properties
+        def _extract_nodes(container: object) -> None:
+            if isinstance(container, list):
+                candidates.append(container)
+            elif isinstance(container, dict) and isinstance(container.get("nodes"), list):
+                candidates.append(container["nodes"])
+
         for key in ("nodes", "inner_nodes", "subgraph"):
-            val = node.get(key)
-            if isinstance(val, list):
-                candidates.append(val)
-            elif isinstance(val, dict):
-                candidates.append(val.get("nodes", []))
+            _extract_nodes(node.get(key))
 
         props = node.get("properties")
         if isinstance(props, dict):
-            sg = props.get("subgraph")
-            if isinstance(sg, dict):
-                candidates.append(sg.get("nodes", []))
-            elif isinstance(props.get("nodes"), list):
-                candidates.append(props["nodes"])
+            _extract_nodes(props.get("subgraph"))
+            _extract_nodes(props.get("nodes"))
 
-        # 2. Inside workflow.definitions (Group Node V2 architecture)
-        if definitions and node_type:
-            if node_type in definitions:
-                group_def = definitions[node_type]
-                if isinstance(group_def, dict):
-                    candidates.append(group_def.get("nodes", []))
-            elif "subgraphs" in definitions:
-                subgraphs = definitions["subgraphs"]
-                if isinstance(subgraphs, list):
-                    for sg_def in subgraphs:
-                        if sg_def.get("id") == node_type or sg_def.get("name") == node_type:
-                            candidates.append(sg_def.get("nodes", []))
-                            break
-                elif isinstance(subgraphs, dict) and node_type in subgraphs:
-                    sg_def = subgraphs[node_type]
-                    if isinstance(sg_def, dict):
-                        candidates.append(sg_def.get("nodes", []))
+        if isinstance(definitions, dict) and node_type:
+            _extract_nodes(definitions.get(node_type))
+            subgraphs = definitions.get("subgraphs")
+            if isinstance(subgraphs, list):
+                for sg_def in subgraphs:
+                    if isinstance(sg_def, dict) and (sg_def.get("id") == node_type or sg_def.get("name") == node_type):
+                        _extract_nodes(sg_def)
+                        break
+            elif isinstance(subgraphs, dict):
+                _extract_nodes(subgraphs.get(node_type))
 
         return candidates
 
