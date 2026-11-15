@@ -156,40 +156,51 @@ def get_image_files(path: str, sort_by: str = "name", reverse: bool = False, sub
         return []
 
     elif os.path.isdir(resolved_path):
-        files = []
+        entries: list[os.DirEntry[str]] = []
         if subfolders:
-            for root, _, filenames in os.walk(resolved_path):
+            for root, _, _ in os.walk(resolved_path):
                 # Ensure symlinks inside directories do not escape allowed sandbox
                 if not is_path_safe_and_allowed(root):
                     continue
-                for f in filenames:
-                    if os.path.splitext(f)[1].lower() in VALID_IMAGE_EXTS:
-                        files.append(os.path.join(root, f))
-                        if len(files) >= MAX_SCAN_FILES:
-                            break
-                if len(files) >= MAX_SCAN_FILES:
+                try:
+                    with os.scandir(root) as it:
+                        for entry in it:
+                            if os.path.splitext(entry.name)[1].lower() in VALID_IMAGE_EXTS and entry.is_file():
+                                entries.append(entry)
+                                if len(entries) >= MAX_SCAN_FILES:
+                                    break
+                except OSError:
+                    continue
+                if len(entries) >= MAX_SCAN_FILES:
                     break
         else:
-            for f in os.listdir(resolved_path):
-                if os.path.splitext(f)[1].lower() in VALID_IMAGE_EXTS:
-                    full_p = os.path.join(resolved_path, f)
-                    if os.path.isfile(full_p):
-                        files.append(full_p)
-                        if len(files) >= MAX_SCAN_FILES:
-                            break
+            try:
+                with os.scandir(resolved_path) as it:
+                    for entry in it:
+                        if os.path.splitext(entry.name)[1].lower() in VALID_IMAGE_EXTS and entry.is_file():
+                            entries.append(entry)
+                            if len(entries) >= MAX_SCAN_FILES:
+                                break
+            except OSError:
+                return []
 
-        if not files:
+        if not entries:
             return []
 
         if sort_by == "name":
+            files = [e.path for e in entries]
             files.sort()
         elif sort_by == "date_modified":
-            files.sort(key=lambda x: os.path.getmtime(x))
+            entries.sort(key=lambda e: e.stat().st_mtime)
+            files = [e.path for e in entries]
         elif sort_by == "date_created":
-            files.sort(key=lambda x: os.path.getctime(x))
-        elif sort_by == "random":
-            rng = np.random.default_rng(index)
-            rng.shuffle(files)
+            entries.sort(key=lambda e: e.stat().st_ctime)
+            files = [e.path for e in entries]
+        else:
+            files = [e.path for e in entries]
+            if sort_by == "random":
+                rng = np.random.default_rng(index)
+                rng.shuffle(files)
 
         if reverse and sort_by != "random":
             files.reverse()
@@ -203,6 +214,10 @@ import time
 _FOLDERS_CACHE_LOCK = threading.Lock()
 _FOLDERS_CACHE = {"time": 0.0, "data": ["output", "input"]}
 FOLDERS_CACHE_TTL = 300.0  # 5 minutes cache
+
+_LAST_SCAN_LOCK = threading.Lock()
+_LAST_SCAN_CACHE: dict[str, object] = {"key": None, "time": 0.0, "files": None}
+_LAST_SCAN_TTL = 2.0  # seconds for fingerprint_inputs -> execute handoff
 
 
 def _find_image_dirs(base_dir: str, prefix: str) -> list[str]:
@@ -460,6 +475,10 @@ class LoadImageFromFolder(io.ComfyNode):
         base = f"{path}_{index}_{sort_by}_{reverse}_{subfolders}"
         try:
             files = get_image_files(path, sort_by=sort_by, reverse=reverse, subfolders=subfolders, index=index)
+            with _LAST_SCAN_LOCK:
+                _LAST_SCAN_CACHE["key"] = (path, sort_by, reverse, subfolders)
+                _LAST_SCAN_CACHE["time"] = time.monotonic()
+                _LAST_SCAN_CACHE["files"] = files
             if not files:
                 return f"{base}_empty"
             target = files[index % len(files)]
@@ -477,7 +496,22 @@ class LoadImageFromFolder(io.ComfyNode):
         if not is_path_safe_and_allowed(resolved_path):
             raise PermissionError(f"Access denied: '{path}' is outside allowed directories (input/output).")
 
-        files = get_image_files(path, sort_by=sort_by, reverse=reverse, subfolders=subfolders, index=index)
+        cache_key = (path, sort_by, reverse, subfolders)
+        files = None
+        if sort_by != "random":
+            now_mono = time.monotonic()
+            with _LAST_SCAN_LOCK:
+                if (
+                    _LAST_SCAN_CACHE["key"] == cache_key
+                    and now_mono - float(_LAST_SCAN_CACHE["time"]) < _LAST_SCAN_TTL
+                    and isinstance(_LAST_SCAN_CACHE["files"], list)
+                ):
+                    files = _LAST_SCAN_CACHE["files"]
+                _LAST_SCAN_CACHE["key"] = None
+                _LAST_SCAN_CACHE["files"] = None
+
+        if files is None:
+            files = get_image_files(path, sort_by=sort_by, reverse=reverse, subfolders=subfolders, index=index)
         if not files:
             if os.path.exists(resolved_path):
                 raise FileNotFoundError(f"No valid images found in: {path}")

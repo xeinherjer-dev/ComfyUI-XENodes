@@ -27,12 +27,6 @@ _CRF_DEFAULTS = {
     'h264_nvenc': 30.0, 'hevc_nvenc': 35.0, 'av1_nvenc': 36.0,
 }
 
-_VCODEC_TO_CANONICAL = {
-    'h264': 'h264', 'h264_nvenc': 'h264',
-    'h265': 'hevc', 'hevc_nvenc': 'hevc',
-    'av1': 'av1', 'av1_nvenc': 'av1',
-}
-
 _MAX_RAW_FRAME_CHUNK_BYTES = 64 * 1024 * 1024
 _MAX_LOOP_CACHE_BYTES = 256 * 1024 * 1024
 DEFAULT_AUDIO_BITRATE = "128k"
@@ -99,8 +93,6 @@ def _can_passthrough_video(
     target_audio_bitrate: str | None,
     loop_count: int,
     pingpong: bool,
-    target_video_codec: str | None = None,
-    target_crf: float | None = None,
 ) -> tuple[bool, str | None, str | None, bool, bool]:
     """
     Checks if the video input can be saved without re-encoding the video track.
@@ -153,17 +145,6 @@ def _can_passthrough_video(
                     return False, None, None, False, False
             else:
                 return False, None, None, False, False
-
-            # Check requested video codec and CRF so explicit user encoding choices aren't bypassed
-            if target_video_codec is not None:
-                expected_vcodec = _VCODEC_TO_CANONICAL.get(target_video_codec)
-                if expected_vcodec is not None and v_codec != expected_vcodec:
-                    return False, None, None, False, False
-
-            if target_crf is not None:
-                default_crf = _CRF_DEFAULTS.get(target_video_codec) if target_video_codec else None
-                if default_crf is None or abs(float(target_crf) - default_crf) > 1e-6:
-                    return False, None, None, False, False
 
             # Check audio streams
             has_audio = len(container.streams.audio) > 0
@@ -634,8 +615,7 @@ class SaveVideo(io.ComfyNode):
 
         # Check if the input video can be reused without re-encoding (auto passthrough)
         can_passthrough, source_file, source_vcodec, has_audio, can_audio_copy = _can_passthrough_video(
-            video, format, audio_codec, audio_bitrate, loop_count, pingpong,
-            target_video_codec=codec, target_crf=crf,
+            video, format, audio_codec, audio_bitrate, loop_count, pingpong
         )
 
         if can_passthrough and source_file:

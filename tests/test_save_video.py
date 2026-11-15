@@ -78,7 +78,7 @@ class TestSaveVideo(unittest.TestCase):
         )
         self.assertFalse(can_pass)
 
-    def test_can_passthrough_video_codec_and_crf_guard(self):
+    def test_can_passthrough_video_container_compatibility(self):
         with tempfile.NamedTemporaryFile(suffix=".mp4") as tmp:
             class VideoFromFile:
                 def get_active_trim_window(self):
@@ -104,45 +104,26 @@ class TestSaveVideo(unittest.TestCase):
                     audio = []
 
             with patch("custom_nodes.xenodes.nodes.save_video.av.open", return_value=DummyContainer()):
-                # Same codec (h264) & default CRF (23.0) allows passthrough
-                can_pass, _, vcodec, _, _ = _can_passthrough_video(
+                can_pass_mp4, _, vcodec, _, _ = _can_passthrough_video(
                     video=dummy_video,
                     target_format="mp4",
                     target_audio_codec="aac",
                     target_audio_bitrate=None,
                     loop_count=0,
                     pingpong=False,
-                    target_video_codec="h264",
-                    target_crf=23.0,
                 )
-                self.assertTrue(can_pass)
+                self.assertTrue(can_pass_mp4)
                 self.assertEqual(vcodec, "h264")
 
-                # Different video codec rejects passthrough
-                can_pass_diff_codec, _, _, _, _ = _can_passthrough_video(
+                can_pass_webm, _, _, _, _ = _can_passthrough_video(
                     video=dummy_video,
-                    target_format="mp4",
-                    target_audio_codec="aac",
+                    target_format="webm",
+                    target_audio_codec="opus",
                     target_audio_bitrate=None,
                     loop_count=0,
                     pingpong=False,
-                    target_video_codec="h265",
-                    target_crf=28.0,
                 )
-                self.assertFalse(can_pass_diff_codec)
-
-                # Non-default CRF rejects passthrough
-                can_pass_custom_crf, _, _, _, _ = _can_passthrough_video(
-                    video=dummy_video,
-                    target_format="mp4",
-                    target_audio_codec="aac",
-                    target_audio_bitrate=None,
-                    loop_count=0,
-                    pingpong=False,
-                    target_video_codec="h264",
-                    target_crf=18.0,
-                )
-                self.assertFalse(can_pass_custom_crf)
+                self.assertFalse(can_pass_webm)
 
     def test_expand_audio_waveform_dimensions(self):
         from custom_nodes.xenodes.utils.audio import expand_audio_waveform
