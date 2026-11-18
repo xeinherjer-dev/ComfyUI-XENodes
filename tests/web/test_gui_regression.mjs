@@ -68,6 +68,91 @@ function createMockEnvironment() {
     },
   };
 
+  const customElementRegistry = new Map();
+
+  class MockUIEvent {
+    constructor(type, init = {}) {
+      this.type = type;
+      Object.assign(this, init);
+      this.defaultPrevented = false;
+      this._stopped = false;
+    }
+    preventDefault() { this.defaultPrevented = true; }
+    stopPropagation() { this._stopped = true; }
+  }
+
+  const matchesSimplePart = (el, part) => {
+    if (!el || !part) return false;
+    let remaining = part;
+    const tagMatch = remaining.match(/^([a-zA-Z0-9_-]+)/);
+    if (tagMatch) {
+      if (el.tagName?.toLowerCase() !== tagMatch[1].toLowerCase()) return false;
+      remaining = remaining.slice(tagMatch[0].length);
+    }
+    const tokenRe = /(\.[a-zA-Z0-9_-]+|\[[^\]]+\])/g;
+    let match;
+    let consumed = 0;
+    while ((match = tokenRe.exec(remaining)) !== null) {
+      consumed += match[0].length;
+      const token = match[0];
+      if (token.startsWith(".")) {
+        if (!el.classList?.contains?.(token.slice(1))) return false;
+      } else {
+        const inner = token.slice(1, -1);
+        const starIdx = inner.indexOf("*=");
+        const eqIdx = inner.indexOf("=");
+        if (starIdx !== -1) {
+          const attr = inner.slice(0, starIdx).trim();
+          const val = inner.slice(starIdx + 2).trim().replace(/^['"]|['"]$/g, "");
+          const actual = attr === "class" ? el.className : el.getAttribute?.(attr);
+          if (!String(actual ?? "").includes(val)) return false;
+        } else if (eqIdx !== -1) {
+          const attr = inner.slice(0, eqIdx).trim();
+          const val = inner.slice(eqIdx + 1).trim().replace(/^['"]|['"]$/g, "");
+          const actual = attr === "class" ? el.className : el.getAttribute?.(attr);
+          if (actual !== val) return false;
+        } else {
+          if (el.getAttribute?.(inner.trim()) == null) return false;
+        }
+      }
+    }
+    return consumed === remaining.length;
+  };
+
+  const matchesSelector = (el, selector) => {
+    if (!el || !selector) return false;
+    return selector.split(",").some((branch) => {
+      const parts = branch.trim().split(/\s+/).filter(Boolean);
+      if (parts.length === 0) return false;
+      if (!matchesSimplePart(el, parts[parts.length - 1])) return false;
+      let ancestor = el.parentNode;
+      for (let i = parts.length - 2; i >= 0; i--) {
+        while (ancestor && !matchesSimplePart(ancestor, parts[i])) {
+          ancestor = ancestor.parentNode;
+        }
+        if (!ancestor) return false;
+        ancestor = ancestor.parentNode;
+      }
+      return true;
+    });
+  };
+
+  const querySubtree = (root, selector, firstOnly = false) => {
+    const results = [];
+    const walk = (node) => {
+      for (const child of node?.children || []) {
+        if (matchesSelector(child, selector)) {
+          results.push(child);
+          if (firstOnly) return true;
+        }
+        if (walk(child) && firstOnly) return true;
+      }
+      return false;
+    };
+    walk(root);
+    return firstOnly ? (results[0] || null) : results;
+  };
+
   class MockHTMLElement {
     constructor() {
       this.style = {};
@@ -77,7 +162,34 @@ function createMockEnvironment() {
       this.attributes = {};
       this._textContent = "";
       this._listeners = new Map();
-      this.classList = { add() {}, remove() {}, toggle() {} };
+      this._classes = new Set();
+      this.shadowRoot = null;
+      this._xeMockConnected = false;
+      this.classList = {
+        add: (...names) => names.forEach((n) => n && this._classes.add(n)),
+        remove: (...names) => names.forEach((n) => this._classes.delete(n)),
+        toggle: (n, force) => {
+          if (force === undefined) {
+            if (this._classes.has(n)) { this._classes.delete(n); return false; }
+            this._classes.add(n);
+            return true;
+          }
+          if (force) this._classes.add(n);
+          else this._classes.delete(n);
+          return !!force;
+        },
+        contains: (n) => this._classes.has(n),
+      };
+    }
+    get className() {
+      return Array.from(this._classes).join(" ");
+    }
+    set className(val) {
+      this._classes = new Set(String(val || "").split(/\s+/).filter(Boolean));
+    }
+    attachShadow() {
+      this.shadowRoot = new MockHTMLElement();
+      return this.shadowRoot;
     }
     get firstChild() {
       return this.children[0] || null;
@@ -90,15 +202,24 @@ function createMockEnvironment() {
       this.children = [];
     }
     setAttribute(k, v) {
+      if (k === "class") {
+        this.className = v;
+        return;
+      }
       this.attributes[k] = String(v);
     }
     getAttribute(k) {
+      if (k === "class") return this.className;
       return this.attributes[k] ?? null;
     }
     appendChild(child) {
       if (child) {
         child.parentNode = this;
         this.children.push(child);
+        if (!child._xeMockConnected && typeof child.connectedCallback === "function") {
+          child._xeMockConnected = true;
+          child.connectedCallback();
+        }
       }
       return child;
     }
@@ -106,6 +227,10 @@ function createMockEnvironment() {
       if (child) {
         child.parentNode = this;
         this.children.unshift(child);
+        if (!child._xeMockConnected && typeof child.connectedCallback === "function") {
+          child._xeMockConnected = true;
+          child.connectedCallback();
+        }
       }
       return child;
     }
@@ -114,11 +239,15 @@ function createMockEnvironment() {
       if (idx !== -1) {
         this.children.splice(idx, 1);
         child.parentNode = null;
+        child._xeMockConnected = false;
       }
       return child;
     }
     replaceChildren(...nodes) {
-      for (const c of this.children) c.parentNode = null;
+      for (const c of this.children) {
+        c.parentNode = null;
+        c._xeMockConnected = false;
+      }
       this.children = [];
       for (const n of nodes) this.appendChild(n);
     }
@@ -128,6 +257,7 @@ function createMockEnvironment() {
         if (idx !== -1) this.parentNode.children.splice(idx, 1);
       }
       this.parentNode = null;
+      this._xeMockConnected = false;
     }
     addEventListener(type, fn) {
       if (!this._listeners.has(type)) this._listeners.set(type, []);
@@ -142,11 +272,25 @@ function createMockEnvironment() {
     }
     dispatchEvent(evt) {
       for (const fn of this._listeners.get(evt?.type) || []) fn(evt);
+      if (evt?.bubbles && !evt._stopped && this.parentNode) {
+        this.parentNode.dispatchEvent(evt);
+      }
       return true;
     }
-    querySelector() { return null; }
-    querySelectorAll() { return []; }
-    closest() { return null; }
+    click() {
+      this.dispatchEvent(new MockUIEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    }
+    matches(selector) { return matchesSelector(this, selector); }
+    querySelector(selector) { return querySubtree(this, selector, true); }
+    querySelectorAll(selector) { return querySubtree(this, selector, false); }
+    closest(selector) {
+      let cur = this;
+      while (cur) {
+        if (matchesSelector(cur, selector)) return cur;
+        cur = cur.parentNode;
+      }
+      return null;
+    }
     getBoundingClientRect() {
       return { left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100 };
     }
@@ -269,12 +413,17 @@ function createMockEnvironment() {
     URLSearchParams,
     Promise,
     HTMLElement: MockHTMLElement,
+    PointerEvent: MockUIEvent,
+    MouseEvent: MockUIEvent,
     MutationObserver: class {
       observe() {}
       disconnect() {}
       takeRecords() { return []; }
     },
-    customElements: { define() {}, get() {} },
+    customElements: {
+      define(tag, cls) { customElementRegistry.set(String(tag).toLowerCase(), cls); },
+      get(tag) { return customElementRegistry.get(String(tag).toLowerCase()); },
+    },
     LiteGraph: mockLiteGraph,
     window: {
       addEventListener() {},
@@ -283,7 +432,8 @@ function createMockEnvironment() {
     },
     document: {
       createElement(tag) {
-        const el = new MockHTMLElement();
+        const CustomCls = customElementRegistry.get(String(tag).toLowerCase());
+        const el = CustomCls ? new CustomCls() : new MockHTMLElement();
         el.tagName = String(tag).toUpperCase();
         return el;
       },
@@ -296,8 +446,12 @@ function createMockEnvironment() {
       getElementById(id) {
         return findByIdInTree(docHead, id) || findByIdInTree(docBody, id);
       },
-      querySelector() { return null; },
-      querySelectorAll() { return []; },
+      querySelector(selector) {
+        return querySubtree(docHead, selector, true) || querySubtree(docBody, selector, true);
+      },
+      querySelectorAll(selector) {
+        return [...querySubtree(docHead, selector, false), ...querySubtree(docBody, selector, false)];
+      },
       addEventListener() {},
       removeEventListener() {},
       head: docHead,
@@ -685,4 +839,126 @@ test("GUI Regression: progress_bar.js registers cleanly without duplicate settin
   assert.ok(Array.isArray(ext.settings) && ext.settings.length === 1);
   await ext.setup?.();
   assert.equal(addSettingCalls, 0, "setup() must not re-register setting already defined in settings array");
+});
+
+test("GUI Regression: progress_bar.js switches Reka UI workflow tabs and focuses executing node on click", async () => {
+  const env = createMockEnvironment();
+  const { document } = env.context;
+
+  const tabsContainer = document.createElement("div");
+  tabsContainer.className = "workflow-tabs-container";
+  const tabsList = document.createElement("div");
+  tabsList.className = "workflow-tabs";
+  tabsContainer.appendChild(tabsList);
+
+  const makeTab = (labelText, active, spinning) => {
+    const wrapper = document.createElement("div");
+    wrapper.className = "workflow-tab";
+    const trigger = document.createElement("button");
+    trigger.setAttribute("role", "tab");
+    trigger.setAttribute("aria-selected", active ? "true" : "false");
+    trigger.setAttribute("data-state", active ? "active" : "inactive");
+    const label = document.createElement("span");
+    label.className = "workflow-label";
+    label.textContent = labelText;
+    trigger.appendChild(label);
+    if (spinning) {
+      const spinner = document.createElement("i");
+      spinner.className = "animate-spin";
+      trigger.appendChild(spinner);
+    }
+    wrapper.appendChild(trigger);
+    tabsList.appendChild(wrapper);
+    return { wrapper, trigger };
+  };
+
+  const tabA = makeTab("Workflow A.json", true, false);
+  const tabB = makeTab("Workflow B.json", false, true);
+  document.body.appendChild(tabsContainer);
+
+  const nodeInA = new env.MockLGraphNode();
+  nodeInA.id = 10;
+  nodeInA.title = "Node In A";
+  const graphA = {
+    state: 1,
+    _nodes: [nodeInA],
+    getNodeById(id) { return Number(id) === 10 ? nodeInA : null; },
+  };
+
+  const nodeInB = new env.MockLGraphNode();
+  nodeInB.id = 10;
+  nodeInB.title = "Node In B";
+  const graphB = {
+    state: 2,
+    _nodes: [nodeInB],
+    getNodeById(id) { return Number(id) === 10 ? nodeInB : null; },
+  };
+
+  const wfA = { filename: "Workflow A.json", path: "Workflow A.json", activeState: { id: "wf-a" } };
+  const wfB = { filename: "Workflow B.json", path: "Workflow B.json", activeState: { id: "wf-b" } };
+
+  env.mockApp.graph = graphA;
+  env.mockApp.rootGraph = graphA;
+  env.mockApp.canvas.graph = graphA;
+  env.mockApp.configuringGraph = false;
+  env.mockApp.extensionManager = {
+    workflow: {
+      activeWorkflow: wfA,
+      openWorkflows: [wfA, wfB],
+    },
+  };
+
+  const centeredNodes = [];
+  const selectedNodes = [];
+  env.mockApp.canvas.centerOnNode = (n) => centeredNodes.push(n);
+  env.mockApp.canvas.selectNode = (n) => selectedNodes.push(n);
+
+  let wrapperClickCount = 0;
+  tabB.wrapper.addEventListener("click", () => { wrapperClickCount++; });
+
+  let triggerMousedownCount = 0;
+  tabB.trigger.addEventListener("mousedown", (e) => {
+    assert.equal(e.button, 0);
+    assert.equal(e.ctrlKey, false);
+    triggerMousedownCount++;
+
+    env.mockApp.configuringGraph = true;
+    setTimeout(() => {
+      tabA.trigger.setAttribute("aria-selected", "false");
+      tabA.trigger.setAttribute("data-state", "inactive");
+      tabB.trigger.setAttribute("aria-selected", "true");
+      tabB.trigger.setAttribute("data-state", "active");
+      env.mockApp.extensionManager.workflow.activeWorkflow = wfB;
+      env.mockApp.graph = graphB;
+      env.mockApp.rootGraph = graphB;
+      env.mockApp.canvas.graph = graphB;
+      env.mockApp.configuringGraph = false;
+    }, 20);
+  });
+
+  await loadScript("progress_bar.js", env);
+  const ext = env.registeredExtensions.find((e) => e.name === "XENodes.ProgressBar");
+  await ext.setup?.();
+
+  const startListeners = env.eventListeners.get("execution_start") || [];
+  const execListeners = env.eventListeners.get("executing") || [];
+  startListeners.forEach((fn) => fn({ detail: { prompt_id: "job-b", workflow_id: "wf-b" } }));
+  execListeners.forEach((fn) => fn({ detail: { node: "10" } }));
+
+  const progressBar = document.body.querySelector("xenodes-progress-bar");
+  assert.ok(progressBar, "xenodes-progress-bar element must be mounted");
+
+  const clickEvt = new env.context.PointerEvent("pointerdown", { button: 0, bubbles: true, cancelable: true });
+  progressBar.dispatchEvent(clickEvt);
+
+  const waitStart = Date.now();
+  while (centeredNodes.length === 0 && Date.now() - waitStart < 1000) {
+    await new Promise((r) => setTimeout(r, 15));
+  }
+
+  assert.equal(triggerMousedownCount, 1, "must dispatch left mousedown on inactive [role='tab'] trigger");
+  assert.equal(wrapperClickCount, 0, "must not fire redundant click on wrapper .workflow-tab");
+  assert.equal(env.mockApp.extensionManager.workflow.activeWorkflow, wfB, "activeWorkflow must switch to Workflow B");
+  assert.equal(centeredNodes[0], nodeInB, "must center on node inside Workflow B rather than stale Workflow A");
+  assert.equal(selectedNodes[0], nodeInB, "must select node inside Workflow B");
 });

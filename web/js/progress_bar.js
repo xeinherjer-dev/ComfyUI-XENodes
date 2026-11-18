@@ -144,43 +144,84 @@ function findNodeAndHierarchy(rootGraph, nodeId, currentPath = []) {
 // 2. Multi-Tab Navigation & Node Focus Logic
 // ============================================================================
 
+function isRoleTabElement(el) {
+    return !!(el && (el.matches?.("[role='tab']") || el.getAttribute?.("role") === "tab"));
+}
+
 function simulateFullClick(el) {
     if (!el) return;
-    const opts = { bubbles: true, cancelable: true, view: window };
-    el.dispatchEvent(new PointerEvent("pointerdown", opts));
-    el.dispatchEvent(new MouseEvent("mousedown", opts));
-    el.dispatchEvent(new PointerEvent("pointerup", opts));
-    el.dispatchEvent(new MouseEvent("mouseup", opts));
-    el.dispatchEvent(new MouseEvent("click", opts));
-    if (typeof el.click === "function") el.click();
+    const opts = { bubbles: true, cancelable: true, view: window, button: 0, buttons: 1, ctrlKey: false };
+    if (typeof PointerEvent === "function") el.dispatchEvent(new PointerEvent("pointerdown", opts));
+    if (typeof MouseEvent === "function") el.dispatchEvent(new MouseEvent("mousedown", opts));
+    if (typeof PointerEvent === "function") el.dispatchEvent(new PointerEvent("pointerup", opts));
+    if (typeof MouseEvent === "function") el.dispatchEvent(new MouseEvent("mouseup", opts));
+
+    const isRekaTabTrigger = isRoleTabElement(el) && !el.closest?.(".p-togglebutton");
+    if (!isRekaTabTrigger) {
+        if (typeof MouseEvent === "function") el.dispatchEvent(new MouseEvent("click", opts));
+        if (typeof el.click === "function") el.click();
+    }
 }
 
 function getWorkflowTabButtons() {
-    return Array.from(document.querySelectorAll(
-        ".workflow-tabs .p-togglebutton, .workflow-tabs-container .p-togglebutton, .workflow-tab, [role='tablist'] [role='tab'], .workflow-tabs-list .workflow-tab-item"
+    const primary = Array.from(document.querySelectorAll(
+        ".workflow-tabs [role='tab'], .workflow-tabs-container [role='tab'], [data-testid='workflow-tab-strip'] [role='tab']"
     ));
+    const raw = primary.length > 0
+        ? primary
+        : Array.from(document.querySelectorAll(
+            ".workflow-tabs .p-togglebutton, .workflow-tabs-container .p-togglebutton, .workflow-tab, [role='tablist'] [role='tab'], .workflow-tabs-list .workflow-tab-item"
+        ));
+
+    const unique = new Set();
+    for (const el of raw) {
+        if (!el) continue;
+        const normalized = isRoleTabElement(el) ? el : (el.querySelector?.("[role='tab']") || el);
+        unique.add(normalized);
+    }
+    return Array.from(unique);
 }
 
 function isTabActive(el) {
     if (!el) return false;
-    const toggleBtn = el.closest(".p-togglebutton") || el;
-    return (
-        toggleBtn.classList.contains("p-togglebutton-checked") ||
-        toggleBtn.classList.contains("active") ||
-        toggleBtn.getAttribute("aria-selected") === "true" ||
-        toggleBtn.getAttribute("data-p-highlight") === "true"
-    );
+    const roleTab = isRoleTabElement(el) ? el : (el.querySelector?.("[role='tab']") || el.closest?.("[role='tab']"));
+    const container = el.closest?.(".workflow-tab, .p-togglebutton") || el;
+    const targets = [roleTab, container, el].filter(Boolean);
+    return targets.some(t => (
+        t.getAttribute?.("aria-selected") === "true" ||
+        t.getAttribute?.("data-state") === "active" ||
+        t.getAttribute?.("data-p-highlight") === "true" ||
+        t.classList?.contains?.("p-togglebutton-checked") ||
+        t.classList?.contains?.("active")
+    ));
 }
 
 function hasExecutingSpinner(el) {
     if (!el) return false;
-    return !!el.querySelector(
+    const container = el.closest?.(".workflow-tab, .p-togglebutton") || el;
+    return !!container.querySelector?.(
         ".animate-spin, [class*='animate-spin'], [class*='loader'], [class*='spin'], .pi-spin, .pi-spinner, [data-icon*='spin'], [role='status']"
     );
 }
 
+function getTabLabelText(el) {
+    if (!el) return null;
+    const container = el.closest?.(".workflow-tab, .p-togglebutton") || el;
+    const labelEl = el.querySelector?.(".workflow-label")
+        || container.querySelector?.(".workflow-label")
+        || el;
+    return labelEl?.textContent ? labelEl.textContent.trim() : null;
+}
+
 function getActiveWorkflowTabName() {
-    const activeLabel = document.querySelector(".workflow-tabs .p-togglebutton-checked .workflow-label")
+    const storeFilename = app.extensionManager?.workflow?.activeWorkflow?.filename;
+    if (typeof storeFilename === "string" && storeFilename.trim()) {
+        return storeFilename.trim();
+    }
+    const activeLabel = document.querySelector(".workflow-tabs [role='tab'][aria-selected='true'] .workflow-label")
+        || document.querySelector(".workflow-tabs [data-state='active'] .workflow-label")
+        || document.querySelector("[data-testid='workflow-tab-strip'] [role='tab'][aria-selected='true'] .workflow-label")
+        || document.querySelector(".workflow-tabs .p-togglebutton-checked .workflow-label")
         || document.querySelector(".workflow-tab.active .workflow-label")
         || document.querySelector(".p-togglebutton-checked .workflow-label");
     return activeLabel?.textContent ? activeLabel.textContent.trim() : null;
@@ -201,8 +242,7 @@ function isCurrentlyOnExecutingTab(targetTabName) {
     }
 
     if (targetTabName && activeTab) {
-        const activeLabel = activeTab.querySelector(".workflow-label") || activeTab;
-        const currentName = activeLabel?.textContent?.trim();
+        const currentName = getTabLabelText(activeTab);
         if (currentName && currentName !== targetTabName) {
             return false;
         }
@@ -221,7 +261,7 @@ function switchTabToExecutingWorkflow(targetTabName) {
     for (const el of tabButtons) {
         if (isTabActive(el)) continue;
         if (hasExecutingSpinner(el)) {
-            targetTabBtn = el.closest(".p-togglebutton") || el;
+            targetTabBtn = el;
             break;
         }
     }
@@ -230,9 +270,8 @@ function switchTabToExecutingWorkflow(targetTabName) {
     if (!targetTabBtn && targetTabName) {
         for (const el of tabButtons) {
             if (isTabActive(el)) continue;
-            const label = el.querySelector(".workflow-label") || el;
-            if (label?.textContent?.trim() === targetTabName) {
-                targetTabBtn = el.closest(".p-togglebutton") || el;
+            if (getTabLabelText(el) === targetTabName) {
+                targetTabBtn = el;
                 break;
             }
         }
@@ -241,12 +280,12 @@ function switchTabToExecutingWorkflow(targetTabName) {
     // 3. Fallback: solitary inactive tab
     if (!targetTabBtn) {
         const inactive = tabButtons.filter(el => !isTabActive(el));
-        if (inactive.length === 1) targetTabBtn = inactive[0].closest(".p-togglebutton") || inactive[0];
+        if (inactive.length === 1) targetTabBtn = inactive[0];
     }
 
     if (targetTabBtn) {
-        simulateFullClick(targetTabBtn);
-        simulateFullClick(targetTabBtn.querySelector(".workflow-tab") || targetTabBtn);
+        const triggerEl = (isRoleTabElement(targetTabBtn) ? targetTabBtn : targetTabBtn.querySelector?.("[role='tab']")) || targetTabBtn;
+        simulateFullClick(triggerEl);
         return true;
     }
     return false;
@@ -272,74 +311,6 @@ async function navigateAndFocusNode(targetGraph, targetNode) {
 
     if (typeof canvas.selectNode === "function") {
         canvas.selectNode(targetNode, false);
-    }
-
-    // ~1.2s Pulse Glow Effect on the focused node so the user visually spots it immediately
-    if (targetNode && typeof requestAnimationFrame === "function") {
-        if (typeof targetNode._xePulseCleanup === "function") {
-            targetNode._xePulseCleanup();
-        }
-        const PULSE_DURATION_MS = 1200;
-        const startTime = performance.now();
-        const prevOnDrawForeground = targetNode.onDrawForeground;
-        let rafId = null;
-
-        const cleanup = () => {
-            if (rafId !== null && typeof cancelAnimationFrame === "function") {
-                cancelAnimationFrame(rafId);
-                rafId = null;
-            }
-            if (targetNode.onDrawForeground === glowDraw) {
-                targetNode.onDrawForeground = prevOnDrawForeground;
-            }
-            if (targetNode._xePulseCleanup === cleanup) {
-                delete targetNode._xePulseCleanup;
-            }
-            targetNode.setDirtyCanvas?.(true, false);
-        };
-
-        const glowDraw = function (ctx) {
-            prevOnDrawForeground?.apply(this, arguments);
-            const elapsed = performance.now() - startTime;
-            if (elapsed >= PULSE_DURATION_MS) {
-                cleanup();
-                return;
-            }
-            const t = elapsed / PULSE_DURATION_MS;
-            const pulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 4);
-            const alpha = (1 - t) * (0.35 + 0.65 * pulse);
-            const w = this.size?.[0] ?? 180;
-            const h = this.size?.[1] ?? 80;
-            const pad = 6;
-            ctx.save();
-            ctx.strokeStyle = `rgba(96, 165, 250, ${alpha.toFixed(3)})`;
-            ctx.lineWidth = 4;
-            ctx.shadowColor = `rgba(59, 130, 246, ${(alpha * 0.9).toFixed(3)})`;
-            ctx.shadowBlur = 14 + 8 * pulse;
-            if (typeof ctx.roundRect === "function") {
-                ctx.beginPath();
-                ctx.roundRect(-pad, -LiteGraph.NODE_TITLE_HEIGHT - pad, w + pad * 2, h + LiteGraph.NODE_TITLE_HEIGHT + pad * 2, 10);
-                ctx.stroke();
-            } else {
-                ctx.strokeRect(-pad, -LiteGraph.NODE_TITLE_HEIGHT - pad, w + pad * 2, h + LiteGraph.NODE_TITLE_HEIGHT + pad * 2);
-            }
-            ctx.restore();
-        };
-
-        targetNode._xePulseCleanup = cleanup;
-        targetNode.onDrawForeground = glowDraw;
-        targetNode.setDirtyCanvas?.(true, false);
-
-        const tick = () => {
-            if (targetNode._xePulseCleanup !== cleanup) return;
-            if (performance.now() - startTime >= PULSE_DURATION_MS) {
-                cleanup();
-                return;
-            }
-            targetNode.setDirtyCanvas?.(true, false);
-            rafId = requestAnimationFrame(tick);
-        };
-        rafId = requestAnimationFrame(tick);
     }
 }
 
@@ -382,10 +353,31 @@ class XENodesProgressBarElement extends HTMLElement {
 
                 // 1. If currently active tab is not the executing tab, switch first
                 if (!isCurrentlyOnExecutingTab(this.currentExecutingTabName)) {
+                    const prevGraph = app.rootGraph || app.graph;
+                    const prevGraphState = prevGraph?.state;
+                    const prevActivePath = app.extensionManager?.workflow?.activeWorkflow?.path;
+                    const prevTabName = getActiveWorkflowTabName();
+
                     const switched = switchTabToExecutingWorkflow(this.currentExecutingTabName);
                     if (switched) {
+                        const maxWait = 1500;
+                        const start = performance.now();
+                        while (performance.now() - start < maxWait) {
+                            await new Promise(r => setTimeout(r, 30));
+                            const curGraph = app.rootGraph || app.graph;
+                            const curPath = app.extensionManager?.workflow?.activeWorkflow?.path;
+                            const curTabName = getActiveWorkflowTabName();
+                            const tabOrGraphChanged =
+                                isCurrentlyOnExecutingTab(this.currentExecutingTabName) ||
+                                curPath !== prevActivePath ||
+                                curTabName !== prevTabName ||
+                                curGraph !== prevGraph ||
+                                (prevGraphState !== undefined && curGraph?.state !== prevGraphState);
+                            if (tabOrGraphChanged && !app.configuringGraph) {
+                                break;
+                            }
+                        }
                         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-                        await new Promise(r => setTimeout(r, 60));
                     }
                 }
 
@@ -401,7 +393,10 @@ class XENodesProgressBarElement extends HTMLElement {
                         await new Promise(r => setTimeout(r, 50));
                         rootGraph = app.rootGraph || app.graph;
                         result = findNodeAndHierarchy(rootGraph, this.currentNodeId);
-                        if (result?.node) break;
+                        if (result?.node && !app.configuringGraph) break;
+                    }
+                    if (switchAttempted && result?.node) {
+                        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
                     }
                 }
 
@@ -638,75 +633,65 @@ let currentPromptId = null;
 let currentExecutingNodeId = null;
 let currentQueueRemaining = 0;
 const promptsMap = new Map();
+const pendingPromptQueue = [];
+
+const NON_EXECUTABLE_NODE_TYPES = new Set([
+    "Reroute",
+    "Builtin: Reroute",
+    "Note",
+    "PrimitiveNode",
+    "GraphInput",
+    "GraphOutput",
+    "SubgraphInput",
+    "SubgraphOutput",
+    "XENodes.FastGroupsMuterBypasser",
+]);
 
 /**
- * Calculates the count of actively executable nodes in the workflow prompt
- * by traversing upstream links backward from all output / preview nodes.
- * @param {any} promptOutput
+ * Checks whether a node represents an active, executable node.
+ * @param {LGraphNode} node
+ * @returns {boolean}
+ */
+function isExecutableNode(node) {
+    if (!node || node.mode === 2 || node.mode === 4) return false;
+    return !NON_EXECUTABLE_NODE_TYPES.has(node.type);
+}
+
+/**
+ * Counts active executable nodes directly from the frontend LiteGraph hierarchy
+ * (excluding muted/bypassed nodes and non-executable routing/UI nodes).
+ * @param {LGraph|Subgraph} graph
+ * @param {Set<any>} [visitedGraphs=new Set()]
  * @returns {number}
  */
-function calculateActiveExecutionNodes(promptOutput) {
-    if (!promptOutput || typeof promptOutput !== "object") return 0;
-    const allKeys = Object.keys(promptOutput);
-    if (allKeys.length === 0) return 0;
+function countExecutableNodesInGraph(graph, visitedGraphs = new Set()) {
+    if (!graph || visitedGraphs.has(graph)) return 0;
+    visitedGraphs.add(graph);
 
-    // 1. Identify terminal / output candidate nodes
-    const terminalNodeIds = new Set();
-    for (const [nodeId, nodeData] of Object.entries(promptOutput)) {
-        if (!nodeData) continue;
-        const classType = String(nodeData.class_type || "");
-        if (
-            classType.includes("Save") ||
-            classType.includes("Preview") ||
-            classType.includes("Output") ||
-            classType.includes("Display") ||
-            classType.includes("Show") ||
-            classType.includes("Record") ||
-            classType.includes("Send") ||
-            classType.includes("VHS_") ||
-            nodeData._meta?.is_output_node
-        ) {
-            terminalNodeIds.add(String(nodeId));
+    const visitedNodes = new Set();
+    const countNode = (node) => {
+        if (!node || visitedNodes.has(node) || node.mode === 2 || node.mode === 4) return 0;
+        visitedNodes.add(node);
+
+        if (node.subgraph) {
+            return countExecutableNodesInGraph(node.subgraph, visitedGraphs);
         }
-    }
-
-    // Fallback: If no explicit output node is identified, check nodes without outgoing consumers
-    if (terminalNodeIds.size === 0) {
-        const consumedNodeIds = new Set();
-        for (const nodeData of Object.values(promptOutput)) {
-            if (!nodeData?.inputs) continue;
-            for (const val of Object.values(nodeData.inputs)) {
-                if (Array.isArray(val) && val.length >= 1) consumedNodeIds.add(String(val[0]));
+        if (typeof node.getInnerNodes === "function" || Array.isArray(node.innerNodes)) {
+            let innerCount = 0;
+            for (const inner of getInnerNodesSafely(node)) {
+                innerCount += countNode(inner);
             }
+            return innerCount;
         }
-        for (const id of allKeys) {
-            if (!consumedNodeIds.has(id)) terminalNodeIds.add(id);
-        }
+        return isExecutableNode(node) ? 1 : 0;
+    };
+
+    let count = 0;
+    const nodes = graph._nodes || graph.nodes || [];
+    for (const node of nodes) {
+        count += countNode(node);
     }
-
-    if (terminalNodeIds.size === 0) return allKeys.length;
-
-    // 2. Backward BFS traversal to collect all active dependency nodes
-    const activeNodeIds = new Set(terminalNodeIds);
-    const queue = [...terminalNodeIds];
-
-    while (queue.length > 0) {
-        const curId = queue.shift();
-        const nodeData = promptOutput[curId];
-        if (!nodeData || !nodeData.inputs) continue;
-
-        for (const val of Object.values(nodeData.inputs)) {
-            if (Array.isArray(val) && val.length >= 1) {
-                const upstreamId = String(val[0]);
-                if (promptOutput[upstreamId] && !activeNodeIds.has(upstreamId)) {
-                    activeNodeIds.add(upstreamId);
-                    queue.push(upstreamId);
-                }
-            }
-        }
-    }
-
-    return Math.max(1, activeNodeIds.size);
+    return count;
 }
 
 const MAX_TRACKED_PROMPTS = 50;
@@ -719,8 +704,7 @@ function getOrInitPrompt(promptId) {
             promptsMap.delete(oldestKey);
         }
         promptsMap.set(promptId, {
-            promptApiData: null,
-            totalNodes: 0,
+            totalNodes: countExecutableNodesInGraph(app.rootGraph || app.graph),
             executedNodeIds: new Set(),
             tabName: null
         });
@@ -736,7 +720,7 @@ function isProgressBarEnabled(explicitVal) {
     return val !== false && val !== "false" && val !== 0;
 }
 
-function resolveNodeDisplayInfo(nodeId, promptApiData) {
+function resolveNodeDisplayInfo(nodeId) {
     if (!nodeId) return { title: "", pathStr: "" };
     const rootGraph = app.rootGraph || app.graph;
     const res = findNodeAndHierarchy(rootGraph, nodeId);
@@ -748,9 +732,6 @@ function resolveNodeDisplayInfo(nodeId, promptApiData) {
         if (Array.isArray(res.path) && res.path.length > 0) {
             pathStr = res.path.map(p => p.title).join(" > ");
         }
-    } else if (promptApiData?.[String(nodeId)]) {
-        const apiNode = promptApiData[String(nodeId)];
-        title = apiNode._meta?.title || apiNode.class_type || `Node #${nodeId}`;
     } else {
         title = `Node #${nodeId}`;
     }
@@ -813,25 +794,18 @@ app.registerExtension({
     async setup() {
         syncProgressBarDOM();
 
-        // Hook queuePrompt to capture per-job prompt structure and tab name
-        const originalQueuePrompt = api.queuePrompt;
-        if (typeof originalQueuePrompt === "function") {
-            api.queuePrompt = async function (num, prompt, ...args) {
-                const currentTab = getActiveWorkflowTabName();
-                const response = await originalQueuePrompt.apply(api, [num, prompt, ...args]);
-                if (response?.prompt_id) {
-                    const record = getOrInitPrompt(response.prompt_id);
-                    if (currentTab) record.tabName = currentTab;
-                    if (prompt?.output) {
-                        record.promptApiData = prompt.output;
-                        record.totalNodes = calculateActiveExecutionNodes(prompt.output);
-                    }
-                }
-                return response;
-            };
-        }
-
         // Connect API Listeners
+        api.addEventListener("promptQueueing", () => {
+            if (!isProgressBarEnabled()) return;
+            while (pendingPromptQueue.length >= MAX_TRACKED_PROMPTS) {
+                pendingPromptQueue.shift();
+            }
+            pendingPromptQueue.push({
+                tabName: getActiveWorkflowTabName(),
+                totalNodes: countExecutableNodesInGraph(app.rootGraph || app.graph)
+            });
+        });
+
         api.addEventListener("status", (e) => {
             if (!isProgressBarEnabled()) {
                 syncProgressBarDOM(false);
@@ -858,8 +832,36 @@ app.registerExtension({
             currentExecutingNodeId = null;
 
             const record = getOrInitPrompt(pid);
-            const currentTab = getActiveWorkflowTabName();
-            if (currentTab && !record.tabName) record.tabName = currentTab;
+            const workflowId = e.detail?.workflow_id;
+            if (workflowId) {
+                const openWorkflows = app.extensionManager?.workflow?.openWorkflows;
+                if (Array.isArray(openWorkflows)) {
+                    const matchedWorkflow = openWorkflows.find(
+                        w => (w?.activeState?.id ?? w?.initialState?.id) === workflowId
+                    );
+                    if (matchedWorkflow?.filename) {
+                        record.tabName = matchedWorkflow.filename;
+                    }
+                }
+            }
+
+            const queuedMeta = pendingPromptQueue.shift();
+            if (queuedMeta) {
+                if (!record.tabName && queuedMeta.tabName) {
+                    record.tabName = queuedMeta.tabName;
+                }
+                if (queuedMeta.totalNodes > 0) {
+                    record.totalNodes = queuedMeta.totalNodes;
+                }
+            }
+
+            if (!record.tabName) {
+                const currentTab = getActiveWorkflowTabName();
+                if (currentTab) record.tabName = currentTab;
+            }
+            if (!record.totalNodes) {
+                record.totalNodes = countExecutableNodesInGraph(app.rootGraph || app.graph);
+            }
 
             if (progressBarInstance) {
                 progressBarInstance.updateState({
@@ -910,7 +912,7 @@ app.registerExtension({
             }
 
             currentExecutingNodeId = nodeId;
-            const info = resolveNodeDisplayInfo(nodeId, promptState?.promptApiData);
+            const info = resolveNodeDisplayInfo(nodeId);
 
             if (progressBarInstance) {
                 progressBarInstance.updateState({
@@ -947,7 +949,7 @@ app.registerExtension({
                 currentExecutingNodeId = nodeId;
             }
 
-            const info = resolveNodeDisplayInfo(currentExecutingNodeId, promptState?.promptApiData);
+            const info = resolveNodeDisplayInfo(currentExecutingNodeId);
 
             progressBarInstance.updateState({
                 currentNodeId: currentExecutingNodeId,
